@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/round23-security-bridge/guide.md
+/:
+  en: daf1021693c68659
+  zh: 6d68e7edae0d82ba
+/round-23-security-bridge:
+  en: 6ed35ab572719605
+  zh: fdfd2883a06e941a
+/round-23-security-bridge/change:
+  en: 7418a5009d427ace
+  zh: 6f9bd5aefffc4751
+/round-23-security-bridge/migration:
+  en: 489752cecbac88fd
+  zh: 4fdbf07d6f46c576

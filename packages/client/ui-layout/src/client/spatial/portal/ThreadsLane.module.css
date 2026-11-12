@@ -1,0 +1,321 @@
+/* The predecessor's left-lane threads list (predecessor x5.css `x5-threads*`), measured to match the right menu header:
+   84px header, mono subtitle, uniform 68px mint portal cards, the current thread lit. */
+
+.lane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* Same box as the right lane's menu header: at least 84px (it grows with larger text, never spilling past its hairline),
+   the header inset in from the lane edge, clear of the hot corner (the contract tokens of primitives/primitives.css).
+   The tools wrap onto a row under the heading before they would cut or cover it (spec 5 and 7). */
+.head {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  min-height: 84px;
+  margin: 0 16px 19px var(--ak-header-inset);
+  padding: 18px var(--ak-corner-clearance) 18px 0;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--ak-hairline);
+  container-type: inline-size;
+}
+
+/* THE COMPACT FRAME (one lane at full width, 1023px and below; AppFrame marks the frame `data-compact-lane`): the head
+   keeps the frame's corner clearance on both sides, so the native corners at the lane's upper left and right stay clear,
+   and needs no padding of its own for them. */
+:global([data-compact-lane]) .head {
+  margin-inline: var(--dsh-compact-corner-clearance);
+  padding-inline: 0;
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.heading {
+  margin: 0;
+  overflow: hidden;
+  color: var(--ak-text);
+  font-family: inherit;
+  font-size: var(--ak-heading-size);
+  font-weight: 480;
+  line-height: 1.1;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.subtitle {
+  margin: 6px 0 0;
+  color: var(--ak-mint);
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.tools {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-inline-start: auto;
+}
+
+/* Round 28px header actions. The `.tools` prefix outranks the predecessor's global `button[data-thread-action]` reset. */
+.tools .tool {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ak-text-2);
+  cursor: pointer;
+  transition: border-color var(--ak-ease), background var(--ak-ease), color var(--ak-ease);
+}
+
+.tools .tool:hover {
+  border-color: color-mix(in srgb, var(--ak-mint) 60%, transparent);
+  background: color-mix(in srgb, var(--ak-mint) 8%, transparent);
+}
+
+.tools .tool[aria-pressed='true'] {
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.tools .tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tools .tool:focus-visible {
+  outline: 2px solid var(--ak-mint);
+  outline-offset: 2px;
+}
+
+.scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 14px 18px;
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 2px;
+  list-style: none;
+}
+
+.card {
+  position: relative;
+}
+
+.card :global(.ak-portal) {
+  margin: 0;
+}
+
+/* Uniform cards on the one portal floor (they grow with larger text, never clip); the end region keeps room for the
+   hover actions so a title never runs under them. */
+.card :global(.ak-portal__head) {
+  min-height: var(--ak-portal-header-height, 68px);
+}
+
+.card :global(.ak-portal__end) {
+  justify-content: flex-end;
+  /* Room for the four actions (rename, pin, unread, archive): 4 x 28px and their gaps. */
+  padding-right: 122px;
+}
+
+.card[data-current='true'] :global(.ak-portal) {
+  border-color: color-mix(in srgb, var(--ak-mint) 70%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ak-mint) 14%, transparent);
+}
+
+/* Per-thread actions sit beside the card's button (never inside it) and stay visible like the predecessor's X5Threads. */
+.actions {
+  position: absolute;
+  top: 34px;
+  right: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%);
+}
+
+.actions .act {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+
+.actions .act:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.actions .act:disabled {
+  opacity: 0.45;
+  cursor: progress;
+}
+
+.actions .act:focus-visible {
+  outline: 2px solid var(--ak-mint);
+  outline-offset: 1px;
+}
+
+@media (hover: none) {
+  .actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .card :global(.ak-portal__end) > * {
+    visibility: hidden;
+  }
+}
+
+/* "How it works" at the top of the list, in place (Round 23). Its body is explanation: reading size (spec 5). */
+.how {
+  margin: 0 0 10px;
+}
+
+.how :global(.ak-portal__body .ak-lead) {
+  font-size: var(--ak-reading-size);
+}
+
+/* The rename field, inline under its card (Round 23): the same band as the archive question. */
+.rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 2px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--ak-mint) 40%, transparent);
+  border-radius: 12px;
+}
+
+.renameInput {
+  flex: 1 1 180px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ak-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.renameInput:focus-visible {
+  outline: 2px solid var(--ak-mint);
+  outline-offset: 1px;
+}
+
+.renameError {
+  flex-basis: 100%;
+  color: var(--ak-gold);
+  font-size: 12px;
+}
+
+.confirmButton[data-tone='mint'] {
+  border-color: color-mix(in srgb, var(--ak-mint) 60%, transparent);
+  color: var(--ak-mint);
+}
+
+/* The running-thread archive question, inline under its card. */
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 2px 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--ak-gold) 40%, transparent);
+  border-radius: 12px;
+  color: var(--ak-text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.confirm > span {
+  flex: 1 1 160px;
+}
+
+.confirmButton {
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ak-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.confirmButton[data-tone='gold'] {
+  border-color: color-mix(in srgb, var(--ak-gold) 60%, transparent);
+  color: var(--ak-gold);
+}
+
+.confirmButton:focus-visible {
+  outline: 2px solid var(--ak-mint);
+  outline-offset: 2px;
+}
+
+.source {
+  margin: 16px 6px 0;
+  color: var(--ak-muted);
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Where a thread lives inside her meta-workspace: a sub-workspace's name, or the legacy workspace's. */
+.place {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 999px;
+  color: var(--ak-muted);
+  font-family: var(--ak-mono);
+  font-size: 9.5px;
+  line-height: 14px;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+}

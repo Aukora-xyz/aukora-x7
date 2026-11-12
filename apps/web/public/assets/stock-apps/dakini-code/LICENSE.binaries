@@ -1,0 +1,19 @@
+Prebuilt files in this folder
+
+Files: assets/index-C2MMIvhO.css, assets/index-t74FFCZZ.js, assets/space-Bu4O81zr.js.
+
+These files are object code (compiled or bundled). They are the work of The Aukora authors and are distributed
+under the LICENSE at the root of this repository (GNU AGPL-3.0-or-later). Third-party code inside them keeps
+its own license: see THIRD_PARTY_NOTICES.txt in this folder.
+
+Their source code is NOT in this repository.
+
+What follows from that. Under sections 5 and 6 of the AGPL, whoever conveys object code must also give its
+Corresponding Source. The copyright holders may distribute these files as they are. Someone who received this
+repository and passes it on cannot meet that duty from this repository alone.
+
+Open decision of the copyright holders: publish the source of these files here, or state other terms for the
+prebuilt files (an additional permission under section 7 of the AGPL, or a separate license). Until this note
+says which, ask the maintainers for the Corresponding Source before you convey these files to anyone else.
+
+This note states facts about this folder. It is not legal advice.

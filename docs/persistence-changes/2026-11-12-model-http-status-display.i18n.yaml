@@ -1,0 +1,28 @@
+# Bilingual-pair consistency record for 2026-11-12-model-http-status-display.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/persistence-changes/2026-11-12-model-http-status-display.md
+/:
+  en: 3d5a424ae7d7e46b
+  zh: c22a8e4a62d8cc1a
+/2026-11-12-model-http-status-display:
+  en: b0686ff86aa4248e
+  zh: 02d8014c17824499
+/2026-11-12-model-http-status-display/summary:
+  en: 744f2714f0433b53
+  zh: 9f547f75de4dd6cb
+/2026-11-12-model-http-status-display/table-of-contents:
+  en: 6cf314a069ceb451
+  zh: 9adff678e9ecab3b
+/2026-11-12-model-http-status-display/declaration:
+  en: 6907136f28e48c90
+  zh: 02f8298485f3d8e7
+/2026-11-12-model-http-status-display/compatibility:
+  en: 87841b5f50379508
+  zh: 8e23d7f6b45b5208
+/2026-11-12-model-http-status-display/verification:
+  en: a5c43764f6c31e4d
+  zh: 0a9894f00fcb0d66
+/2026-11-12-model-http-status-display/dev-note:
+  en: b75c8458928b72b9
+  zh: 003ba4e17b4b5269

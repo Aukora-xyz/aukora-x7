@@ -1,0 +1,37 @@
+/* THE WORK SURFACE (Round 27): background missions as Portal cards in one centre column; bad states in sight above them. */
+.work {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 24px 20px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.workFacts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.workFacts dt { opacity: 0.7; }
+.workFacts dd { margin: 0; font-family: var(--dsw-font-family-mono); font-size: 13px; }
+.workQuiet { margin: 0; font-size: 12px; opacity: 0.7; }
+.workTrouble { margin: 0; font-size: 13px; }
+/* A tab that lags or runs ahead of the host (Round 18 host check): one line per difference, warm, never a dialog. */
+.workLag { display: block; margin-top: 2px; font-size: 12px; color: color-mix(in srgb, #d9a400 85%, currentColor); }
+.workActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
+.workConfirm { display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.workTerms {
+  margin: 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-family: var(--dsw-font-family-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* Round 27: a group of cards under its label; a card with the actions and lines that stay beside it, in sight. */
+.workGroup { display: flex; flex-direction: column; gap: 6px; }
+.workCell { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.workTroubles { display: flex; flex-direction: column; gap: 2px; }
+.workTroubles :global(.ak-lead) { margin: 0; }
+.workFacts code, .workCell code { font-family: var(--dsw-font-family-mono); font-size: 12px; }

@@ -1,0 +1,26 @@
+Prebuilt files in this folder
+
+Files: aukora-kernel.wasm, aumlok-identity.wasm, aumlok-keys.wasm, aura-focus.wasm, aura-relay.wasm,
+gate-judge.wasm, goal-receipts.wasm, grant-ledger.wasm, kira-core.wasm, kira-membrane.wasm, kira-nostr.wasm,
+kira-resume.wasm, kira-store-policy.wasm, lane-contract.wasm, lane-judge.wasm, lane-profile.wasm, laya.wasm,
+nostr-core.wasm, organism-tools.wasm, pair-judge.wasm, prompt-assembly.wasm, risk-signature.wasm,
+seed-judge.wasm, skillsmith.wasm, spatial-layout.wasm.
+
+This note does not cover ../seed-library/pentora/pentora36.wasm: see the LICENSE.binaries beside that file.
+
+These files are object code (compiled or bundled). They are the work of The Aukora authors and are distributed
+under the LICENSE at the root of this repository (GNU AGPL-3.0-or-later). Third-party code inside them keeps
+its own license: see THIRD-PARTY.md in this folder.
+
+Their source code is NOT in this repository. One source file is here: aura-focus.wat, from which
+aura-focus.wasm is built.
+
+What follows from that. Under sections 5 and 6 of the AGPL, whoever conveys object code must also give its
+Corresponding Source. The copyright holders may distribute these files as they are. Someone who received this
+repository and passes it on cannot meet that duty from this repository alone.
+
+Open decision of the copyright holders: publish the source of these files here, or state other terms for the
+prebuilt files (an additional permission under section 7 of the AGPL, or a separate license). Until this note
+says which, ask the maintainers for the Corresponding Source before you convey these files to anyone else.
+
+This note states facts about this folder. It is not legal advice.

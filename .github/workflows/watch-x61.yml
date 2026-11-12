@@ -1,0 +1,53 @@
+name: Watch your-node (no secrets, reports only)
+
+# An independent watcher that holds NO credential, no secret and NO AUTHORITY: it dispatches, re-runs and cancels nothing.
+# It runs only when a person starts it (manual dispatch; the schedule is off). It reads the public /api/build and main's history and
+# answers exactly one of: LIVE_IS_NEWEST_RELEASE; LIVE_BEHIND (the live commit, main's newest release commit, how long it
+# has been on main); UNKNOWN (which read failed). A commit is a release or docs-only by its whole first-parent change;
+# anything it cannot confirm is UNKNOWN, never "release" and never "fine". It also checks that the owner sign-in page
+# renders signed out.
+# Red: LIVE_BEHIND for longer than LIVE_BEHIND_ALLOWANCE_MS (deploy/ci/deploy-guard.mjs, 4 hours); at once, a live build
+# that GitHub's compare READS as not a commit on main (status behind or diverged); or the sign-in page not rendering.
+# UNKNOWN, and a LIVE_BEHIND whose wait cannot be read (main's push log unreadable), are warnings in the summary and stay
+# green, so a GitHub outage pages nobody.
+# A STRANDED RELEASE IS RECOVERED BY A PERSON: they run deploy-x61.yml ("Deploy your-node to Cloudflare") on main by
+# hand, which publishes main's head; the summary says so. The watcher only reports.
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   schedule:
+# [disabled in aukora-x7]     - cron: "7 */2 * * *"
+
+permissions:
+  contents: read
+
+# One report at a time.
+concurrency:
+  group: watch-x61
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # The site reads take at most about 2 minutes and the GitHub reads stop after WATCH_GITHUB_BUDGET_MS (3 minutes).
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the watcher (deploy/ci only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: main
+          persist-credentials: false
+          sparse-checkout: |
+            deploy/ci
+            server
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Report whether the live build is main's newest release, and whether the sign-in page renders
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node deploy/ci/deploy-guard.mjs watch

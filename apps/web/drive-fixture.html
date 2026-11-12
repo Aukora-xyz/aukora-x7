@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  THE DRIVE FIXTURE (not part of the app bundle): the real "Media and Documents" surface inside the real Spatial frame
+  (one lane at full width at 1023px and below, as in her app), over a made-up her, in memory.
+  Serve it with `node apps/web/drive-fixture.serve.mjs` (http://127.0.0.1:4178/). `?chat=1` adds a made-up message from her.
+  The entry and the made-up files live beside the drive's specs: packages/client/ui-layout/tests/drive-fixture/.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <title>AUKORA · drive fixture (made-up files)</title>
+    <style>html, body, #drive-fixture-root { height: 100%; margin: 0; }</style>
+  </head>
+  <body>
+    <div id="drive-fixture-root"></div>
+    <script type="module" src="/drive-fixture.entry.js"></script>
+  </body>
+</html>

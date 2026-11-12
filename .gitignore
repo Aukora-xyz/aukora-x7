@@ -1,0 +1,106 @@
+CLAUDE.local.md
+.env
+apps/desktop/.env.windows
+apps/desktop/.env.macos
+apps/desktop/*.p12
+node_modules/
+lib/
+*.tsbuildinfo
+pnpm-debug.log
+.pnpm-store/
+.cache/
+examples/*/*.jsonl
+.storages/
+.sessions/
+examples/*/.sessions/
+coverage/
+.coverage-times.json
+.doc-typecheck-*/
+.node-next-types-*/
+.oxlint-contract-*/
+.oxlintrc.contract-*.json
+oxlint-contract-*.ts
+.humanize/
+tmp/
+.claude/commands/
+.claude/launch.json
+.claude/settings.json
+.vscode/
+.DS_Store
+.idea
+mise.toml
+dist-exe/
+/dist/
+apps/desktop/.desktop-build/
+python/sdk-runtime/src/deepseek_harness_runtime/runtime/
+python/**/__pycache__/
+python/**/.pytest_cache/
+packages/**/__pycache__/
+apps/web/dist/
+.artifacts/
+.dsh-build/
+.dsh-report/
+.playwright-mcp/
+.orig
+.worktrees/
+worktrees/
+.agents/worktrees/
+.typert-*/
+native/system/test/bin/
+
+# Generated company-signed CUA release record.
+/packages/experimental/cua-macos/cua-helper.json
+
+# Never track credential files
+.credentials.yaml
+**/.credentials.yaml
+mirror/home/auma/seed/ed25519-keypair.json
+
+mirror/home/sessions/
+mirror/home/auma/.afferent-probe
+mirror/home/llm-deepseek/
+mirror/home/storages/
+mirror/snapshot.tar
+
+# Private Kira memory sidecar and interrupted atomic-write files.
+mirror/home/auma/memory-store.v2.json*
+
+# Private local mirror delivery journal and acknowledgement receipts.
+mirror/.transport/
+
+# Unselected local proposals may contain private configuration.
+mirror/balls/forks/
+
+# ── aukora-x7: a node's own world never enters this repository ─────────────────────────────────────────────────────
+# server/local-host.mjs keeps a node's live state under mirror/. Only the genesis seed is tracked: the two heads, the
+# seed organ modules, the seed organ library and the two Pearl seed files. Everything else a node writes there stays local.
+/mirror/*
+!/mirror/balls/
+!/mirror/home/
+/mirror/balls/*
+!/mirror/balls/HEAD.json
+!/mirror/balls/*.js
+/mirror/home/*
+!/mirror/home/balls/
+!/mirror/home/auma/
+/mirror/home/balls/*
+!/mirror/home/balls/HEAD.json
+!/mirror/home/balls/*.js
+/mirror/home/auma/*
+!/mirror/home/auma/HEAD.json
+!/mirror/home/auma/seed/
+/mirror/home/auma/seed/*
+!/mirror/home/auma/seed/organs/
+!/mirror/home/auma/seed/pearl/
+!/mirror/home/auma/seed/scars.jsonl
+/mirror/home/auma/seed/pearl/*
+!/mirror/home/auma/seed/pearl/retention-suite.v1.json
+# Defence in depth for keys and local secrets anywhere in the tree.
+**/ed25519-keypair.json
+**/owner-key*.json
+**/session.cap
+*.pem
+*.key
+.dev.vars
+.env.*
+!.env.*.example

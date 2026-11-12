@@ -1,0 +1,109 @@
+/* The predecessor's x5 Nostr Messages (an earlier repository), with the thread toolbar's button styles
+   (an earlier repository). Layout classes (x5-nostr-*, x5-message-*) come
+   from the global `portal/spatial-layer.css`. */
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, var(--ak-text-2));
+  cursor: pointer;
+  transition: border-color var(--ak-ease), background var(--ak-ease), color var(--ak-ease);
+}
+
+:global(.x5-app-header__actions) .iconButton {
+  border: 1px solid var(--ak-hairline);
+}
+
+.iconButton:hover {
+  color: var(--dsw-alias-label-primary, var(--ak-text));
+  background: color-mix(in srgb, var(--ak-mint) 8%, transparent);
+}
+
+:global(.x5-app-header__actions) .iconButton:hover {
+  border-color: color-mix(in srgb, var(--ak-mint) 60%, transparent);
+}
+
+.iconButton:focus-visible {
+  outline: 2px solid var(--dsw-alias-label-primary, var(--ak-text));
+  outline-offset: 1px;
+}
+
+.iconButton[aria-pressed='true'] { background: color-mix(in srgb, currentColor 13%, transparent); }
+.iconButton[data-thread-action='pin'][aria-pressed='true'] { color: var(--dsw-static-spatial-violet, var(--ak-violet)); }
+.iconButton[data-thread-action='unread'][aria-pressed='true'] { color: var(--dsw-alias-state-success-primary, var(--ak-mint)); }
+.iconButton[data-thread-action='archive'][aria-pressed='true'] { color: var(--dsw-static-spatial-gold, var(--ak-gold)); }
+
+.rowBadges { display: inline-flex; align-items: center; gap: 6px; }
+.rowCard { position: relative; }
+.rowCard :global(.ak-portal__end) { padding-right: 96px; }
+.rowActions { position: absolute; top: 34px; right: 14px; transform: translateY(-50%); display: inline-flex; }
+
+.list { margin: 0; padding: 0; list-style: none; }
+
+.unsent {
+  margin-top: 4px;
+  color: var(--ak-gold);
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.composeNote {
+  position: absolute;
+  left: 16px;
+  bottom: 18px;
+  right: 60px;
+  overflow: hidden;
+  color: var(--ak-gold);
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.connection { margin-top: 18px; }
+
+.form { display: flex; flex-direction: column; gap: 12px; margin: 0 16px; }
+
+.field { display: flex; flex-direction: column; gap: 6px; color: var(--ak-text-2); font-size: 12px; line-height: 18px; }
+.field input { width: 100%; }
+
+.check { margin: 0; font-family: var(--ak-mono); font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+.check[data-ok='yes'] { color: var(--ak-mint); }
+.check[data-ok='no'] { color: var(--ak-gold); }
+
+.submitRow { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+
+.submit {
+  min-height: 34px;
+  padding: 6px 16px;
+  border: 1px solid color-mix(in srgb, var(--ak-blue) 40%, transparent);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ak-blue);
+  font: inherit;
+  font-size: 12px;
+}
+
+.submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.notConnected {
+  margin: 0;
+  color: var(--ak-gold);
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}

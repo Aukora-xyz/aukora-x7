@@ -1,0 +1,92 @@
+name: Build PR preview
+
+# Every push to a pull request builds that pull request's preview and runs the
+# aggregate test and script type checks that the required Linux consumers no
+# longer repeat on every pull request.
+#
+# It no longer PUBLISHES anything. A pull request's install and
+# build scripts are the pull request's own code: in the same job they can plant
+# a wrapper (GITHUB_PATH, GITHUB_ENV) that a later step runs, so this job must
+# never hold a deployment credential. Production Cloudflare credentials live only
+# in the GitHub environment `production` (main only) and only the deploy job of
+# deploy-x61.yml declares it; deploy/ci/workflow-credentials.test.mjs fails if any
+# other workflow names them. Preview publishing may return only with a separate
+# Pages-only credential in an isolated job that runs no pull-request code.
+
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   pull_request:
+# [disabled in aukora-x7]     types: [opened, synchronize, reopened]
+
+# Within one pull request the newest build wins.
+concurrency:
+  group: build-preview-cloudflare-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  # CI runs must never report to the production telemetry endpoint baked into
+  # apps/cli/cordis.yml (AppCLIEntry disables the row when set).
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  preview:
+    # The required outcome is the build, which runs four TypeScript programs
+    # (Host and Client package compilation, then each face's aggregate test and
+    # script check) after the Typert pass. Nothing is published.
+    runs-on: >-
+      ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
+          || 'ubuntu-24.04' }}
+    # The check keeps its name so any branch rule that requires it still matches; it publishes nothing.
+    name: cloudflare pages preview
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
+      - name: Configure pnpm store path
+        id: pnpm-store
+        run: |
+          store_root="$HOME/.local/share/pnpm/store"
+          echo "PNPM_CONFIG_STORE_DIR=$store_root" >> "$GITHUB_ENV"
+          store_path=$(PNPM_CONFIG_STORE_DIR="$store_root" pnpm store path --silent)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      # Read-only: the preview lane consumes the default-branch cache without
+      # putting cache upload on its own path.
+      - uses: actions/cache/restore@v6.1.0
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-node-${{ env.PRIMARY_NODE_VERSION }}-pnpm-
+
+      - name: Install (immutable)
+        run: pnpm install --frozen-lockfile
+
+      # apps/web consumes workspace packages as built lib products, and
+      # build:preview packs the image through the packer's installed bin
+      # (lib/bin.js), so neither half exists before the artifact build runs.
+      # The required Linux consumers emit artifacts only; the complete build
+      # here also runs the aggregate test and script checks, which share the
+      # Typert output and the two package compilations.
+      - name: Build workspace and check aggregate programs
+        run: pnpm run build
+
+      - name: Build the preview page and pack the VFS image
+        env:
+          DSH_CLIENT_TITLE: DSH preview pr-${{ github.event.pull_request.number }}
+        run: pnpm --filter @deepseek-ai/dsh-web-frontend run build:preview

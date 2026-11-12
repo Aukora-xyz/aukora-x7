@@ -1,0 +1,52 @@
+/* HER VITALS (Round 27, spatial-components.tsx `AuraStrip`): Portal cards in the shared grid, a few pills, no action. */
+.ak-aura {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 12px;
+}
+.ak-aura__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* A long disclaimer pill wraps inside a narrow card instead of running past its border; it is never truncated. */
+.ak-aura__head > .ak-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.ak-aura__title {
+  margin-right: auto;
+  font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--ak-text-2);
+}
+.ak-aura > .ak-grid { margin: 0; padding: 0; }
+/* A vital's badge is its value and trend mark; its bar leads the card's second line, so the name keeps the head's width. */
+.ak-aura__badge { display: inline-flex; align-items: center; gap: 6px; }
+.ak-portal__summary > .ak-aura__bar { display: inline-block; width: 48px; margin-right: 8px; vertical-align: middle; }
+.ak-aura__trend { text-align: center; color: var(--ak-text-2); }
+.ak-aura__theirs { font-family: var(--dsw-font-family-mono, ui-monospace, monospace); color: var(--ak-red, #e5484d); }
+.ak-aura__note, .ak-aura__warn { margin: 0; font-size: 12px; color: var(--ak-text-2); }
+.ak-aura__warn { color: var(--ak-red, #e5484d); }
+
+/* THE PEARL CARD (Round 15, spatial-components.tsx `PearlArenaCard`): three facts, read only. */
+.ak-pearl__facts { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.ak-pearl__row { display: grid; grid-template-columns: minmax(9.5rem, max-content) 1fr; gap: 8px; font-size: 12px; }
+.ak-pearl__row dt { color: var(--ak-text-2); }
+.ak-pearl__row dd { margin: 0; font-family: var(--dsw-font-family-mono, ui-monospace, monospace); }
+
+/* EDGE OWNER SIGN-IN (Round 17, spatial-components.tsx `EdgeOwnerSignIn`): inline, never a popup. */
+.ak-signin { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 10px 12px; border: 1px solid var(--ak-hairline); border-radius: 12px; }
+.ak-signin__lead { margin: 0; font-size: 13px; }
+.ak-signin__row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ak-signin__field {
+  flex: 1 1 14rem;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-family: var(--dsw-font-family-mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+.ak-signin__go { padding: 6px 12px; border: 1px solid var(--ak-hairline); border-radius: 8px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.ak-signin__go:disabled { opacity: 0.5; cursor: default; }

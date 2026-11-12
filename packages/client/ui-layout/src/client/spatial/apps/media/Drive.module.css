@@ -1,0 +1,77 @@
+/* Media and Documents, her drive: places beside the list, the preview below, inside Media's studio column. Spatial
+   tokens only (`--aukora-*`, `--ak-hairline`, `--ak-mono`); the panels, rows, pills and controls are the shared
+   primitives. One column under 700px of the drive's own width: the places wrap into a row of chips above the list, and
+   the preview follows the list. A phone (the compact Spatial frame shows one lane at full width) gets the same one
+   column: every control a finger presses is at least 44px, a file's name is cut in the middle so its extension stays,
+   and nothing is wider than the lane. */
+
+.drive {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  margin-top: 14px;
+  color: var(--aukora-text);
+  container-type: inline-size;
+  container-name: media-drive;
+}
+
+.grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+.places, .list, .preview { min-width: 0; background: color-mix(in srgb, var(--aukora-surface) 40%, transparent); }
+
+.places { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.placeTabs { display: flex; flex-wrap: wrap; gap: 8px; }
+.placeTabs button { justify-content: space-between; gap: 10px; min-height: 36px; background: transparent; }
+.placeTabs .folder { padding-left: 22px; }
+.count { color: var(--aukora-text-muted); font-family: var(--ak-mono); font-size: 11px; font-variant-numeric: tabular-nums; }
+.note { margin: 0; color: var(--aukora-text-muted); font-size: 11px; line-height: 16px; }
+
+.list, .preview { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.header h3 { flex: 1 1 auto; min-width: 0; margin: 0; color: var(--aukora-text); font-size: 13px; line-height: 20px; }
+.header h3:focus-visible { outline: 2px solid var(--aukora-blue); outline-offset: 3px; border-radius: 4px; }
+
+/* A file row: the name cut in the middle (head ellipsised, the stem's end and the extension kept), one Open a finger can
+   press. */
+.name { display: flex; min-width: 0; max-width: 100%; }
+.nameHead { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nameTail { flex: none; white-space: nowrap; }
+.open { min-width: 44px; min-height: 44px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.message { margin: 0; color: var(--aukora-text-secondary); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+
+.body { min-width: 0; }
+.image { display: block; max-width: 100%; max-height: 480px; object-fit: contain; border-radius: 10px; }
+.text {
+  box-sizing: border-box; max-height: 480px; margin: 0; padding: 12px; overflow: auto;
+  border: 1px solid var(--ak-hairline); border-radius: 10px;
+  color: var(--aukora-text); font-family: var(--ak-mono); font-size: 12px; line-height: 18px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.markdown { max-height: 480px; overflow: auto; }
+
+/* A row's kind chip. On a phone (the Spatial frame's compact rule: `data-compact-lane`, AppFrame's COMPACT_QUERY) it steps
+   aside so the name keeps the room; the preview still names the kind. */
+.kind { display: inline-flex; flex: none; }
+:global([data-compact-lane]) .kind { display: none; }
+
+/* The polite live region that names a file a chat link opened: read by a screen reader, never drawn. */
+.announce {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+
+/* A finger: the place chips are 44px tall on a touch screen and in a narrow drive. */
+@media (pointer: coarse) {
+  .placeTabs button { min-height: 44px; }
+}
+@container media-drive (max-width: 699.98px) {
+  .placeTabs button { min-height: 44px; }
+}
+
+@container media-drive (min-width: 700px) {
+  .grid { grid-template-columns: 184px minmax(0, 1fr); }
+  .placeTabs { flex-direction: column; flex-wrap: nowrap; }
+  .placeTabs button { width: 100%; }
+}

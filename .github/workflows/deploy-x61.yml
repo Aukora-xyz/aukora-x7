@@ -1,0 +1,538 @@
+name: Deploy your-node to Cloudflare
+# A dispatch is titled by its reason; a push keeps GitHub's own title.
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.reason || ' ' }}
+
+# ONE PUBLISHER. Once the GitHub environment `production` holds its two Cloudflare secrets (API credential, account id), this
+# workflow is the one publisher of node.example.invalid; server/deploy-cloudflare.mjs run from a workstation is for emergencies only
+# (it refuses without --emergency once those secrets exist, or when it cannot ask GitHub). Rolling back is rollback-x61.yml,
+# by hand. observe-x61.yml observes each publication in three engines, signed out. watch-x61.yml compares the public
+# /api/build with main's newest release without any credential or write permission and ONLY REPORTS: it never dispatches,
+# re-runs or cancels anything. A STRANDED RELEASE IS RECOVERED BY A PERSON running this workflow on main by hand.
+#
+# The rules, kept simple on purpose:
+# 1. A RUN IS ONLY A TRIGGER. The `target` job resolves main's head; every later job checks out and works on exactly that
+#    commit. Right before publishing, the deploy job reads main's head again: if it moved, it publishes nothing, says
+#    "superseded by <sha>" and dispatches this workflow once for main. A re-run of an old run, a re-run of one job or a
+#    manual dispatch can only ever publish main's newest commit. A re-run runs its own old copy of this file, so when that
+#    copy is not the file at main's head the run publishes nothing and dispatches main once.
+# 2. ONE QUEUE, AND EVERY JOB IN IT LEADS TO THE PUBLISH GUARD. One workflow-level concurrency group for main, never
+#    cancelling a run in progress, `queue: max` (GitHub keeps up to 100 pending runs first in, first out, instead of one
+#    pending run that a newcomer replaces). Every job here is the deploy job or has it as a dependent, so a re-run of any
+#    job reaches "Publish only main's newest commit". Observation lives in observe-x61.yml, outside this queue, so
+#    re-running it can never displace a pending deploy. Should a pending run still be lost (a full queue, a re-run of a gate
+#    that fails before the guard), watch-x61.yml reports LIVE_BEHIND and goes red after its allowance; a person then runs
+#    this workflow on main by hand. The group name is new: runs of older copies of this file, some with an
+#    observe job, used `deploy-x61-main`, so a re-run of one of them can never join this queue.
+# 3. WHEN THE PUSH TRIGGER IS ON (in aukora-x7 it is commented out below: runs are manual only), EVERY NON-DOCS
+#    PUSH IS A RELEASE, mirror head syncs included. Docs-only pushes start no run (paths-ignore, the list in
+#    deploy/ci/deploy-paths.mjs); that is only an optimisation, since any run that starts deploys the head, docs included.
+# 4. NO AUTOMATIC ROLLBACK. Before publishing, the deploy job records the live Worker version, the exact rollback command
+#    and that a dead runner leaves the release live unchecked; after publishing it checks /api/build and the sign-in page
+#    and fails loudly with that command. A human decides.
+# KNOWN PROPERTY: "only main's newest commit" holds at the final head read, not atomically through publication. A commit
+# that lands on main after that read and before Wrangler finishes is not published by this run; its own push run (or a
+# person running this workflow by hand, when the watcher reports it behind) publishes it.
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for manual/autonomous deploy (any run deploys main's head)"
+        required: false
+        default: "autonomous-deploy"
+# [disabled in aukora-x7]   push:
+# [disabled in aukora-x7]     branches:
+# [disabled in aukora-x7]       - main
+# [disabled in aukora-x7]     paths-ignore:
+# [disabled in aukora-x7]       - "*.md"
+# [disabled in aukora-x7]       - "docs/*.md"
+# [disabled in aukora-x7]       - "docs/**/*.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Runs on any other ref do nothing (every job requires main), so they never take main's pending slot.
+  group: ${{ github.ref == 'refs/heads/main' && 'deploy-x61-publish-main' || format('deploy-x61-not-main-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
+
+# Trust layout. Only the deploy job holds the Cloudflare credential, and only through the GitHub environment `production`,
+# whose deployment branch policy admits main alone; besides it only rollback-x61.yml names it
+# (workflow-credentials.test.mjs). No job runs repository code that a T1 commit (owner session, no passkey) could change,
+# except the build job. The build job runs the web build, which executes T1 files (build tool configs and package sources),
+# so nothing it leaves behind is trusted: it hands over only the web assets, and those are scanned in a fresh job and
+# pinned by digest. Every other job starts from a fresh checkout and runs only T2 files (deploy/, .github/, the T2 exact
+# paths in deploy/cloudflare/src/cloud-brokers.mjs) plus lockfile-pinned packages installed with scripts disabled. No job
+# uses a dependency cache, because the build job could write one that a trusted job would later restore.
+jobs:
+  # Whatever started this run, it builds, checks and publishes main's head as it is now. A re-run executes the workflow
+  # file of the run it re-runs (github.workflow_sha), so when that file is not the one at main's head this run names no
+  # target (every later job is skipped) and dispatches the workflow once for main, which runs main's own gates.
+  # actions: write is there for that one dispatch.
+  target:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - name: Resolve main's head
+        id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error title=Deploy refused::main's head is unreadable. Nothing was built or deployed."
+            exit 1
+          fi
+          file=".github/workflows/deploy-x61.yml"
+          if ! printf '%s' "$WORKFLOW_SHA" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error title=Deploy refused::the commit of this run's workflow file is unknown. Nothing was built or deployed."
+            exit 1
+          fi
+          ours="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${file}?ref=${WORKFLOW_SHA}" --jq .sha)"
+          mains="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${file}?ref=${sha}" --jq .sha)"
+          if ! printf '%s' "$ours" | grep -Eqx '[0-9a-f]{40}' || ! printf '%s' "$mains" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error title=Deploy refused::${file} is unreadable at ${WORKFLOW_SHA} or at main's head. Nothing was built or deployed."
+            exit 1
+          fi
+          if [ "$ours" != "$mains" ]; then
+            gh workflow run deploy-x61.yml --repo "$GITHUB_REPOSITORY" --ref main -f reason="workflow file changed (run ${GITHUB_RUN_ID})"
+            notice="This run executes deploy-x61.yml as of ${WORKFLOW_SHA}, which is not the file at main's head ${sha}. Nothing was built or published; deploy-x61 was dispatched once for main, and that run uses main's own gates."
+            echo "::notice title=Deploy superseded::$notice"
+            printf '%s\n' "$notice" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Target: main's head ${sha} (this ${GITHUB_EVENT_NAME} run was started on ${GITHUB_SHA})." >> "$GITHUB_STEP_SUMMARY"
+
+  # Gate tests, the source path scan and the authority preflight, on a fresh tree.
+  preflight:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          # The scrub history allowlist is anchored to x6.1 commits; verifying it needs full history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Deploy gate unit tests
+        run: node --test deploy/ci/*.test.mjs
+
+      - name: Edge archive, invite and deploy reporting regressions
+        # WO-1 gap reproductions keep their outstanding acceptance TODOs visible.
+        run: |
+          node --test deploy/cloudflare/src/__tests__/deploy-workflow.test.mjs \
+            deploy/cloudflare/src/__tests__/estate-archive.test.mjs \
+            deploy/cloudflare/src/__tests__/estate.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-invites.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-invite-routes.test.mjs \
+            deploy/cloudflare/src/__tests__/guest-access-boundary.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs
+
+      - name: Scrub gate (source)
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/scrub-gate.mjs --source
+
+      # Before anything is packaged: every mirror module hashes to its name, the head is its own hash, its selected organs
+      # are present, and the two HEAD copies agree, read from the repository alone. An integrity check, not an exemption.
+      - name: Mirror integrity
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/deploy-guard.mjs verify-mirror
+
+      - name: Authority preflight
+        # Runs even when an earlier gate failed, so every blocking reason shows in one run.
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/authority-preflight.mjs
+
+  # Untrusted: executes T1 build code. Its only output is the web asset artifact.
+  build:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build and seal preview assets
+        env:
+          PORT: "4619"
+          # tsc -b tsconfig.client.json exceeds Node's default ~2 GB heap on the runner (a run died
+          # with "JavaScript heap out of memory"); a larger runner has about 7 GB.
+          NODE_OPTIONS: --max-old-space-size=5632
+        run: node server/build-preview.mjs
+
+      # Reads the built files only (runs none of them): the page side must name this build's commit, or the
+      # "a new build is live" notice is dead in the deployed app; the page bootstrap must not carry the retention suite.
+      - name: Built-notice check (the page names the target commit)
+        env:
+          TARGET_SHA: ${{ needs.target.outputs.sha }}
+        run: node deploy/ci/built-notice-check.mjs apps/web/dist --commit "$TARGET_SHA"
+
+      - name: Upload built preview bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x61-web-dist
+          path: apps/web/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  # Scans the shipped assets and VFS image in a fresh checkout that never ran
+  # build code, then pins the exact scanned tree by digest for the deploy job.
+  scrub-dist:
+    needs: [target, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      dist_digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Checkout gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Require an empty asset directory
+        run: |
+          if [ -e apps/web/dist ]; then
+            echo "::error::apps/web/dist exists in the checkout; the scanned tree must be exactly the build artifact"
+            exit 1
+          fi
+
+      - name: Download built preview bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: x61-web-dist
+          path: apps/web/dist
+
+      - name: Scrub gate (shipped assets and VFS image)
+        run: node deploy/ci/scrub-gate.mjs --dist
+
+      - name: Pin the scanned asset tree
+        id: digest
+        run: |
+          digest="$(cd apps/web/dist && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "x61-web-dist tree sha256 $digest"
+
+  # Bundles the Worker from a fresh checkout that never ran build code. Wrangler
+  # only reads source here; nothing from the repository is executed.
+  bundle:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      worker_digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Placeholder asset directory for the dry run
+        run: |
+          if [ -e apps/web/dist ]; then
+            echo "::error::apps/web/dist exists in the checkout; the bundle job never uses built assets"
+            exit 1
+          fi
+          mkdir -p apps/web/dist
+          echo "placeholder: the Worker bundle does not include assets" > apps/web/dist/bundle-placeholder.txt
+
+      - name: Bundle the Worker without credentials
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        # wrangler resolves a relative --outdir against the config directory for the bundle
+        # (it would land in deploy/cloudflare/worker-bundle), so the path is absolute.
+        run: |
+          npx --yes wrangler@4.155.0 deploy --dry-run --config deploy/cloudflare/wrangler.toml --outdir "$GITHUB_WORKSPACE/worker-bundle"
+          if [ ! -s "$GITHUB_WORKSPACE/worker-bundle/worker.js" ]; then
+            echo "::error::wrangler wrote no worker-bundle/worker.js; nothing to scan or deploy"
+            exit 1
+          fi
+
+      - name: Scrub gate (Worker bundle)
+        run: node deploy/ci/scrub-gate.mjs --bundle worker-bundle
+
+      - name: Pin the scanned Worker bundle
+        id: digest
+        run: |
+          digest="$(cd worker-bundle && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "x61-worker-bundle tree sha256 $digest"
+
+      - name: Upload scrubbed Worker bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x61-worker-bundle
+          path: worker-bundle
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  # The only job that holds the Cloudflare credential, through the GitHub environment `production` (deployment branch
+  # policy: main only). Each credentialed step runs only Wrangler (pinned) and shell; every repository script runs in a
+  # step with no credential (deploy/ci/workflow-credentials.test.mjs). actions: write is there for one thing: dispatching
+  # this workflow once for main when main moved during the run.
+  deploy:
+    needs: [target, preflight, scrub-dist, bundle]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+    steps:
+      - name: Checkout edge worker config
+        timeout-minutes: 5
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            deploy/cloudflare
+            deploy/ci
+            server
+
+      - name: Setup Node.js
+        timeout-minutes: 3
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Download built preview bundle
+        timeout-minutes: 3
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: x61-web-dist
+          path: apps/web/dist
+
+      - name: Download scrubbed Worker bundle
+        timeout-minutes: 3
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: x61-worker-bundle
+          path: worker-bundle
+
+      - name: Verify both artifacts are the exact trees the gates scanned
+        timeout-minutes: 2
+        env:
+          EXPECTED_DIST: ${{ needs.scrub-dist.outputs.dist_digest }}
+          EXPECTED_WORKER: ${{ needs.bundle.outputs.worker_digest }}
+        run: |
+          tree_digest() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1); }
+          dist="$(tree_digest apps/web/dist)"
+          worker="$(tree_digest worker-bundle)"
+          if [ -z "$EXPECTED_DIST" ] || [ "$dist" != "$EXPECTED_DIST" ]; then
+            echo "::error::x61-web-dist does not match the tree scrub-dist scanned (expected '$EXPECTED_DIST', got '$dist')"
+            exit 1
+          fi
+          if [ -z "$EXPECTED_WORKER" ] || [ "$worker" != "$EXPECTED_WORKER" ]; then
+            echo "::error::x61-worker-bundle does not match the bundle the bundle job scanned (expected '$EXPECTED_WORKER', got '$worker')"
+            exit 1
+          fi
+
+      - name: Stamp SOURCE_REVISION to the target commit
+        timeout-minutes: 1
+        env:
+          TARGET_SHA: ${{ needs.target.outputs.sha }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const p = "deploy/cloudflare/wrangler.toml";
+            const before = fs.readFileSync(p, "utf8");
+            const pattern = /SOURCE_REVISION = "[0-9a-f]{7,40}"/g;
+            if (!/^[0-9a-f]{40}$/.test(process.env.TARGET_SHA || "")) { console.error("::error::no target commit"); process.exit(1); }
+            if ((before.match(pattern) || []).length !== 1) { console.error("::error::wrangler.toml must contain exactly one SOURCE_REVISION"); process.exit(1); }
+            fs.writeFileSync(p, before.replace(pattern, `SOURCE_REVISION = "${process.env.TARGET_SHA}"`));
+          '
+
+      # Presence only: the expressions hand this step 'true' or 'false', never a credential value.
+      - name: Require Cloudflare credentials
+        id: credentials
+        timeout-minutes: 1
+        env:
+          HAS_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+        run: |
+          missing=""
+          [ "$HAS_API_TOKEN" = "true" ] || missing="$missing CLOUDFLARE_API_TOKEN"
+          [ "$HAS_ACCOUNT_ID" = "true" ] || missing="$missing CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "$missing" ]; then
+            notice="Auto-deploy skipped until CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID are configured as secrets of the production environment"
+            echo "::notice title=Auto-deploy skipped::$notice"
+            printf '%s\n' "$notice" "Nothing was deployed; live observation was skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      - name: Read the pinned Cloudflare account (no secret)
+        id: account
+        if: steps.credentials.outputs.configured == 'true'
+        timeout-minutes: 1
+        run: |
+          account="$(node deploy/ci/deploy-guard.mjs configured-account)"
+          echo "account_id=$account" >> "$GITHUB_OUTPUT"
+
+      # Credentialed: Wrangler and shell only. CLOUDFLARE_ACCOUNT_ID must equal account_id in wrangler.toml, so a
+      # mistyped secret can never deploy this Worker into another account.
+      - name: Read the live Worker deployment before deploying
+        id: status_before
+        if: steps.credentials.outputs.configured == 'true' && steps.account.outputs.account_id != ''
+        timeout-minutes: 3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PINNED_ACCOUNT: ${{ steps.account.outputs.account_id }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          if [ "$CLOUDFLARE_ACCOUNT_ID" != "$PINNED_ACCOUNT" ]; then
+            echo "::error title=Deploy refused::ACCOUNT_MISMATCH: the CLOUDFLARE_ACCOUNT_ID secret does not equal account_id in wrangler.toml. Nothing was deployed."
+            exit 1
+          fi
+          npx --yes wrangler@4.155.0 deployments status --json --config deploy/cloudflare/wrangler.toml --env-file /dev/null > "$RUNNER_TEMP/x61-deployment-status.json"
+
+      # Written down BEFORE anything is published, so it survives a runner that dies mid-publication.
+      - name: Record the live Worker version and the rollback command
+        id: previous
+        if: steps.status_before.outcome == 'success'
+        timeout-minutes: 1
+        run: |
+          if ! previous="$(node deploy/ci/deploy-guard.mjs previous-version < "$RUNNER_TEMP/x61-deployment-status.json")"; then
+            echo "::error title=Deploy refused::the live deployment is not one Worker version at 100%, so there is no version to name for a rollback. Nothing was deployed."
+            exit 1
+          fi
+          command="gh workflow run rollback-x61.yml --repo ${GITHUB_REPOSITORY} --ref main -f version_id=${previous}"
+          {
+            echo "version_id=$previous"
+            echo "rollback_command=$command"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "Live Worker version before this deploy: ${previous}."
+            echo "Rollback command: \`${command}\`"
+            echo "publication pending verification; if this runner dies the release stays live unchecked"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Immediately before publishing: only main's newest commit is ever published.
+      - name: Publish only main's newest commit
+        id: current
+        if: steps.previous.outputs.version_id != ''
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if ! printf '%s' "$head" | grep -Eqx '[0-9a-f]{40}'; then
+            echo "::error title=Deploy refused::main's head is unreadable. Nothing was published."
+            exit 1
+          fi
+          if [ "$head" = "$TARGET_SHA" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "publish=false" >> "$GITHUB_OUTPUT"
+          gh workflow run deploy-x61.yml --repo "$GITHUB_REPOSITORY" --ref main -f reason="superseded by ${head:0:12} (run ${GITHUB_RUN_ID})"
+          notice="superseded by ${head}: main moved after this run resolved ${TARGET_SHA}. Nothing was published; deploy-x61 was dispatched once for main, and that run publishes main's head."
+          echo "::notice title=Deploy superseded::$notice"
+          printf '%s\n' "$notice" >> "$GITHUB_STEP_SUMMARY"
+
+      # The compatibility flags and the empty env file match server/deploy-cloudflare.mjs (the Mac deploy), so a cloud
+      # deploy never drops a fetch policy the Mac deploy sets; a test keeps the two in step.
+      - name: Deploy the scrubbed Worker bundle to Cloudflare
+        id: publish
+        if: steps.current.outputs.publish == 'true'
+        timeout-minutes: 6
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4.155.0 deploy --config deploy/cloudflare/wrangler.toml --env-file /dev/null --compatibility-flags global_fetch_strictly_public --compatibility-flags no_cots_on_external_fetch --no-bundle "$GITHUB_WORKSPACE/worker-bundle/worker.js"
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "Published the target commit to Cloudflare; whether it is live is decided by /api/build below." >> "$GITHUB_STEP_SUMMARY"
+
+      # No credential. Runs whenever publishing was attempted (a failed Wrangler call may still have published). A wrong
+      # or missing answer fails the run loudly with the rollback command; nothing is rolled back by a machine.
+      - name: Confirm the new build is live
+        id: confirm
+        if: ${{ always() && steps.publish.outcome != 'skipped' }}
+        timeout-minutes: 5
+        env:
+          X61_EXPECT_BUILD_SHA: ${{ needs.target.outputs.sha }}
+          ROLLBACK_COMMAND: ${{ steps.previous.outputs.rollback_command }}
+        run: |
+          if node deploy/ci/deploy-guard.mjs await-live; then code=0; else code=$?; fi
+          if [ "$code" = "0" ]; then
+            echo "Live check passed: /api/build reports $X61_EXPECT_BUILD_SHA and the owner sign-in page renders." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$code" = "3" ]; then why="this runner could not reach Cloudflare's edge, so nothing about the release was observed"; else why="/api/build did not report $X61_EXPECT_BUILD_SHA with the sign-in page rendering within the bounded wait"; fi
+          notice="NOT VERIFIED LIVE: ${why}. Nothing was rolled back. To roll back: ${ROLLBACK_COMMAND}"
+          echo "::error title=Deploy not verified::$notice"
+          printf '%s\n' "$notice" >> "$GITHUB_STEP_SUMMARY"
+          exit 1

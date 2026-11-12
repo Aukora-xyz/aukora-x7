@@ -1,0 +1,22 @@
+# Bilingual-pair consistency record for RUN-RECORD.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/RUN-RECORD.md
+/run-record:
+  en: ad7a61ba4c81aaf4
+  zh: f2a8b921484138f0
+/run-record/tools-and-steps:
+  en: dad163d4f1782350
+  zh: 4b69710a14035121
+/run-record/tests:
+  en: d98c0f1db10981b4
+  zh: 992b4e02c59f0859
+/run-record/failing-cases:
+  en: 6278ef0515cfa053
+  zh: 770f65ec0bde691d
+/run-record/what-the-local-host-answered:
+  en: 34f91743b2e99bc4
+  zh: 31677b7f591b5c30
+/run-record/what-this-run-did-not-cover:
+  en: d7ca2d1fbfdcf884
+  zh: 5d2346e154d9e00f

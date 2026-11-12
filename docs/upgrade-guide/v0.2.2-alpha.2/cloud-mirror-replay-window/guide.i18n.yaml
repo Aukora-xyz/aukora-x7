@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/cloud-mirror-replay-window/guide.md
+/:
+  en: 49749f97299ea469
+  zh: 1115405660447a4a
+/bounded-cloud-mirror-replay-window:
+  en: cd0e9937338f30a5
+  zh: 6a54b438974b29bf
+/bounded-cloud-mirror-replay-window/change:
+  en: 9fe1e0bec86e119b
+  zh: 7376f95ff641777c
+/bounded-cloud-mirror-replay-window/migration:
+  en: f0e0b686f19271a7
+  zh: 2c958088592098a7

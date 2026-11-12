@@ -1,0 +1,23 @@
+---
+kind: upgrade-guide
+description: "AUMLOK unseal requires phrase commitments, and governance publishing separates protected transitions from review-only staging."
+---
+# Round 24 custody and governance
+
+English | [中文](guide.zh.md)
+
+## Change
+
+Unseal requires both fresh UV and verified phrase commitments, with separate WebAuthn/phrase budgets. Optional external pepper protects new stores. Governance covers eight fixed organs and declarations on either manifest; staging grants no authority. Direct Worker loads refresh changed module bytes and reject corrupt ball paths.
+
+## Migration
+
+1. Derive `commitmentSha256` from the current canonical phrase, not replacement words, and bound `nodePubkeyHex` using [`aumlokCommitment`](../../../../packages/client/ui-layout/src/client/spatial/aumlok/aumlok-ceremony.ts). Send an own field of 64 lowercase hexadecimal characters with `challengeId` and `credential` in the `POST /_host/aumlok/unseal` completion, not challenge request. Fresh UV, the phrase budget and `aukora.aumlok.recovery.v2` verification precede encrypted-root release; success always reports `phraseVerified: true`. After UV and budget checks, missing/malformed commitments return `AUMLOK_COMMITMENT_INVALID`; mismatches return `AUMLOK_RECOVERY_COMMITMENT_MISMATCH`. Never send raw words. Online limits cannot prevent offline guessing of retrieved ciphertext.
+2. Keep phrase lockout independent. Successful assertions, including recognized phrase refusals after final freshness checks, reset only WebAuthn failures. Registration, challenge issuance, replay and late failures reset neither budget. Render `phraseBlockers` separately from `blockers`; phrase refusal does not disable passkey approvals. For uncertain refresh, compare `lastRotationChallengeId`, `rotationSeq` and `keyCommitmentId` before retrying.
+3. For independently approved secret-backed installations, encode 32 bytes as canonical base64url in `AUMLOK_PEPPER_SECRET`. [Custody](../../../../deploy/cloudflare/src/aumlok.mjs) initializes `aukora.aumlok.pepper.v2` and `aukora.aumlok.escrow.v4`. Initialized legacy stores, including unbound ones, retain keys and report `pepperMigrationRequired` when supplied a secret; no automatic migration or migration API exists. New secret-backed bindings report `pepperSeparated: true`. Missing/mismatched secrets return `AUMLOK_PEPPER_SECRET_REQUIRED`/`AUMLOK_PEPPER_SECRET_MISMATCH` (503), even on status reads, without state writes. Restore the original secret. [Round 23](../round23-security-bridge/guide.md) v3/colocated-pepper advice applies only to legacy mode.
+4. Match browser classification and approval bindings to the [host policy](../../../../deploy/cloudflare/src/owner-grant-policy.mjs). The additional fixed organs are `seed-predict`, `seed-recall`, `seed-memory` and `auma-body-map`. An entry's or config's `governance` declaration on either previous or candidate manifest protects changes and removals; malformed declarations cannot lower protection.
+5. Use [`stage_head_promotion`](../../../../packages/experimental/webworker-runtime/src/x6/ball-loader.ts) or `POST /__x6__/stage-head-promotion` for `/dsh/home/auma/staged/head-promotion.json`. The tool takes `{body: envelope}`; HTTP takes the envelope directly. Complete UTF-8 size is limited to 4 MiB versus publication's 16 MiB. Supply all module sources; unavailable sources stop staging. Replacement requires matching `expectedStagedSha256`. Hard-linked/nonregular targets are refused. Staging grants no activation, authorization, qualification or durable-save acknowledgment. Descriptors carry no leases, approval bearers or qualification claims. Never send approval bearers through WorkerTunnel. The browser takes a fresh post-approval writer lease and rechecks the parent before publication.
+6. [Worker module loading](../../../../packages/experimental/webworker-runtime/README.md#known-limitations-and-deferred-work) reloads overwritten files on their next direct load, not cached importers. Evict/reload dependents explicitly. Full ball paths now reject mismatched bytes with `Ball integrity check failed`; restore matching bytes or use their correct hash/path.
+7. Verify matching-phrase success, missing/malformed/mismatched commitment refusal, separate failure budgets, legacy readability, missing/wrong-secret refusal, stale-review rejection and browser/host classification parity before activation. `governancePromotion` remains false without an independently installed Pearl verifier; staged bytes cannot supply one.
+
+Production secrets, deployment and live state are unchanged. Browser integration and activation require separate verification.

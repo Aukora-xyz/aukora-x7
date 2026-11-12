@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for ARCHITECTURE-ACTUAL.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/ARCHITECTURE-ACTUAL.md
+/architecture-actual:
+  en: bcaa1d6a4ea9f8d9
+  zh: 40b1820f4dfdfe8e
+/architecture-actual/browser-webworker:
+  en: c97c8be1dfe42ebe
+  zh: 4b8f124579967a20
+/architecture-actual/local-host:
+  en: 61910c5f03621864
+  zh: 738932066002b12c
+/architecture-actual/cloudflare-do-mirror:
+  en: f00c9cbad767330c
+  zh: 8054979e5fcb0085
+/architecture-actual/model-door:
+  en: ffc4c456759ed31c
+  zh: e68c3f0767a0f6c7
+/architecture-actual/receipts-and-checkpoints:
+  en: 6e52139217a01a90
+  zh: d8c930163b30a9c2
+/architecture-actual/proposed-manifest-signature:
+  en: ddf4cb3579b27671
+  zh: 86cfca798d8f012e

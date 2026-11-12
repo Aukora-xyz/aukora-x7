@@ -1,0 +1,117 @@
+/* packages/client/ui-layout/src/client/spatial/aura/AuraPentora.module.css */
+.AuraPentora_figure {
+  position: relative;
+  width: min(100%, 440px);
+  aspect-ratio: 1;
+  margin: 0 auto;
+}
+.AuraPentora_svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.AuraPentora_organ {
+  transition: opacity 400ms ease;
+}
+.AuraPentora_organ[data-dim=yes] {
+  opacity: .22;
+}
+.AuraPentora_cube {
+  --pen: var(--ak-blue);
+  stroke: var(--pen);
+  transform-box: view-box;
+  transform-origin: 0 0;
+  animation: AuraPentora_pentora-form 1.6s cubic-bezier(.16, 1, .3, 1) both;
+}
+.AuraPentora_cube[data-tone=gold] {
+  --pen: var(--ak-gold);
+}
+.AuraPentora_cube[data-tone=blue] {
+  --pen: var(--ak-blue);
+}
+.AuraPentora_cube[data-tone=violet] {
+  --pen: var(--ak-violet);
+}
+.AuraPentora_cube[data-tone=mint] {
+  --pen: var(--ak-mint);
+}
+.AuraPentora_cube[data-tone=muted] {
+  --pen: var(--ak-text-2);
+}
+.AuraPentora_edge {
+  stroke-width: 1.2px;
+  stroke-opacity: .9;
+}
+.AuraPentora_glow {
+  stroke-width: 6px;
+  stroke-opacity: .09;
+}
+.AuraPentora_edge[data-state=undetermined] {
+  stroke-opacity: .32;
+  stroke-dasharray: 2 4;
+}
+.AuraPentora_glow[data-state=undetermined] {
+  stroke-opacity: .03;
+}
+.AuraPentora_edge[data-state=failed],
+.AuraPentora_glow[data-state=failed] {
+  stroke: var(--ak-red);
+}
+.AuraPentora_glow[data-state=failed] {
+  stroke-opacity: .2;
+}
+.AuraPentora_face {
+  stroke-width: .8px;
+}
+.AuraPentora_face[data-state=verified] {
+  fill: var(--pen);
+  stroke: none;
+  opacity: .85;
+}
+.AuraPentora_face[data-state=undetermined] {
+  fill: none;
+  stroke: var(--ak-muted);
+  stroke-opacity: .7;
+}
+.AuraPentora_face[data-state=failed] {
+  fill: var(--ak-red);
+  stroke: none;
+}
+.AuraPentora_corner {
+  stroke-width: .9px;
+}
+.AuraPentora_corner[data-state=verified] {
+  fill: var(--ak-text);
+  stroke: none;
+  opacity: .92;
+}
+.AuraPentora_corner[data-state=undetermined] {
+  fill: rgb(17, 21, 32);
+  stroke: var(--ak-muted);
+}
+.AuraPentora_corner[data-state=failed] {
+  fill: var(--ak-red);
+  stroke: none;
+}
+@keyframes AuraPentora_pentora-form {
+  from {
+    opacity: 0;
+    transform: scale(.35) rotate(-40deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .AuraPentora_cube {
+    animation: none;
+  }
+  .AuraPentora_organ {
+    transition: none;
+  }
+}

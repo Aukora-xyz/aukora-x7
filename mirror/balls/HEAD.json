@@ -1,0 +1,434 @@
+{
+  "version": "x6.1-ball/v1",
+  "parentBallId": null,
+  "epoch": 1,
+  "createdAt": 0,
+  "authorPeerId": "genesis",
+  "entries": {
+    "auma-body-map": {
+      "id": "auma-body-map",
+      "specifier": "ball:19e218877360ea0066f111965cceb27e4bf1925e7d5480348005bd250b6d04c6",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-cortex": {
+      "id": "auma-cortex",
+      "specifier": "ball:a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-eyes": {
+      "id": "auma-eyes",
+      "specifier": "ball:d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-memory-domain": {
+      "id": "auma-memory-domain",
+      "specifier": "ball:5a368715b9fbaaee4e73672e15e82d6d17eb2b546958d71644c8e8ae68942a48",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-preset-inspector": {
+      "id": "auma-preset-inspector",
+      "specifier": "ball:2025f135dca74a751c1a98556f4a446d8087c6cf84e9ffbfe5ace978c787bf96",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-scion": {
+      "id": "auma-scion",
+      "specifier": "ball:ddd254e822c03ee5bfa46c5e2976075416c7dcf6976548cbcbc6e07ab56c62b7",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-text-metrics": {
+      "id": "auma-text-metrics",
+      "specifier": "ball:4d42482424f4beceb65557d0670ab4ff183bac3f485351501cffeb4737342315",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "auma-web-eyes": {
+      "id": "auma-web-eyes",
+      "specifier": "ball:8d6c200f1cac248afd69bae784e7484afb17f9ec20e688bb9205487473df45f5",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed": {
+      "id": "seed",
+      "specifier": "ball:17d428c657d2630ae9cd75200c4ada0d33e673be54fed075a70161ce8ef5b4b5",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-audit": {
+      "id": "seed-audit",
+      "specifier": "ball:9d3ae5cf785ca13290d8c0a50c1c49bc1381b20213798733adb35e55ac22f90b",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-aura": {
+      "id": "seed-aura",
+      "specifier": "ball:6b1c457effd415d47200bdbc969d0662e8e30bb7a53ccf69e1051dd960ec59e7",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-boot": {
+      "id": "seed-boot",
+      "specifier": "ball:bb34beb1c127ae4fa9b145cccfc6489aebc4f4059b589e8baa15baaf832954d5",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-calc": {
+      "id": "seed-calc",
+      "specifier": "ball:244a2786180c1c7644ab26cc06def1410e3d190efb3c3b2e891a04dd3519c45a",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-continuity": {
+      "id": "seed-continuity",
+      "specifier": "ball:0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
+      "config": {
+        "governance": true
+      },
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-cycle": {
+      "id": "seed-cycle",
+      "specifier": "ball:f694be4753b39bf2752e3d258aaa498507ddb37caf57177b0b952b4572e2d571",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-hello": {
+      "id": "seed-hello",
+      "specifier": "ball:0c1a94acb3f90b1ef52a521687e75474a262820bc2282b172148bcb3f01a2b6a",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-memory": {
+      "id": "seed-memory",
+      "specifier": "ball:3f678bafa7efd74a0331da268cb4afcde43962c615da3d8b8a4deb717c1e9ad4",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-nostr-anchor": {
+      "id": "seed-nostr-anchor",
+      "specifier": "ball:70a63fb5864143fd5be7c4b9d151e58e303478cc88911e297504884e383451a9",
+      "config": {
+        "governance": true
+      },
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-pearl": {
+      "id": "seed-pearl",
+      "specifier": "ball:be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
+      "config": {
+        "governance": true
+      },
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-predict": {
+      "id": "seed-predict",
+      "specifier": "ball:04df042179a9c678d1284cb070df1db0d7d430fef3649621b567fc927381f175",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-recall": {
+      "id": "seed-recall",
+      "specifier": "ball:3a4e4c05458d49a256f476073a4844bfa11d1cf67e23f66284ddc6d3a4fb58a1",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-receipts": {
+      "id": "seed-receipts",
+      "specifier": "ball:d53114ff3ed9c66f07db5cd020620f78eb930d94100a01c96757f4ce39eed4eb",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-repo-forge": {
+      "id": "seed-repo-forge",
+      "specifier": "ball:085f78aa80ecfe37142a596aea6a266b4e2dda788006717978265e87274c9cd5",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-superagent": {
+      "id": "seed-superagent",
+      "specifier": "ball:5d751ba4e62a0a3bf540cbc89962c14a770a5bde788f0288ef89aac36a3a5ac3",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-voice-slot": {
+      "id": "seed-voice-slot",
+      "specifier": "ball:c1c7e8d8de29a9d9cd7ff1e4361fe79f86934e051060921bed90f5e255f7d769",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    },
+    "seed-wish": {
+      "id": "seed-wish",
+      "specifier": "ball:905ec338d7ee4f199d6678730229790b15bbd29e7fe553ecb6e34694280474c3",
+      "config": {},
+      "disabled": false,
+      "previousSpecifiers": [],
+      "updatedAt": 0
+    }
+  },
+  "modules": {
+    "19e218877360ea0066f111965cceb27e4bf1925e7d5480348005bd250b6d04c6": {
+      "sha256": "19e218877360ea0066f111965cceb27e4bf1925e7d5480348005bd250b6d04c6",
+      "specifier": "ball:19e218877360ea0066f111965cceb27e4bf1925e7d5480348005bd250b6d04c6",
+      "name": "auma-body-map",
+      "description": "Genesis seed organ auma-body-map",
+      "size": 13637,
+      "createdAt": 0
+    },
+    "a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825": {
+      "sha256": "a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
+      "specifier": "ball:a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
+      "name": "auma-cortex",
+      "description": "Genesis seed organ auma-cortex",
+      "size": 13289,
+      "createdAt": 0
+    },
+    "d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63": {
+      "sha256": "d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
+      "specifier": "ball:d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
+      "name": "auma-eyes",
+      "description": "Genesis seed organ auma-eyes",
+      "size": 3089,
+      "createdAt": 0
+    },
+    "5a368715b9fbaaee4e73672e15e82d6d17eb2b546958d71644c8e8ae68942a48": {
+      "sha256": "5a368715b9fbaaee4e73672e15e82d6d17eb2b546958d71644c8e8ae68942a48",
+      "specifier": "ball:5a368715b9fbaaee4e73672e15e82d6d17eb2b546958d71644c8e8ae68942a48",
+      "name": "auma-memory-domain",
+      "description": "Genesis seed organ auma-memory-domain",
+      "size": 53669,
+      "createdAt": 0
+    },
+    "2025f135dca74a751c1a98556f4a446d8087c6cf84e9ffbfe5ace978c787bf96": {
+      "sha256": "2025f135dca74a751c1a98556f4a446d8087c6cf84e9ffbfe5ace978c787bf96",
+      "specifier": "ball:2025f135dca74a751c1a98556f4a446d8087c6cf84e9ffbfe5ace978c787bf96",
+      "name": "auma-preset-inspector",
+      "description": "Genesis seed organ auma-preset-inspector",
+      "size": 2525,
+      "createdAt": 0
+    },
+    "ddd254e822c03ee5bfa46c5e2976075416c7dcf6976548cbcbc6e07ab56c62b7": {
+      "sha256": "ddd254e822c03ee5bfa46c5e2976075416c7dcf6976548cbcbc6e07ab56c62b7",
+      "specifier": "ball:ddd254e822c03ee5bfa46c5e2976075416c7dcf6976548cbcbc6e07ab56c62b7",
+      "name": "auma-scion",
+      "description": "Genesis seed organ auma-scion",
+      "size": 1905,
+      "createdAt": 0
+    },
+    "4d42482424f4beceb65557d0670ab4ff183bac3f485351501cffeb4737342315": {
+      "sha256": "4d42482424f4beceb65557d0670ab4ff183bac3f485351501cffeb4737342315",
+      "specifier": "ball:4d42482424f4beceb65557d0670ab4ff183bac3f485351501cffeb4737342315",
+      "name": "auma-text-metrics",
+      "description": "Genesis seed organ auma-text-metrics",
+      "size": 1413,
+      "createdAt": 0
+    },
+    "8d6c200f1cac248afd69bae784e7484afb17f9ec20e688bb9205487473df45f5": {
+      "sha256": "8d6c200f1cac248afd69bae784e7484afb17f9ec20e688bb9205487473df45f5",
+      "specifier": "ball:8d6c200f1cac248afd69bae784e7484afb17f9ec20e688bb9205487473df45f5",
+      "name": "auma-web-eyes",
+      "description": "Genesis seed organ auma-web-eyes",
+      "size": 5499,
+      "createdAt": 0
+    },
+    "17d428c657d2630ae9cd75200c4ada0d33e673be54fed075a70161ce8ef5b4b5": {
+      "sha256": "17d428c657d2630ae9cd75200c4ada0d33e673be54fed075a70161ce8ef5b4b5",
+      "specifier": "ball:17d428c657d2630ae9cd75200c4ada0d33e673be54fed075a70161ce8ef5b4b5",
+      "name": "seed",
+      "description": "Genesis seed organ seed",
+      "size": 10892,
+      "createdAt": 0
+    },
+    "9d3ae5cf785ca13290d8c0a50c1c49bc1381b20213798733adb35e55ac22f90b": {
+      "sha256": "9d3ae5cf785ca13290d8c0a50c1c49bc1381b20213798733adb35e55ac22f90b",
+      "specifier": "ball:9d3ae5cf785ca13290d8c0a50c1c49bc1381b20213798733adb35e55ac22f90b",
+      "name": "seed-audit",
+      "description": "Genesis seed organ seed-audit",
+      "size": 3886,
+      "createdAt": 0
+    },
+    "6b1c457effd415d47200bdbc969d0662e8e30bb7a53ccf69e1051dd960ec59e7": {
+      "sha256": "6b1c457effd415d47200bdbc969d0662e8e30bb7a53ccf69e1051dd960ec59e7",
+      "specifier": "ball:6b1c457effd415d47200bdbc969d0662e8e30bb7a53ccf69e1051dd960ec59e7",
+      "name": "seed-aura",
+      "description": "Genesis seed organ seed-aura",
+      "size": 33985,
+      "createdAt": 0
+    },
+    "bb34beb1c127ae4fa9b145cccfc6489aebc4f4059b589e8baa15baaf832954d5": {
+      "sha256": "bb34beb1c127ae4fa9b145cccfc6489aebc4f4059b589e8baa15baaf832954d5",
+      "specifier": "ball:bb34beb1c127ae4fa9b145cccfc6489aebc4f4059b589e8baa15baaf832954d5",
+      "name": "seed-boot",
+      "description": "Genesis seed organ seed-boot",
+      "size": 6951,
+      "createdAt": 0
+    },
+    "244a2786180c1c7644ab26cc06def1410e3d190efb3c3b2e891a04dd3519c45a": {
+      "sha256": "244a2786180c1c7644ab26cc06def1410e3d190efb3c3b2e891a04dd3519c45a",
+      "specifier": "ball:244a2786180c1c7644ab26cc06def1410e3d190efb3c3b2e891a04dd3519c45a",
+      "name": "seed-calc",
+      "description": "Genesis seed organ seed-calc",
+      "size": 320,
+      "createdAt": 0
+    },
+    "0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359": {
+      "sha256": "0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
+      "specifier": "ball:0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
+      "name": "seed-continuity",
+      "description": "Genesis seed organ seed-continuity",
+      "size": 15295,
+      "createdAt": 0
+    },
+    "f694be4753b39bf2752e3d258aaa498507ddb37caf57177b0b952b4572e2d571": {
+      "sha256": "f694be4753b39bf2752e3d258aaa498507ddb37caf57177b0b952b4572e2d571",
+      "specifier": "ball:f694be4753b39bf2752e3d258aaa498507ddb37caf57177b0b952b4572e2d571",
+      "name": "seed-cycle",
+      "description": "Genesis seed organ seed-cycle",
+      "size": 7180,
+      "createdAt": 0
+    },
+    "0c1a94acb3f90b1ef52a521687e75474a262820bc2282b172148bcb3f01a2b6a": {
+      "sha256": "0c1a94acb3f90b1ef52a521687e75474a262820bc2282b172148bcb3f01a2b6a",
+      "specifier": "ball:0c1a94acb3f90b1ef52a521687e75474a262820bc2282b172148bcb3f01a2b6a",
+      "name": "seed-hello",
+      "description": "Genesis seed organ seed-hello",
+      "size": 297,
+      "createdAt": 0
+    },
+    "3f678bafa7efd74a0331da268cb4afcde43962c615da3d8b8a4deb717c1e9ad4": {
+      "sha256": "3f678bafa7efd74a0331da268cb4afcde43962c615da3d8b8a4deb717c1e9ad4",
+      "specifier": "ball:3f678bafa7efd74a0331da268cb4afcde43962c615da3d8b8a4deb717c1e9ad4",
+      "name": "seed-memory",
+      "description": "Genesis seed organ seed-memory",
+      "size": 3757,
+      "createdAt": 0
+    },
+    "70a63fb5864143fd5be7c4b9d151e58e303478cc88911e297504884e383451a9": {
+      "sha256": "70a63fb5864143fd5be7c4b9d151e58e303478cc88911e297504884e383451a9",
+      "specifier": "ball:70a63fb5864143fd5be7c4b9d151e58e303478cc88911e297504884e383451a9",
+      "name": "seed-nostr-anchor",
+      "description": "Genesis seed organ seed-nostr-anchor",
+      "size": 12897,
+      "createdAt": 0
+    },
+    "be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447": {
+      "sha256": "be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
+      "specifier": "ball:be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
+      "name": "seed-pearl",
+      "description": "Genesis seed organ seed-pearl",
+      "size": 39262,
+      "createdAt": 0
+    },
+    "04df042179a9c678d1284cb070df1db0d7d430fef3649621b567fc927381f175": {
+      "sha256": "04df042179a9c678d1284cb070df1db0d7d430fef3649621b567fc927381f175",
+      "specifier": "ball:04df042179a9c678d1284cb070df1db0d7d430fef3649621b567fc927381f175",
+      "name": "seed-predict",
+      "description": "Genesis seed organ seed-predict",
+      "size": 23514,
+      "createdAt": 0
+    },
+    "3a4e4c05458d49a256f476073a4844bfa11d1cf67e23f66284ddc6d3a4fb58a1": {
+      "sha256": "3a4e4c05458d49a256f476073a4844bfa11d1cf67e23f66284ddc6d3a4fb58a1",
+      "specifier": "ball:3a4e4c05458d49a256f476073a4844bfa11d1cf67e23f66284ddc6d3a4fb58a1",
+      "name": "seed-recall",
+      "description": "Genesis seed organ seed-recall",
+      "size": 24780,
+      "createdAt": 0
+    },
+    "d53114ff3ed9c66f07db5cd020620f78eb930d94100a01c96757f4ce39eed4eb": {
+      "sha256": "d53114ff3ed9c66f07db5cd020620f78eb930d94100a01c96757f4ce39eed4eb",
+      "specifier": "ball:d53114ff3ed9c66f07db5cd020620f78eb930d94100a01c96757f4ce39eed4eb",
+      "name": "seed-receipts",
+      "description": "Genesis seed organ seed-receipts",
+      "size": 26071,
+      "createdAt": 0
+    },
+    "085f78aa80ecfe37142a596aea6a266b4e2dda788006717978265e87274c9cd5": {
+      "sha256": "085f78aa80ecfe37142a596aea6a266b4e2dda788006717978265e87274c9cd5",
+      "specifier": "ball:085f78aa80ecfe37142a596aea6a266b4e2dda788006717978265e87274c9cd5",
+      "name": "seed-repo-forge",
+      "description": "Genesis seed organ seed-repo-forge",
+      "size": 12270,
+      "createdAt": 0
+    },
+    "5d751ba4e62a0a3bf540cbc89962c14a770a5bde788f0288ef89aac36a3a5ac3": {
+      "sha256": "5d751ba4e62a0a3bf540cbc89962c14a770a5bde788f0288ef89aac36a3a5ac3",
+      "specifier": "ball:5d751ba4e62a0a3bf540cbc89962c14a770a5bde788f0288ef89aac36a3a5ac3",
+      "name": "seed-superagent",
+      "description": "Genesis seed organ seed-superagent",
+      "size": 36137,
+      "createdAt": 0
+    },
+    "c1c7e8d8de29a9d9cd7ff1e4361fe79f86934e051060921bed90f5e255f7d769": {
+      "sha256": "c1c7e8d8de29a9d9cd7ff1e4361fe79f86934e051060921bed90f5e255f7d769",
+      "specifier": "ball:c1c7e8d8de29a9d9cd7ff1e4361fe79f86934e051060921bed90f5e255f7d769",
+      "name": "seed-voice-slot",
+      "description": "Genesis seed organ seed-voice-slot",
+      "size": 7462,
+      "createdAt": 0
+    },
+    "905ec338d7ee4f199d6678730229790b15bbd29e7fe553ecb6e34694280474c3": {
+      "sha256": "905ec338d7ee4f199d6678730229790b15bbd29e7fe553ecb6e34694280474c3",
+      "specifier": "ball:905ec338d7ee4f199d6678730229790b15bbd29e7fe553ecb6e34694280474c3",
+      "name": "seed-wish",
+      "description": "Genesis seed organ seed-wish",
+      "size": 1595,
+      "createdAt": 0
+    }
+  },
+  "ballId": "a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624"
+}

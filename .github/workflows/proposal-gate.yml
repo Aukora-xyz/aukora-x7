@@ -1,0 +1,247 @@
+name: Proposal gate (no secrets, no deploy)
+
+# Auma's proposal branches (auma/proposal/<name>, made through the repo broker) get the same gates as a deploy of main:
+# tests, the source scrub, the authority preflight, the web build, the shipped-asset scrub and a credential-free Worker
+# bundle. Its result is what her proposal card shows as ciStatus (deploy/cloudflare/src/cloud-brokers.mjs proposalCi)
+# BEFORE the owner approves the exact diff. This workflow holds NO secret and deploys nothing; the broker refuses .github/
+# changes on her branches, so the copy that runs is the one main already had when the branch was cut.
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   push:
+# [disabled in aukora-x7]     branches:
+# [disabled in aukora-x7]       - "auma/proposal/**"
+
+permissions:
+  contents: read
+
+# Nothing here deploys, so a newer push to the same proposal branch may cancel an older run outright.
+concurrency:
+  group: proposal-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The commit under test is the pushed proposal head itself; the gate jobs below are deploy-x61.yml's, byte for byte.
+  target:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.head.outputs.sha }}
+    steps:
+      - name: The pushed proposal commit
+        id: head
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+
+  # Gate tests, the source path scan and the authority preflight, on a fresh tree.
+  preflight:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          # The scrub history allowlist is anchored to x6.1 commits; verifying it needs full history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Deploy gate unit tests
+        run: node --test deploy/ci/*.test.mjs
+
+      - name: Edge archive, invite and deploy reporting regressions
+        # WO-1 gap reproductions keep their outstanding acceptance TODOs visible.
+        run: |
+          node --test deploy/cloudflare/src/__tests__/deploy-workflow.test.mjs \
+            deploy/cloudflare/src/__tests__/estate-archive.test.mjs \
+            deploy/cloudflare/src/__tests__/estate.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-invites.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-invite-routes.test.mjs \
+            deploy/cloudflare/src/__tests__/guest-access-boundary.test.mjs \
+            deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs
+
+      - name: Scrub gate (source)
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/scrub-gate.mjs --source
+
+      # Before anything is packaged: every mirror module hashes to its name, the head is its own hash, its selected organs
+      # are present, and the two HEAD copies agree, read from the repository alone. An integrity check, not an exemption.
+      - name: Mirror integrity
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/deploy-guard.mjs verify-mirror
+
+      - name: Authority preflight
+        # Runs even when an earlier gate failed, so every blocking reason shows in one run.
+        if: ${{ !cancelled() }}
+        run: node deploy/ci/authority-preflight.mjs
+
+  # Untrusted: executes T1 build code. Its only output is the web asset artifact.
+  build:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build and seal preview assets
+        env:
+          PORT: "4619"
+          # tsc -b tsconfig.client.json exceeds Node's default ~2 GB heap on the runner (a run died
+          # with "JavaScript heap out of memory"); a larger runner has about 7 GB.
+          NODE_OPTIONS: --max-old-space-size=5632
+        run: node server/build-preview.mjs
+
+      # Reads the built files only (runs none of them): the page side must name this build's commit, or the
+      # "a new build is live" notice is dead in the deployed app; the page bootstrap must not carry the retention suite.
+      - name: Built-notice check (the page names the target commit)
+        env:
+          TARGET_SHA: ${{ needs.target.outputs.sha }}
+        run: node deploy/ci/built-notice-check.mjs apps/web/dist --commit "$TARGET_SHA"
+
+      - name: Upload built preview bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x61-web-dist
+          path: apps/web/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3
+
+  # Scans the shipped assets and VFS image in a fresh checkout that never ran
+  # build code, then pins the exact scanned tree by digest for the deploy job.
+  scrub-dist:
+    needs: [target, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      dist_digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Checkout gate scripts
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Require an empty asset directory
+        run: |
+          if [ -e apps/web/dist ]; then
+            echo "::error::apps/web/dist exists in the checkout; the scanned tree must be exactly the build artifact"
+            exit 1
+          fi
+
+      - name: Download built preview bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: x61-web-dist
+          path: apps/web/dist
+
+      - name: Scrub gate (shipped assets and VFS image)
+        run: node deploy/ci/scrub-gate.mjs --dist
+
+      - name: Pin the scanned asset tree
+        id: digest
+        run: |
+          digest="$(cd apps/web/dist && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "x61-web-dist tree sha256 $digest"
+
+  # Bundles the Worker from a fresh checkout that never ran build code. Wrangler
+  # only reads source here; nothing from the repository is executed.
+  bundle:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      worker_digest: ${{ steps.digest.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Placeholder asset directory for the dry run
+        run: |
+          if [ -e apps/web/dist ]; then
+            echo "::error::apps/web/dist exists in the checkout; the bundle job never uses built assets"
+            exit 1
+          fi
+          mkdir -p apps/web/dist
+          echo "placeholder: the Worker bundle does not include assets" > apps/web/dist/bundle-placeholder.txt
+
+      - name: Bundle the Worker without credentials
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        # wrangler resolves a relative --outdir against the config directory for the bundle
+        # (it would land in deploy/cloudflare/worker-bundle), so the path is absolute.
+        run: |
+          npx --yes wrangler@4.155.0 deploy --dry-run --config deploy/cloudflare/wrangler.toml --outdir "$GITHUB_WORKSPACE/worker-bundle"
+          if [ ! -s "$GITHUB_WORKSPACE/worker-bundle/worker.js" ]; then
+            echo "::error::wrangler wrote no worker-bundle/worker.js; nothing to scan or deploy"
+            exit 1
+          fi
+
+      - name: Scrub gate (Worker bundle)
+        run: node deploy/ci/scrub-gate.mjs --bundle worker-bundle
+
+      - name: Pin the scanned Worker bundle
+        id: digest
+        run: |
+          digest="$(cd worker-bundle && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum | sha256sum | cut -d' ' -f1)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "x61-worker-bundle tree sha256 $digest"
+
+      - name: Upload scrubbed Worker bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x61-worker-bundle
+          path: worker-bundle
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 3

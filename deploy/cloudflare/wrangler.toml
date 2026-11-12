@@ -1,0 +1,45 @@
+# TEMPLATE. Every node operator sets name, account_id, routes, PUBLIC_HOST, ACCESS_TEAM, ACCESS_AUD, OWNER_EMAIL,
+# OWNER_PUBLIC_KEY_HEX and the R2 bucket_name for their own Cloudflare account before the first deploy. The values
+# below are placeholders: the all-zero account id matches no account, so the deploy workflow refuses
+# (ACCOUNT_MISMATCH) until it is set.
+name = "your-node"
+main = "src/worker.mjs"
+compatibility_date = "2026-11-01"
+account_id = "00000000000000000000000000000000"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "node.example.invalid", custom_domain = true }]
+
+[assets]
+directory = "../../apps/web/dist"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "none"
+
+[vars]
+PUBLIC_HOST = "node.example.invalid"
+ACCESS_TEAM = "your_team.cloudflareaccess.com"
+ACCESS_AUD = ""
+OWNER_EMAIL = ""
+OWNER_PUBLIC_KEY_HEX = ""
+SOURCE_REVISION = "0000000000000000000000000000000000000000"
+PROVIDER_BUDGET_WINDOW_MS = "60000"
+PROVIDER_BUDGET_REQUESTS = "1000"
+PROVIDER_BUDGET_TOKENS = "50000000"
+PROVIDER_MAX_OUTPUT_TOKENS = "256000"
+
+[[durable_objects.bindings]]
+name = "HEAD"
+class_name = "X61HeadDurableObject"
+
+[[durable_objects.bindings]]
+name = "MIRROR"
+class_name = "MirrorDO"
+
+[[r2_buckets]]
+binding = "ARCHIVE_BUCKET"
+bucket_name = "your-node-archive"
+
+[[migrations]]
+tag = "x61-v1"
+new_sqlite_classes = ["X61HeadDurableObject", "MirrorDO"]

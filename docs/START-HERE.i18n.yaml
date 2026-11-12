@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for START-HERE.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/START-HERE.md
+/start-here:
+  en: 16b1e8cd90c7a59a
+  zh: a03be84bbc6e1ef9
+/start-here/four-roles:
+  en: da09bc8c3a3dd4b5
+  zh: 0694f61adb2453ca
+/start-here/package-map:
+  en: c35dc449c7177bf8
+  zh: a8df3cf5f4fecf5a
+/start-here/five-risks:
+  en: 411025db8e1d753c
+  zh: 7c861361cc01cd72

@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/wake-aura-pause/guide.md
+/:
+  en: 6901fd19dd32dc0d
+  zh: ec4a2afa61f1ecd7
+/automatic-wake-pause-and-aura-hints:
+  en: a1e6cc5ce5792daa
+  zh: aaf2def3de743907
+/automatic-wake-pause-and-aura-hints/change:
+  en: c50ea0195a3ad7a0
+  zh: 40016331db645b54
+/automatic-wake-pause-and-aura-hints/migration:
+  en: e4c5b2cc5dbcbfb1
+  zh: 34efb7bbd497495b

@@ -1,0 +1,44 @@
+{
+  "schema": "aukora.organ-fixtures.v1",
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "firstFailingCommit": "0000000000000000000000000000000000000000",
+  "contractTestsLastChanged": "0000000000000000000000000000000000000000",
+  "selection": "These fixtures pin the organ contracts the aura, pearl and verified-facts suites test. The commit fields are zero: this repository starts without the history they pointed at, so provenance is reported as not checked.",
+  "advisoryLiveRun": "AUKORA_ORGAN_SOURCE=live node --test server/aura.test.mjs server/pearl.test.mjs server/verified-facts.test.mjs (advisory only; never in the gating job)",
+  "pairedLiveModules": {
+    "server/aura-rules.mjs": {
+      "sha256": "421ee406f532c0f87111496e848241f6f42d6df31cc03b08b63928947afe1f1e"
+    }
+  },
+  "repin": "A T2 change to server/aura-rules.mjs or an intended organ contract change requires re-pinning these fixtures with git show <commit>:<path>, never by hand-editing.",
+  "organs": {
+    "seed-aura": {
+      "path": "mirror/home/auma/seed/organs/seed-aura.js",
+      "sha256": "5919a6235477f92fbbee571edffec64f74e9c374295fe7d364b81861ea00b32f",
+      "gitBlob": "5b001b11d0fc226e4d6525ca63d8f0b409fd6c94",
+      "bytes": 25549,
+      "lastChangedAt": "0000000000000000000000000000000000000000"
+    },
+    "seed-pearl": {
+      "path": "mirror/home/auma/seed/organs/seed-pearl.js",
+      "sha256": "f711328e53531d86286f3fbbbb8f9a6399c5f97097e91c1dd27372e105db29a3",
+      "gitBlob": "90459a4771eeb65265e852480dd24488b5584d52",
+      "bytes": 37176,
+      "lastChangedAt": "0000000000000000000000000000000000000000"
+    },
+    "seed-predict": {
+      "path": "mirror/home/auma/seed/organs/seed-predict.js",
+      "sha256": "b35258e78a7325498a3c2fd7069b382274e221d565f11f3b19f9d6ad17067a45",
+      "gitBlob": "9f86d674fc97ffff997f1d31e69412f0ae694720",
+      "bytes": 25115,
+      "lastChangedAt": "0000000000000000000000000000000000000000"
+    },
+    "seed-receipts": {
+      "path": "mirror/home/auma/seed/organs/seed-receipts.js",
+      "sha256": "1dcc83a587121c8e66053e4c77fa291406cc77b11276f3e9d1c524a8af3334c7",
+      "gitBlob": "b038566f718d3e7b4538be13e6cc938163c6a155",
+      "bytes": 29462,
+      "lastChangedAt": "0000000000000000000000000000000000000000"
+    }
+  }
+}

@@ -1,0 +1,156 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * "FINGERPRINT WAITING" IN THE CHAT LANE, drawn as a Spatial Portal card (FingerprintWaiting.tsx).
+ *
+ * The frame, the tone and every token are the primitives' (`primitives.css`: `.ak-portal`, `.ak-tone-gold`, `.ak-action`,
+ * `.ak-pill`, `.ak-fields`, `.ak-quote`, `.ak-lead`, `.ak-icon-tile`). This file adds only what a card that floats over
+ * the open chat needs: where it sits, an opaque surface, and the measurements of its own parts.
+ *
+ * EVERY RULE HERE OUTWEIGHS THE PRIMITIVE IT REFINES, whichever stylesheet loads first: the card's rule names the element
+ * and its hook (`.ak-portal:hover` is two classes), and every part is written under `.card`.
+ *
+ *   card      absolute at the top of the thread stack, 12px in from its edges, z-index 40 (over the lane's corner
+ *             controls); never taller than the lane (it scrolls inside itself); padding 14px 16px 16px; parts 10px apart.
+ *   compact   in the compact frame (one lane at full width, `--dsh-compact-corner-clearance` set by the frame) the card
+ *             starts below the corner band instead, so the lane's upper corners stay in reach; its foot stays 12px.
+ *             Elsewhere that property is unset and the card sits 12px down, as it always did.
+ *   touch     on a touch screen (coarse pointer) Approve, Inspect and Hide are at least 44px tall (Hide 44px round).
+ *             Every word of the scope and the evidence wraps or scrolls in its own box: none is cut, at any width.
+ *   surface   OPAQUE: a solid base under the portal surface tint, so the chat never shows through the words.
+ *   ring      the open portal's: 1px tone at 70% and the 14px glow, plus a drop shadow that lifts it off the chat.
+ *   head      icon tile, the eyebrow (mono 10px/14px weight 600 tracking .16em caps, in the tone), the count as a status
+ *             pill, and a quiet 26px round × at the far end.
+ *   line      what waits, as a portal title: 13.5px/20px weight 520 tracking .02em. It wraps; it is never cut.
+ *   fields    her outward request, as the primitives' field table: names left, values right in mono. Each value is its
+ *             own box that scrolls past 180px (that measurement is on the element itself), so no byte is cut.
+ *   actions   ONE gold primary (the filled pill) and one hairline secondary; both 34px tall.
+ *   outcome   one line, toned by its state: the tone on its left edge and tinting its words.
+ *   focus     every control shows the primitives' focus ring (2px tone, 3px off).
+ *   motion    nothing moves. Borders and colours ease on hover (180ms), and not at all under reduced motion.
+ */
+
+aside.card[data-fingerprint-waiting] {
+  position: absolute;
+  top: var(--dsh-compact-corner-clearance, 12px);
+  left: 12px;
+  right: 12px;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100% - var(--dsh-compact-corner-clearance, 12px) - 12px);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+  /* OPAQUE: the solid base is the colour; the portal surface tint is painted over it as an image. */
+  background-color: rgb(14, 18, 28);
+  background-image: linear-gradient(var(--ak-surface), var(--ak-surface));
+  border-color: color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 70%, transparent);
+  box-shadow:
+    0 14px 40px rgba(0, 0, 0, 0.65),
+    0 0 14px color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 14%, transparent);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ── Head: tile, eyebrow, count, × ────────────────────────────────────────────────────────────────────────── */
+.card .head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; min-height: 30px; }
+.card .eyebrow {
+  min-width: 0;
+  color: var(--ak-tone, var(--ak-gold));
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.card .count { display: inline-flex; flex: none; align-items: center; gap: 8px; }
+.card .sep { color: var(--ak-muted); }
+.card .dismiss {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ak-muted);
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color var(--ak-ease), color var(--ak-ease);
+}
+.card .dismiss:hover { border-color: var(--ak-hairline); color: var(--ak-text); }
+
+/* ── What waits, and what an approval said ────────────────────────────────────────────────────────────────── */
+.card .line {
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 520;
+  letter-spacing: 0.02em;
+  overflow-wrap: anywhere;
+}
+.card .outcome {
+  padding: 6px 12px;
+  border-left-color: color-mix(in srgb, var(--ak-tone, var(--ak-muted)) 70%, transparent);
+  color: color-mix(in srgb, var(--ak-tone, var(--ak-muted)) 62%, var(--ak-text));
+  overflow-wrap: anywhere;
+}
+
+/* ── Her outward request: every byte the tap sends ────────────────────────────────────────────────────────── */
+.card .rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.card .rows > :global(.ak-lead) { margin: 0; }
+.card .fields { gap: 8px 14px; align-items: start; }
+/* A row is one name and one value: the wrapper keeps them together in the page and steps out of the grid. */
+.card .field { display: contents; }
+.card .field > dt { padding-top: 4px; }
+.card .value {
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow-wrap: anywhere;
+}
+
+/* ── The two buttons ──────────────────────────────────────────────────────────────────────────────────────── */
+.card .actions { gap: 8px 10px; }
+.card .primary, .card .secondary { min-height: 34px; padding: 6px 16px; font-size: 12.5px; }
+.card .primary {
+  border-color: var(--ak-tone, var(--ak-gold));
+  background: var(--ak-tone, var(--ak-gold));
+  color: rgb(20, 17, 10);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.card .primary:hover:not(:disabled) {
+  border-color: var(--ak-tone, var(--ak-gold));
+  background: color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 88%, white);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 30%, transparent);
+}
+/* An approval is running: the button waits with it. */
+.card .primary:disabled { opacity: 0.6; box-shadow: none; cursor: progress; }
+.card .secondary { border-color: var(--ak-hairline); background: transparent; color: var(--ak-text); }
+.card .secondary:hover {
+  border-color: color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 70%, transparent);
+  color: var(--ak-tone, var(--ak-gold));
+}
+
+/* ── Keyboard: the same ring on every control ─────────────────────────────────────────────────────────────── */
+.card .primary:focus-visible, .card .secondary:focus-visible, .card .dismiss:focus-visible, .card .value:focus-visible {
+  outline: 2px solid var(--ak-tone, var(--ak-gold));
+  outline-offset: 3px;
+}
+
+/* ── Touch: every control the owner taps here is a 44px target ───────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  .card .primary, .card .secondary { min-height: 44px; }
+  .card .dismiss { width: 44px; height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card .dismiss, .card .primary, .card .secondary { transition: none; }
+}

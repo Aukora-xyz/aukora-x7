@@ -1,0 +1,11 @@
+Prebuilt file in this folder
+
+File: pentora36.wasm.
+
+This file is object code (compiled WebAssembly). Its source code is NOT in this repository.
+
+No licence for this file is granted by this repository yet. The LICENSE at the root of this
+repository does not cover it, and neither does ../../cells/LICENSE.binaries. Its terms are for its copyright holder
+to state. Until they are stated, ask the copyright holder before you copy, change or pass on this file.
+
+This note states facts about this folder. It is not legal advice.

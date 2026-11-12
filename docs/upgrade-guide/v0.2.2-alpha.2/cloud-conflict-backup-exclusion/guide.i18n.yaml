@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/cloud-conflict-backup-exclusion/guide.md
+/:
+  en: 2d05f2fe8e8847fc
+  zh: 8512d1c46c06022f
+/keep-conflict-backups-out-of-the-cloud-mirror:
+  en: c4e74b509383b962
+  zh: 520dccc3f0c6cbd0
+/keep-conflict-backups-out-of-the-cloud-mirror/change:
+  en: f09eb2d60f2af34d
+  zh: 0a47938f19428029
+/keep-conflict-backups-out-of-the-cloud-mirror/migration:
+  en: aed8547026b9e70f
+  zh: 5f9eacabf1f386ee

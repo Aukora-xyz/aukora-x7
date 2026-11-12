@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/round27-organ-continuity/guide.md
+/:
+  en: bbbcc027f8a627ec
+  zh: 3082567f892cfafd
+/organ-reads-and-checkpoint-continuity:
+  en: 5065a0c60cdf1db4
+  zh: 173c5ae803506b67
+/organ-reads-and-checkpoint-continuity/change:
+  en: 6ce8fea1fd44de72
+  zh: 9b8056533e42917e
+/organ-reads-and-checkpoint-continuity/migration:
+  en: 2f93d475ff2a0726
+  zh: 846683785b321401

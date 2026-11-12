@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for guide.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/upgrade-guide/v0.2.2-alpha.2/round24-integration/guide.md
+/:
+  en: 1455822732bc9d2f
+  zh: acb2b28c5583047e
+/round-24-custody-and-governance:
+  en: 04089b0b9c27984a
+  zh: 699337b626d04366
+/round-24-custody-and-governance/change:
+  en: 7751189b444b8db9
+  zh: fcedaaf5e1e4ca69
+/round-24-custody-and-governance/migration:
+  en: 31e9b9c33b0d8c20
+  zh: f915c9627c8cf45a

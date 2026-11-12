@@ -1,0 +1,7 @@
+# Bilingual-pair consistency record for GLOSSARY.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/GLOSSARY.md
+/glossary:
+  en: 66eeec3ced1dee8d
+  zh: 39bc7fa0e5259be5

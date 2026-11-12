@@ -1,0 +1,502 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+ * AUKORA SPATIAL PRIMITIVES: the locked primitives every surface is built from.
+ *
+ * Framework-neutral: plain class names (`ak-`), every token defined here, no dependency on the harness theme. Any
+ * surface (the Spatial face, the owner origin `ui/owner`, a future native shell) copies THIS FILE VERBATIM and writes
+ * the markup below; the React components in this folder only emit it. Change a measurement here and nowhere else,
+ * and only after the owner has previewed it (SPATIAL-DESIGN-RULES 6 and 8).
+ *
+ * THE MEASUREMENTS (the source of truth; the design rules quote them):
+ *   palette     mint rgb(129,212,180)  blue rgb(150,180,255)  violet rgb(196,170,255)  gold rgb(224,183,106)
+ *               red rgb(242,85,90) (quarantine, failure, danger only)  muted rgb(139,144,153)
+ *               text rgb(232,234,237)  secondary rgb(184,188,196)  hairline rgba(255,255,255,0.10)
+ *               surface rgba(38,43,54,0.72)
+ *   tone ring   1px border = tone at 30% (rest); 70% + glow 0 0 14px tone at 14% (open or hover). Never thicker.
+ *   portal      radius 14px; ONE head geometry for every launcher (centre and menu) and disclosure (Spatial design spec 5):
+ *               head at least 68px, title-only or not, and no prop switches it to another height; it grows,
+ *               never clips, when the text is larger; stack gap 14px; head padding 4px 16px; gap 12px; body padding
+ *               4px 16px 18px. The head always carries the icon tile (a fallback glyph when none is given); an empty
+ *               trailing area is not drawn. Only a static, head-only PortalFold wraps its words (the free form).
+ *   icon tile   30 x 30px, radius 10px, inset ring 1px tone at 28%, glyph 16px, stroke 1.4px, round caps, tone colour.
+ *   type        title .84375rem (13.5px)/20px weight 520 tracking .02em; summary .71875rem (11.5px)/18px muted; both one
+ *               line, ellipsis; rem, so they follow the reader's text size.
+ *   expander    "+" closed, "−" open; 18px, tone colour, 14px wide column.
+ *   record row  radius 12px, head height 52px, padding 0 14px, gap 10px; title 12.5px/20px 500; summary 11px/16px;
+ *               body padding 0 14px 14px, gap 10px; rows stack with 6px gaps. Static rows: hairline border, no expander.
+ *   nesting     portal body inset 16px; record body inset 14px (+ the 1px ring each level) = 30px from the lane card edge.
+ *   label       mono 9.5px/14px weight 600 tracking .16em caps, muted; 14px above, 6px below (4px above when first).
+ *   field table 1px hairline, radius 10px, padding 10px 12px; columns max-content(min 84px) | 1fr, gap 4px 14px;
+ *               key 11px/18px muted; value mono 11px/18px, wraps anywhere, never truncated.
+ *   stat tiles  auto-fit min 150px, gap 8px; tile 1px hairline, radius 12px, padding 10px 12px;
+ *               name 10.5px muted; value 16px weight 480 in the tile's tone.
+ *   status pill 1px border tone at 45%, radius 999px, padding 1px 8px, mono 9.5px/16px weight 600 tracking .10em caps.
+ *   meter       84 x 6px, 1px border tone at 45%, fill tone at 55%, radius 999px.
+ *   locked act. pill: 1px border tone at 38% (70% + glow on hover), radius 999px, min-height 28px, padding 3px 12px,
+ *               12px text in tone, lock glyph and outward arrow 12px; note beside it 11px muted.
+ *   app header  TITLE FIRST: 1.5rem weight 480 tracking .08em caps, white; then the descriptive line 6px below it, mono
+ *               10px/14px weight 600 tracking .16em caps in the app's tone, on the title's left edge (DOM order = visible
+ *               order); badges (then the header's own tools) right, in a trailing area that is absent when empty, IN THE
+ *               HEADER'S FLOW: on the line's row when they fit, else wrapped onto a row of their own, 6px below (a phone's
+ *               lane: always their own row, on the title's left edge). Nothing in a header is positioned over another
+ *               part. 64px kept clear of the hot corner; 18px below, hairline under; the header grows with its text
+ *               (every centre and lane header band is a min-height floor, EXCEPT the open conversation's lane header,
+ *               spatial-layer.css `.x5-conversation-header`: fixed 84px while `.x5-genesis-frame` is inset by exactly 84px).
+ *   control     an ordinary action in place: 1px border tone at 38% (70% + glow when hovered, pressed or current; hairline
+ *               and muted when `aria-pressed="false"`), radius 14px, min-height 32px, padding 6px 12px, 13px/18px text in
+ *               tone; half opacity when disabled. Panel: hairline, radius 14px, the portal surface. Section header: one
+ *               flex row, 8px gap. All three are floors of zero specificity (`:where`): the app's own class refines them.
+ *   app canvas  max 760px wide, centred; 14px between blocks (the portal gap); lane padding clamp(18px, 3.2%, 40px).
+ *   grid        auto-fill columns min 280px, gap 14px: two columns at two-thirds of a 1440px window, one at one-third.
+ *   motion      opening glides in (opacity 0 -> 1, 6px rise, 220ms ease); borders ease 180ms; none if reduced motion.
+ */
+
+:root {
+  --ak-mint: rgb(129, 212, 180);
+  --ak-blue: rgb(150, 180, 255);
+  --ak-violet: rgb(196, 170, 255);
+  --ak-gold: rgb(224, 183, 106);
+  --ak-red: rgb(242, 85, 90);
+  --ak-muted: rgb(139, 144, 153);
+  --ak-text: rgb(232, 234, 237);
+  --ak-text-2: rgb(184, 188, 196);
+  --ak-hairline: rgba(255, 255, 255, 0.1);
+  --ak-surface: rgba(38, 43, 54, 0.72);
+  --ak-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --ak-portal-radius: 14px;
+  --ak-row-radius: 12px;
+  --ak-tile-radius: 10px;
+  --ak-row-h: 52px;
+  --ak-ease: 180ms ease;
+
+  /* THE PORTAL AND HEADER CONTRACT (Spatial design spec 5). One owner: these lines. Every launcher, menu
+     launcher, disclosure head and skinned stock launcher reads them; nothing declares a portal dimension of its own. */
+  --ak-portal-header-height: 68px;
+  --ak-portal-gap: 14px;
+  --ak-portal-padding-inline: 16px;
+  --ak-portal-content-gap: 12px;
+  --ak-icon-tile-size: 30px;
+  --ak-icon-glyph-size: 16px;
+  --ak-portal-title-size: 0.84375rem;
+  --ak-portal-summary-size: 0.71875rem;
+  --ak-heading-size: 1.5rem;
+  --ak-reading-size: 1rem;
+  --ak-header-inset: 20px;
+  --ak-corner-clearance: 64px;
+  /* The head height's earlier name: nothing in this repo reads it now; kept for verbatim copies of this file elsewhere. */
+  --ak-portal-h2: var(--ak-portal-header-height);
+}
+
+.ak-tone-mint { --ak-tone: var(--ak-mint); }
+.ak-tone-blue { --ak-tone: var(--ak-blue); }
+.ak-tone-violet { --ak-tone: var(--ak-violet); }
+.ak-tone-gold { --ak-tone: var(--ak-gold); }
+.ak-tone-red { --ak-tone: var(--ak-red); }
+.ak-tone-muted { --ak-tone: var(--ak-muted); }
+
+/* ── App surface, canvas and header ───────────────────────────────────────────────────────────────────────── */
+.ak-app {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(18px, 3.2%, 40px);
+  box-sizing: border-box;
+  overflow: auto;
+  container-name: ak-app;
+  container-type: inline-size;
+  color: var(--ak-text);
+  background: transparent;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ak-app[hidden] { display: none; }
+.ak-canvas { width: min(100%, 760px); margin: 0 auto; display: flex; flex-direction: column; gap: var(--ak-portal-gap); }
+
+/* THE HEADER'S PARTS SHARE ITS FLOW (spec 5: tools sit in a reserved area and wrap predictably, never over the title or
+   its line). The copy takes its natural width, up to the whole line; the trailing area follows it on the same row when
+   both fit and wraps onto a row of its own when they do not. No part is positioned out of the flow, so no two overlap. */
+.ak-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px 16px;
+  padding-bottom: 18px;
+  padding-inline-end: var(--ak-corner-clearance);
+  border-bottom: 1px solid var(--ak-hairline);
+}
+.ak-header__copy { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+.ak-header__title {
+  margin: 0;
+  color: var(--ak-text);
+  font-size: var(--ak-heading-size);
+  line-height: 1.1;
+  font-weight: 480;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.ak-header__eyebrow {
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: var(--ak-tone, var(--ak-violet));
+  font-family: var(--ak-mono);
+  font-size: 10px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The trailing area: one row of badges and tools, at the line's end (beside the descriptive line when it fits), wrapping
+   inside itself when even its own row is too narrow. */
+.ak-header__badges {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  align-self: flex-end;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+  margin-inline-start: auto;
+}
+
+/* ── Portal button and its opened state ───────────────────────────────────────────────────────────────────── */
+.ak-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  gap: var(--ak-portal-gap);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ak-grid[data-open='yes'] { grid-template-columns: minmax(0, 1fr); }
+.ak-grid > li { min-width: 0; animation: ak-glide 220ms ease both; }
+
+.ak-portal, .ak-row {
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 30%, transparent);
+  border-radius: var(--ak-portal-radius);
+  background: var(--ak-surface);
+  color: var(--ak-text);
+  transition: border-color var(--ak-ease), box-shadow var(--ak-ease);
+}
+.ak-portal:hover, .ak-portal[data-open='yes'], .ak-row:hover:not(.ak-row--static), .ak-row[data-open='yes'] {
+  border-color: color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 70%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 14%, transparent);
+}
+.ak-portal--menu { margin: 0 2px; }
+/* A static, head-only PortalFold (it cannot open, so nothing it says may be cut): the same head, its words wrap. */
+.ak-portal--free > .ak-portal__head { padding-block: 10px; }
+.ak-portal--free > .ak-portal__head .ak-portal__title, .ak-portal--free > .ak-portal__head .ak-portal__summary { white-space: normal; }
+
+.ak-portal__head, .ak-row__head {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+/* ONE head for every launcher and disclosure, centre and menu alike: a floor, not a fixed height, so larger text grows it. */
+.ak-portal__head {
+  gap: var(--ak-portal-content-gap);
+  min-height: var(--ak-portal-header-height);
+  padding-block: 4px;
+  padding-inline: var(--ak-portal-padding-inline);
+}
+/* PortalFold: a native <details> drawn as a portal card (no marker), and its static, head-only form (not clickable). */
+.ak-portal--fold > summary.ak-portal__head { list-style: none; }
+.ak-portal--fold > summary.ak-portal__head::-webkit-details-marker { display: none; }
+.ak-portal--static > .ak-portal__head { cursor: default; }
+.ak-portal__head:focus-visible, .ak-row__head:focus-visible, .ak-action:focus-visible {
+  outline: 2px solid var(--ak-tone, var(--ak-blue));
+  outline-offset: 3px;
+}
+
+.ak-icon-tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--ak-icon-tile-size);
+  height: var(--ak-icon-tile-size);
+  border-radius: var(--ak-tile-radius);
+  color: var(--ak-tone, var(--ak-blue));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 28%, transparent);
+}
+.ak-icon-tile svg { width: var(--ak-icon-glyph-size); height: var(--ak-icon-glyph-size); }
+
+.ak-portal__copy, .ak-row__copy { display: flex; flex: 1; flex-direction: column; min-width: 0; }
+.ak-portal__title, .ak-portal__summary, .ak-row__title, .ak-row__summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ak-portal__title { font-size: var(--ak-portal-title-size); line-height: 1.48; font-weight: 520; letter-spacing: 0.02em; }
+.ak-portal__summary { color: var(--ak-muted); font-size: var(--ak-portal-summary-size); line-height: 1.5652; }
+.ak-portal__end, .ak-row__end { display: flex; align-items: center; gap: 8px; flex: none; }
+.ak-expander { flex: none; width: 14px; color: var(--ak-tone, var(--ak-blue)); font-size: 18px; line-height: 1; text-align: center; }
+
+.ak-portal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 16px 18px;
+  animation: ak-glide 240ms ease both;
+}
+
+/* ── Record rows: the nested, smaller portal ──────────────────────────────────────────────────────────────── */
+.ak-rows { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ak-row { border-radius: var(--ak-row-radius); }
+.ak-row--static { border-color: var(--ak-hairline); }
+.ak-row__head { min-height: var(--ak-row-h); padding: 0 14px; gap: 10px; }
+.ak-row--static .ak-row__head { cursor: default; }
+.ak-row__title { font-size: 12.5px; line-height: 20px; font-weight: 500; }
+.ak-row__summary { color: var(--ak-muted); font-size: 11px; line-height: 16px; }
+.ak-row__body { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px; animation: ak-glide 200ms ease both; }
+
+.ak-label {
+  margin: 14px 0 6px;
+  color: var(--ak-muted);
+  font-family: var(--ak-mono);
+  font-size: 9.5px;
+  line-height: 14px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.ak-label:first-child { margin-top: 4px; }
+.ak-lead { margin: 0 0 4px; color: var(--ak-text-2); font-size: 12.5px; }
+.ak-quote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-mint)) 60%, transparent);
+  color: var(--ak-text-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.ak-mono { font-family: var(--ak-mono); font-size: 11px; color: var(--ak-text-2); }
+
+/* ── Field table ──────────────────────────────────────────────────────────────────────────────────────────── */
+.ak-fields__title {
+  margin: 0 0 -4px;
+  color: var(--ak-muted);
+  font-family: var(--ak-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.ak-fields {
+  display: grid;
+  /* The name column is as wide as its longest name, but never more than 38% of the row: a long name wraps there, and the
+     value keeps its room (a long scheduled-task title used to crush the value into three-letter lines). `fit-content()`
+     is the valid form of "max-content, capped": `max-content` cannot be used inside `min()`. */
+  grid-template-columns: fit-content(38%) minmax(0, 1fr);
+  gap: 4px 14px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: var(--ak-tile-radius);
+}
+.ak-fields dt { min-width: 84px; color: var(--ak-muted); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+.ak-fields dd { margin: 0; font-family: var(--ak-mono); font-size: 11px; line-height: 18px; overflow-wrap: anywhere; }
+
+/* ── Stat tiles, status pill, meter, level scale ──────────────────────────────────────────────────────────── */
+.ak-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
+.ak-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: var(--ak-row-radius);
+}
+.ak-stat__name { color: var(--ak-muted); font-size: 10.5px; }
+.ak-stat__value { overflow: hidden; color: var(--ak-tone, var(--ak-text)); font-size: 16px; font-weight: 480; letter-spacing: 0.02em; text-overflow: ellipsis; white-space: nowrap; }
+
+.ak-pill, .ak-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-muted)) 45%, transparent);
+  border-radius: 999px;
+  color: var(--ak-tone, var(--ak-muted));
+  font-family: var(--ak-mono);
+  font-size: 9.5px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ak-badge { padding: 4px 10px; gap: 6px; letter-spacing: 0.14em; }
+.ak-badge:not([class*='ak-tone-']) { color: var(--ak-text-2); border-color: var(--ak-hairline); }
+.ak-pill svg, .ak-badge svg { width: 11px; height: 11px; }
+
+.ak-meter {
+  position: relative;
+  flex: none;
+  width: 84px;
+  height: 6px;
+  border: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 45%, transparent);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.ak-meter > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 55%, transparent);
+}
+
+.ak-scale { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ak-scale + .ak-lead { margin-top: 6px; }
+.ak-scale__notch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px;
+  border: 1px solid var(--ak-hairline);
+  border-radius: var(--ak-row-radius);
+  color: var(--ak-muted);
+  font-size: 11px;
+  line-height: 15px;
+  text-align: center;
+}
+.ak-scale__notch b { font-family: var(--ak-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; }
+.ak-scale__notch[aria-current='true'] {
+  color: var(--ak-tone);
+  border-color: color-mix(in srgb, var(--ak-tone) 60%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ak-tone) 14%, transparent);
+}
+.ak-scale__dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1px currentColor; }
+.ak-scale__notch[aria-current='true'] .ak-scale__dot { background: currentColor; }
+
+/* ── Locked action: the only way to change anything, always on the owner origin ───────────────────────────── */
+.ak-actionrow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 2px; }
+.ak-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 3px 12px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 38%, transparent);
+  border-radius: 999px;
+  background: var(--ak-surface);
+  color: var(--ak-tone, var(--ak-blue));
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--ak-ease), box-shadow var(--ak-ease);
+}
+.ak-action:hover {
+  border-color: color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 70%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 14%, transparent);
+}
+.ak-action svg { width: 12px; height: 12px; }
+.ak-action__note { color: var(--ak-muted); font-size: 11px; }
+
+.ak-footnote {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  color: var(--ak-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.ak-footnote svg { width: 11px; height: 11px; flex: none; }
+
+/* ── Code diff (Lane B3: the staged card's "View code diff"): mono lines in a hairline frame that scrolls, removed lines
+   tinted red and added lines mint, old and new line numbers in a muted gutter. ─────────────────────────────────────── */
+.ak-diff {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--ak-hairline);
+  border-radius: var(--ak-tile-radius);
+  font-family: var(--ak-mono);
+  font-size: 11px;
+  line-height: 18px;
+}
+.ak-diff__lines { display: inline-block; min-width: 100%; padding: 4px 0; box-sizing: border-box; }
+.ak-diff__row { display: flex; white-space: pre; }
+.ak-diff__hunk { padding: 0 10px; color: var(--ak-muted); }
+.ak-diff__del { background: color-mix(in srgb, var(--ak-red) 14%, transparent); }
+.ak-diff__add { background: color-mix(in srgb, var(--ak-mint) 14%, transparent); }
+.ak-diff__no { flex: none; width: 5ch; padding-right: 8px; color: var(--ak-muted); text-align: right; user-select: none; }
+.ak-diff__sign { flex: none; width: 2ch; text-align: center; user-select: none; }
+.ak-diff__del .ak-diff__sign { color: var(--ak-red); }
+.ak-diff__add .ak-diff__sign { color: var(--ak-mint); }
+.ak-diff__text { padding-right: 12px; }
+
+/* ── Ordinary action, panel, section header (floors: `:where` keeps them at zero specificity) ───────────────────── */
+:where(.ak-control) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 38%, transparent);
+  border-radius: var(--ak-portal-radius);
+  background: var(--ak-surface);
+  color: var(--ak-tone, var(--ak-blue));
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--ak-ease), box-shadow var(--ak-ease);
+}
+.ak-control[aria-pressed='false'] { color: var(--ak-muted); border-color: var(--ak-hairline); }
+.ak-control:hover:not(:disabled), .ak-control[aria-pressed='true'], .ak-control[aria-current='page'] {
+  border-color: color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 70%, transparent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ak-tone, var(--ak-blue)) 14%, transparent);
+}
+.ak-control:focus-visible { outline: 2px solid var(--ak-tone, var(--ak-blue)); outline-offset: 3px; }
+.ak-control:disabled { opacity: 0.5; cursor: default; }
+:where(.ak-panel) {
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid var(--ak-hairline);
+  border-radius: var(--ak-portal-radius);
+  background: var(--ak-surface);
+  color: var(--ak-text);
+}
+:where(.ak-section-header) { display: flex; align-items: center; gap: 8px; min-width: 0; }
+
+@keyframes ak-glide {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ak-grid > li, .ak-portal__body, .ak-row__body { animation: none; }
+  .ak-portal, .ak-row, .ak-action, .ak-control { transition: none; }
+}
+
+/* A phone's lane: the trailing area always takes its own row under the line, on the title's left edge. */
+@container ak-app (max-width: 420px) {
+  .ak-header { flex-direction: column; align-items: stretch; }
+  .ak-header__badges { align-self: flex-start; justify-content: flex-start; margin-inline-start: 0; }
+  .ak-scale { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -1,0 +1,61 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write deploy/cloudflare/README.md
+/cloudflare-edge:
+  en: 891ad8f36533907e
+  zh: 317ef457c8ad1c75
+/cloudflare-edge/current-status:
+  en: d2501d527ddb1be3
+  zh: 37c77bfc6654efa2
+/cloudflare-edge/configure-and-verify:
+  en: 1d2e34f9900c408a
+  zh: 604a19ae3a2e44c9
+/cloudflare-edge/bootstrap-driver:
+  en: 602e5d5483ae8628
+  zh: 5bffb9b574a12915
+/cloudflare-edge/storage-limits:
+  en: 14c5caa3c7dcfb83
+  zh: b8dd869b43f5c85a
+/cloudflare-edge/deletion-continuity:
+  en: 7d4cfe4b8ca3839c
+  zh: 82bda591709006f1
+/cloudflare-edge/owner-token-browser-login:
+  en: 0baec2702806e7ab
+  zh: 853840ec532b5b71
+/cloudflare-edge/edge-aura-evidence:
+  en: c8f92c06cfb1b8bd
+  zh: dfbfe9a1e4d61dfc
+/cloudflare-edge/deterministic-facts:
+  en: 70c7b9bd410929c0
+  zh: 832242def8cfe981
+/cloudflare-edge/optional-edge-probe-helper:
+  en: 9b6e1c9127a1c3d9
+  zh: bdced23754303dc7
+/cloudflare-edge/authentication-and-bounded-reads:
+  en: 89a5d918c819aa0b
+  zh: 57bd63d998b9e672
+/cloudflare-edge/cloud-capability-inspection:
+  en: 27465bfee7e9c4ac
+  zh: d9b3bb5514e206b3
+/cloudflare-edge/bounded-edge-diagnostics:
+  en: e6ca9cade6f01e0d
+  zh: 09965b1121774be3
+/cloudflare-edge/repository-and-github-brokers:
+  en: 340125b22e5cd0ec
+  zh: f39599c229006d41
+/cloudflare-edge/source-bytes-and-state-comparison:
+  en: d17dd9b00d9710d6
+  zh: efd7fea7f2890597
+/cloudflare-edge/public-https-reads:
+  en: 6a8a77bc3a5d76e2
+  zh: 4795583a19a876f7
+/cloudflare-edge/provider-compatibility-and-unknown-outcomes:
+  en: 6aef061c7f9d2362
+  zh: c2f3238f0a152494
+/cloudflare-edge/deployment-archive-reporting-and-recovery-limits:
+  en: 26ff369cfcf7d239
+  zh: 2f3b9fa7114590cc
+/cloudflare-edge/voice-bridge-provider-turns-gates-and-signed-actions:
+  en: c46e3726118d6856
+  zh: c1510063f1b417a7

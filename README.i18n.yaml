@@ -1,0 +1,43 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write README.md
+/aukora:
+  en: b8f4afaf416f8143
+  zh: 13d55773af92dac2
+/aukora/what-is-built:
+  en: 4214889512d119b2
+  zh: ead5d0e413fc8f57
+/aukora/what-is-built/authority-aumlok-and-the-owner-s-passkey:
+  en: 53cdd4e6dcf1e7ad
+  zh: 96e081466b200d2c
+/aukora/what-is-built/the-organism-organs-balls-the-scion-and-pearl:
+  en: e28787a36b80eba6
+  zh: 1390bc321817ccbc
+/aukora/what-is-built/the-edge-one-worker-head-and-mirror:
+  en: e7df8559cccdacd4
+  zh: c3e42f3f32ae2e01
+/aukora/what-is-built/the-app-spatial:
+  en: 07e5deaa3daf74cf
+  zh: 94307b3ed7a7935d
+/aukora/check-it-yourself:
+  en: e1aa147210a39e8a
+  zh: 9f8f834de451422c
+/aukora/the-names-in-plain-words:
+  en: a09f325a54ff2039
+  zh: 6d1043b1a4d777f4
+/aukora/read-this-then-this:
+  en: 1899f05cdb5fb8c5
+  zh: 563b2a6d24735dc4
+/aukora/what-is-not-here-and-what-is-not-proven:
+  en: 23e441db0f2e5edf
+  zh: b4f02dceb11143f1
+/aukora/run-it:
+  en: 55c60dae8d6b6359
+  zh: bb4ed7fcd5141961
+/aukora/where-it-is-going:
+  en: d0d306ba8a62b004
+  zh: 1965a2bc23692ea1
+/aukora/licence-and-what-this-tree-does-not-hold:
+  en: 9995a8876a04a94f
+  zh: e770eb00f006fda7

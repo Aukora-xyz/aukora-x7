@@ -1,0 +1,109 @@
+/* The predecessor's Media studio (an earlier repository), inside the Spatial app frame. The predecessor's
+   `<dialog>` and backdrop rules are gone: settings open inline in the Stage. */
+
+.studio {
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0 16px;
+  color: var(--aukora-text);
+  container-type: inline-size;
+  container-name: media-studio;
+}
+
+.workspace { display: grid; grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.3fr); gap: 18px; align-items: stretch; margin-top: 14px; }
+.composer, .preview, .gallery, .settingsPanel { background: color-mix(in srgb, var(--aukora-surface) 40%, transparent); }
+.composer { display: flex; flex-direction: column; gap: 22px; padding: 20px; }
+.modeSwitch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.modeSwitch button { min-height: 40px; background: transparent; }
+.editor { display: flex; flex-direction: column; min-width: 0; }
+.promptLabel, .field, .audio { color: var(--aukora-text-secondary); font-size: 12px; line-height: 18px; }
+.promptLabel { margin-bottom: 10px; }
+.prompt {
+  box-sizing: border-box; display: block; width: 100%; min-height: 138px; max-height: 260px; padding: 14px;
+  border: 1px solid var(--aukora-border); border-radius: 10px; background: transparent; color: var(--aukora-text);
+  font: inherit; font-size: 14px; line-height: 22px; resize: vertical;
+}
+.prompt::placeholder { color: var(--aukora-text-muted); }
+.controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; margin-top: 20px; }
+.field { display: flex; min-width: 0; flex-direction: column; gap: 7px; }
+.model { grid-column: 1 / -1; }
+.field select, .field input {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; padding: 8px 10px; border: 1px solid var(--aukora-border);
+  border-radius: 9px; background: transparent; color: var(--aukora-text); font: inherit; font-size: 13px; line-height: 20px;
+}
+.field select { cursor: pointer; color-scheme: dark; }
+.field option { background: var(--aukora-surface); color: var(--aukora-text); }
+.field input:disabled { opacity: 0.45; cursor: not-allowed; }
+.audio { display: flex; align-items: center; justify-content: space-between; align-self: end; min-height: 40px; }
+.audio input {
+  appearance: none; box-sizing: border-box; width: 34px; height: 20px; margin: 0; border: 1px solid var(--aukora-border);
+  border-radius: 20px; background: transparent; cursor: pointer;
+}
+.audio input::before {
+  content: ''; display: block; width: 12px; height: 12px; margin: 3px; border-radius: 50%; background: var(--aukora-text-muted);
+  transition: transform 160ms ease;
+}
+.audio input:checked { border-color: color-mix(in srgb, var(--aukora-green) 50%, transparent); background: color-mix(in srgb, var(--aukora-green) 12%, transparent); }
+.audio input:checked::before { transform: translateX(14px); background: var(--aukora-green); }
+.prompt:focus-visible, .field select:focus-visible, .audio input:focus-visible { outline: 2px solid var(--aukora-blue); outline-offset: 3px; }
+.generateArea { margin-top: auto; }
+.generate { width: 100%; min-height: 44px; background: transparent; }
+.reason {
+  margin: 10px 0 0; color: var(--aukora-gold); font-family: var(--ak-mono, monospace); font-size: 10px; line-height: 15px;
+  letter-spacing: 0.08em; text-align: center; text-transform: uppercase; text-wrap: balance;
+}
+.preview { display: flex; min-height: 390px; flex-direction: column; padding: 20px; }
+.previewHeader { justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.previewHeader h3, .galleryHeader h3, .settingsHeader h3 { margin: 0; font-size: 14px; line-height: 20px; font-weight: 570; }
+.previewHeader > span { color: var(--aukora-text-muted); font-size: 11px; }
+.dot { margin: 0 7px; color: var(--aukora-purple); }
+.previewCanvas { flex: 1; display: flex; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 28px 4px; }
+.emptyFrame {
+  position: relative; box-sizing: border-box; max-width: 100%; flex: none; display: grid; place-items: center;
+  border: 1px solid color-mix(in srgb, var(--aukora-blue) 22%, transparent); border-radius: 12px;
+  background:
+    radial-gradient(ellipse at 15% 5%, color-mix(in srgb, var(--aukora-green) 7%, transparent), transparent 60%),
+    radial-gradient(ellipse at 90% 95%, color-mix(in srgb, var(--aukora-purple) 9%, transparent), transparent 60%);
+}
+.emptyFrame::after { content: ''; position: absolute; inset: 12px; border: 1px dashed color-mix(in srgb, var(--aukora-blue) 12%, transparent); border-radius: 5px; }
+.emptyIcon {
+  display: grid; place-items: center; width: 62px; height: 62px; border: 1px solid color-mix(in srgb, var(--aukora-blue) 25%, transparent);
+  border-radius: 18px; color: var(--aukora-blue);
+}
+.emptyIcon svg { width: 28px; height: 28px; }
+.emptyCaption { color: var(--aukora-text-muted); font-size: 12px; line-height: 18px; }
+.gallery { margin: 18px 0 16px; padding: 18px 20px; }
+.galleryHeader { gap: 10px; }
+.count { margin-left: auto; color: var(--aukora-text-muted); font-size: 12px; }
+.galleryGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-top: 12px; }
+.galleryEmpty {
+  grid-column: 1 / -1; display: flex; align-items: center; justify-content: center; gap: 12px; padding: 14px 8px 0;
+  color: var(--aukora-text-muted); font-size: 12px;
+}
+.galleryGlyph {
+  display: grid; place-items: center; width: 36px; height: 36px; border: 1px dashed color-mix(in srgb, var(--aukora-purple) 25%, transparent);
+  border-radius: 10px; color: var(--aukora-purple);
+}
+.purple { display: inline-flex; color: var(--aukora-purple); }
+.gold { display: inline-flex; color: var(--aukora-gold); }
+.settingsPanel { margin-bottom: 14px; padding: 20px; }
+.settingsHeader { gap: 10px; }
+.settingsHeader button { margin-left: auto; padding: 6px; min-width: 32px; }
+.settingsFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.settingsReason {
+  margin: 14px 0 16px; color: var(--aukora-gold); font-family: var(--ak-mono, monospace); font-size: 10px; line-height: 15px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.settingsActions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+@container media-studio (max-width: 700px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+  .preview { min-height: 350px; }
+  .settingsFields { grid-template-columns: minmax(0, 1fr); }
+}
+
+@container media-studio (max-width: 380px) {
+  .composer, .preview { padding: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) { .audio input::before { transition: none; } }
