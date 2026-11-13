@@ -12,7 +12,7 @@ Aukora 面向这样的人：想要一个自己拥有、而不是租用的 AI，�
 - **工程师或安全研究者**：想看真实的机制、哪些尚未证明，以及哪里需要帮助。
 - **读取本仓库的 AI**：应当从 [AI-START-HERE.zh.md](AI-START-HERE.zh.md) 开始，这样它给出的建议和贡献才会顺着项目的规则走，而不是与之相反。
 
-本页使用的标签：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [RUN-RECORD.zh.md](RUN-RECORD.zh.md)）、INDEPENDENTLY VERIFIED（目前没有任何东西带这个标签）、UNVERIFIED（有人声称或写出来了，但这里没有测试守住它，或没有运行记录显示它）、DIRECTION（尚未构建）。
+本页使用的标签：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [RUN-RECORD.zh.md](RUN-RECORD.zh.md)，一次属于较早的一棵树的运行）、INDEPENDENTLY VERIFIED（目前没有任何东西带这个标签）、UNVERIFIED（有人声称或写出来了，但这里没有测试守住它，或没有运行记录显示它）、DIRECTION（尚未构建）。
 
 ## 目前的治理方式
 
@@ -55,7 +55,7 @@ Aukora 面向这样的人：想要一个自己拥有、而不是租用的 AI，�
 
 ### 文档与翻译
 
-- 较早的页面使用了上面五个之外的成熟度用词（[START-HERE.zh.md](START-HERE.zh.md)、[ARCHITECTURE-ACTUAL.zh.md](ARCHITECTURE-ACTUAL.zh.md)、[RUN-RECORD.zh.md](RUN-RECORD.zh.md)、[GLOSSARY.zh.md](GLOSSARY.zh.md)）。把它们统一到同一套用词是有用的工作。
+- 较早的页面使用了上面五个之外的成熟度用词（[START-HERE.zh.md](START-HERE.zh.md)、[ARCHITECTURE-ACTUAL.zh.md](ARCHITECTURE-ACTUAL.zh.md)、[RUN-RECORD.zh.md](RUN-RECORD.zh.md)（属于较早的一棵树）、[GLOSSARY.zh.md](GLOSSARY.zh.md)）。把它们统一到同一套用词是有用的工作。
 - `.github/` 里的 issue 和 pull request 模板是继承来的，而且是中文的。
 - `docs/` 下大多数页面都有中文对页，由 `scripts/verify-translation-pairing.ts` 检查。新页面也有中文对页；对页与英文页不一致时，以英文页为准。对照英文页阅读中文页并报告不一致之处，是有用的工作。
 

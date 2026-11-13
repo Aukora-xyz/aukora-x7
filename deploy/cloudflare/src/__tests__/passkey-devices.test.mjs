@@ -19,6 +19,7 @@ import { createOwnerEnrollmentVerifier, OWNER_ENROLLMENT_DOMAIN, OWNER_ENROLLMEN
 import { SIGNED_ACTION_SCHEMA } from '../signed-action.mjs'
 import { ml_dsa65 } from '@noble/post-quantum/ml-dsa.js'
 import { JSDOM } from 'jsdom'
+import { waitFor } from './wait-for.mjs'
 
 const ORIGIN = 'https://passkey-devices.example.invalid'
 const RP_ID = new URL(ORIGIN).hostname
@@ -1161,9 +1162,12 @@ test('the add page: a passkey that joins shows its phrase and waits; a lost answ
     const document = dom.window.document
     assert.equal(document.getElementById('device-code').value, code, 'the code comes from the fragment')
     assert.equal(dom.window.location.hash, '', 'and leaves the address bar')
-    document.getElementById('device-add-submit').click()
+    const button = document.getElementById('device-add-submit')
+    button.click()
     const status = document.getElementById('device-add-status')
-    for (let wait = 0; wait < 50 && !/Waiting|lost|did not accept/.test(status.textContent); wait++) await new Promise(resolve => { setTimeout(resolve, 5) })
+    // The press disables the button at once and the page's handler enables it again as its last step, after the final
+    // status (a refusal in words included, which no fixed list of phrases covered): that is what is waited for.
+    await waitFor(() => !button.disabled, 'the add page to finish the press (its button enabled again)')
     return { document, status: status.textContent }
   }
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -1605,7 +1609,8 @@ async function addPageHarness(t, fx) {
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
   const options = timeout => ({ publicKey: { challenge: 'Y2hhbGxlbmdl', rp: { id: RP_ID, name: 'AUKORA' }, user: { id: 'dXNlcg', name: 'AUMLOK identity', displayName: 'x' },
     pubKeyCredParams: [{ type: 'public-key', alg: -7 }], timeout, attestation: 'none', authenticatorSelection: {}, excludeCredentials: [] } })
-  const open = async (create, answer, clock = { now: 1000, delay: 0 }) => {
+  /** `ended: false` returns right after the press, for a prompt the test leaves open (its page never finishes the press). */
+  const open = async (create, answer, clock = { now: 1000, delay: 0 }, { ended = true } = {}) => {
     const posted = []
     const dom = new JSDOM(html, { url: `${ORIGIN}${PASSKEY_DEVICE_ROUTES.add}#${code}`, runScripts: 'dangerously', beforeParse(window) {
       window.PublicKeyCredential = function PublicKeyCredential() {}
@@ -1614,9 +1619,11 @@ async function addPageHarness(t, fx) {
       window.fetch = async (path, init) => { posted.push(path); clock.now += clock.delay; return answer(path, JSON.parse(init.body)) }
     } })
     t.after(() => dom.window.close())
-    dom.window.document.getElementById('device-add-submit').click()
+    const button = dom.window.document.getElementById('device-add-submit')
+    button.click()
     const status = dom.window.document.getElementById('device-add-status')
-    for (let wait = 0; wait < 200 && !/ran out|Waiting|lost|did not accept|No passkey/.test(status.textContent); wait++) await new Promise(resolve => { setTimeout(resolve, 5) })
+    // As in the add page test above: the handler enables the button again as its last step, after the final status.
+    if (ended) await waitFor(() => !button.disabled, 'the add page to finish the press (its button enabled again)')
     return { status: status.textContent, posted }
   }
   return { open, json, options }
@@ -1957,7 +1964,7 @@ test('the admission record is plain data (per code hash, admission times as numb
       headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' } }), {}, url, ORIGIN, deps)
   }
   const inFlight = Array.from({ length: perWindow }, ask)
-  for (let turn = 0; turn < 500 && forwarded.length < perWindow; turn++) await new Promise(resolve => { setTimeout(resolve, 2) })
+  await waitFor(() => forwarded.length >= perWindow, `${String(perWindow)} challenge asks forwarded to HEAD`)
   assert.equal(forwarded.length, perWindow)
   // (Raced against a timer, so an edge without the bound fails here instead of waiting on the held HEAD forever.)
   const excess = await Promise.race([ask(), new Promise(resolve => { setTimeout(() => resolve(null), 1000) })])
@@ -1988,8 +1995,8 @@ test('SHOULD: the add page takes the request\'s own time off the prompt; with no
   const hanging = (init, window) => { seen = init; return new Promise((_resolve, reject) => {
     init.signal.addEventListener('abort', () => reject(new window.DOMException('The operation was aborted.', 'AbortError')))
   }) }
-  const window40 = open(hanging, () => json(options(60000)), { now: 5000, delay: 40 })
-  for (let wait = 0; wait < 200 && seen === null; wait++) await new Promise(resolve => { setTimeout(resolve, 5) })
+  const window40 = open(hanging, () => json(options(60000)), { now: 5000, delay: 40 }, { ended: false })
+  await waitFor(() => seen !== null, 'the passkey prompt to open')
   assert.equal(seen.publicKey.timeout, 59960)
   assert.equal(seen.signal.aborted, false)
   await window40

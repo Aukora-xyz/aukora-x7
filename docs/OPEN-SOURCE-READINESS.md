@@ -6,7 +6,7 @@ This repository is published under AGPL-3.0-or-later, but it is **not yet a stac
 
 None of this is solved. A gap leaves this page only when the fix is in the tree.
 
-Labels: IMPLEMENTED (code and tests in this tree), RECORDED RUN (shown in [RUN-RECORD.md](RUN-RECORD.md)), INDEPENDENTLY VERIFIED (nothing has this label yet), UNVERIFIED (claimed or written, but no test here holds it or no run shows it), DIRECTION (not built).
+Labels: IMPLEMENTED (code and tests in this tree), RECORDED RUN (shown in [RUN-RECORD.md](RUN-RECORD.md), a run of an earlier tree), INDEPENDENTLY VERIFIED (nothing has this label yet), UNVERIFIED (claimed or written, but no test here holds it or no run shows it), DIRECTION (not built).
 
 Two words used below: an organ is one replaceable module of Auma, the AI in this repository, and a ball is the manifest that names every organ by hash.
 
@@ -52,7 +52,7 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 ### 6. No reproducible build is recorded
 
-- One build ran on one machine (RECORDED RUN). No second machine has compared the hashes of `apps/web/dist` or the dry-run ball id `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`.
+- One build ran on one machine (RECORDED RUN (of an earlier tree)). No second machine has compared the hashes of `apps/web/dist` or the dry-run ball id `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`.
 - The build needs `.git` or `DSH_CLIENT_COMMIT_HASH`, and by default it posts to a host on port 4610 (`server/build-preview.mjs`, lines 43 to 55).
 - By: any second builder; the maintainers for the build script.
 
@@ -92,10 +92,10 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 | Can do | How | Label |
 | --- | --- | --- |
-| Run 22 test files with no install; expected last line `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs` (Node 24.9 or newer) | UNVERIFIED: seen on one machine, not in the recorded run |
+| Run 22 test files with no install; expected last line `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs` (Node 24.9 or newer) | UNVERIFIED: seen on one machine, not in the recorded run (of an earlier tree) |
 | Check every cell file against its pin, without running it | The SHA-256 loop over `apps/web/public/cells/*.wasm` and `wasm-cells.ts` (see [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md)) | IMPLEMENTED |
 | Rebuild `aura-focus.wasm` from `aura-focus.wat`, using the source-less `skillsmith` cell as the compiler | `server/aura-focus-cell.build.mjs`; test `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
-| Install, build, boot the local host, run the four suites, run the dry run | [CONTRIBUTING.md](../CONTRIBUTING.md), section 3 | RECORDED RUN on one machine |
+| Install, build, boot the local host, run the four suites, run the dry run | [CONTRIBUTING.md](../CONTRIBUTING.md), section 3 | RECORDED RUN (of an earlier tree) on one machine |
 
 ## What a reader cannot reproduce today
 

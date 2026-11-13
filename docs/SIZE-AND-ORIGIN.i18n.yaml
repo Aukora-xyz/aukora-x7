@@ -3,20 +3,20 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/SIZE-AND-ORIGIN.md
 /size-and-origin:
-  en: 21225bc68095cc20
-  zh: 6e16cc28712b69d8
+  en: f90816dcb94a615f
+  zh: 4e2c8f965ab2c6e6
 /size-and-origin/the-short-answer:
-  en: 43c0d63b278a5827
-  zh: 46d0135dbb331e4e
+  en: 1ac3fc3e52f6fa0c
+  zh: 9a05aaa3a4b5f018
 /size-and-origin/where-this-project-s-own-layer-lives:
-  en: d8a64a2f7eec853c
-  zh: 95aa9d5cf2258a9c
+  en: 12d9d2890ae9d01a
+  zh: 61e433157f35468e
 /size-and-origin/binary-files-without-source:
   en: e62b7b4faabeff3f
   zh: 1fa7c668c0c9a395
 /size-and-origin/by-folder:
-  en: 88c4b3e3950b99ba
-  zh: 74f1e923c0d9ae4b
+  en: 698cb0ae6d71d589
+  zh: 77aaba3d9a6b9481
 /size-and-origin/how-it-was-counted:
   en: 612eb905ce40cbfb
   zh: c24df25a6ab2edcb

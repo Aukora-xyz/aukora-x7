@@ -31,6 +31,8 @@ import { bootstrapResetPaths, validateMirrorEntries, MIRROR_LIMITS, mirrorSnapsh
 // ANYBROWSER hook: the vault (hash-named pieces and checked rescue indexes in the private bucket) and the /rescue page.
 import { handleVaultRequest } from './vault.mjs' // ANYBROWSER hook
 import { rescuePageResponse, rescueBusyResponse, wantsRescueDocument } from './rescue-page.mjs' // ANYBROWSER hook
+import { createThreadMount, isThreadMountRoute, threadFetchRefused } from './thread-mount.mjs' // ANYBROWSER hook: threads (thread-log.mjs) and the lease forward
+import { createCrewRelay } from './crew-relay.mjs'
 
 const MAX_BODY = 16 * 1024 * 1024
 const MESSAGE_METHODS = new Map([
@@ -40,6 +42,7 @@ const MESSAGE_METHODS = new Map([
   ['/aukora-messages/add-contact', 'POST'],
 ])
 const HEX_64 = /^[0-9a-f]{64}$/
+const crewRelay = createCrewRelay()
 
 async function edgeOwnerKey(env) {
   const publicKeyHex = env.OWNER_PUBLIC_KEY_HEX
@@ -1649,7 +1652,7 @@ async function passkeySessionAccess(request, env, keys, now) {
   // Only the seed this request used is forgotten: a late answer never drops one a newer read has published.
   if (body?.code === 'BOOTSTRAP_REQUIRED' && keys.seedId === key.seedId) keys.seedId = null
   if (!answer.ok || body?.ok !== true || !Number.isSafeInteger(body.expiresAt) || body.expiresAt <= now()) return null
-  return { type: 'owner', email: env.OWNER_EMAIL, expires: Math.floor(body.expiresAt / 1000) }
+  return { type: 'owner', email: env.OWNER_EMAIL, expires: Math.floor(body.expiresAt / 1000), session: parts.mac } // HOLDER hook: the verified session's MAC (thread-mount.mjs derives its public id)
 }
 
 /** A signed-in request whose key could not be read: retry in a second. Never the sign-in page, never 401, cookie kept. */
@@ -1689,6 +1692,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
   const nostrReadDoor = createNostrReadDoor({ now, shareWaitMs, shareMaxWaits, shield: createIsolateShield(ISOLATE_SHIELD.guest), subjectOf: request => 'nostr-read:' + guestNetwork(request.headers.get('cf-connecting-ip')) })
   // DEVICES hook: an owner JWT whose check reached no verdict answers OWNER_JWT_UNVERIFIED (not null).
   verifyAccess ??= createAccessVerifier({ now, unverified: OWNER_JWT_UNVERIFIED })
+  const threadMount = createThreadMount() // ANYBROWSER hook: one per isolate; it holds the one-import-at-a-time slot
   return {
     async fetch(incoming, env) {
       return diagnostics.observe(incoming, async () => {
@@ -1711,6 +1715,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         if (url.pathname.startsWith('/_vault/') && (['GET', 'HEAD'].includes(incoming.method) // ANYBROWSER hook
           ? incoming.headers.get('sec-fetch-site') !== 'same-origin' && !(incoming.headers.get('sec-fetch-site') === 'none' && incoming.headers.get('sec-fetch-mode') === 'navigate') // ANYBROWSER hook
           : origin !== url.origin || incoming.headers.get('sec-fetch-site') !== 'same-origin')) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 401) // ANYBROWSER hook
+        if (threadFetchRefused(incoming, url, origin)) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 401) // ANYBROWSER hook: the same rule for /_thread/ and /_mirror/lease
         if (url.pathname === '/_auth/owner') {
           if (url.search || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           if (incoming.method !== 'POST') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
@@ -1800,6 +1805,9 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         // (503, retry in a second, cookie kept), exactly as a busy key read is.
         const ambient = await verifyAccess(incoming, env)
         let access = (ambient === OWNER_JWT_UNVERIFIED ? null : ambient) ?? await passkeySessionAccess(incoming, env, signinKeys, now)
+        // HOLDER hook (R1d): an owner-pass browser that also holds a passkey session: on the lease route only, a lookup
+        // HOLDER hook: thread-mount.mjs calls ONLY for a body carrying a proof or a checkpoint (no HEAD read otherwise).
+        if (access && access === ambient && url.pathname === '/_mirror/lease' && passkeyCookie(incoming) !== null) access = { ...access, sessionLookup: () => passkeySessionAccess(incoming, env, signinKeys, now) } // HOLDER hook
         if (access === null && ambient === OWNER_JWT_UNVERIFIED) access = OWNER_JWT_PENDING
         // A live-looking session whose key could not be read is not "signed out": 503, retry in a second, cookie kept (API
         // routes and navigations alike). The guest door alone is still served as to anyone without a session; and on an
@@ -1891,6 +1899,14 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (origin !== url.origin || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
           if (access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
         }
+        // Auma's crew relay (crew-relay.mjs): a read spends a call on the owner's Linear key, so it gets the same
+        // same-origin rule as the other owner reads; a post already needs a matching Origin (above) and comes from her page.
+        if (url.pathname === '/_host/crew-relay') {
+          // Judged here, before any body is buffered or HEAD is asked: another method or a fragment costs nothing.
+          if (url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
+          if (!['GET', 'POST'].includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
+          if ((origin !== url.origin && !(incoming.method === 'GET' && origin === null)) || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
+        }
         if (nightGrantRoute) {
           if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           const methods = url.pathname === '/_head/night-grant' ? ['GET', 'POST'] : ['POST']
@@ -1946,10 +1962,11 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         // ANYBROWSER hook: the vault reads its own bodies (hard limit while reading, 30 s idle, 120 s in all). Its fetch-site
         // ANYBROWSER hook: rules are judged BEFORE the session (above, where they cost no HEAD, bootstrap or key read).
         const vaultRoute = url.pathname.startsWith('/_vault/') // ANYBROWSER hook
+        const threadRoute = isThreadMountRoute(url) // ANYBROWSER hook: /_thread/ and /_mirror/lease read their own bodies (never buffered here)
         // Bootstrap, mirror, messages and wake own their bounded readers and
         // deadlines before storage; do not buffer those streams twice.
         if (url.pathname === '/_bootstrap') return await bootstrapOperation(incoming, env)
-        const request = vaultRoute /* ANYBROWSER hook */ || estateRoute || messagesRoute || wakeRoute || archiveRoute || cloudBodyRoute || voiceControlRoute || voiceDoorRoute || headStageOrPromoteRoute || nightGrantRoute || brokerRoute || aumlokRoute || url.pathname === '/_mirror/delta' ? incoming : await boundedRequest(incoming, ownerRoute ? OWNER_GRANT_MAX_BODY_BYTES : MAX_BODY, ownerRoute)
+        const request = vaultRoute /* ANYBROWSER hook */ || threadRoute /* ANYBROWSER hook */ || estateRoute || messagesRoute || wakeRoute || archiveRoute || cloudBodyRoute || voiceControlRoute || voiceDoorRoute || headStageOrPromoteRoute || nightGrantRoute || brokerRoute || aumlokRoute || url.pathname === '/_mirror/delta' ? incoming : await boundedRequest(incoming, ownerRoute ? OWNER_GRANT_MAX_BODY_BYTES : url.pathname === '/_host/crew-relay' ? 16 * 1024 : MAX_BODY, ownerRoute)
         const bootstrap = await bootstrapStatus(env, request.signal)
         const publicHttpsFetch = createPlatformPublicHttpsTransport({ publicHost: env.PUBLIC_HOST })
         const coldR2Backup = Boolean(env.ARCHIVE_BUCKET)
@@ -2022,6 +2039,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         if (!bootstrap.ready) return json({ ok: false, code: 'BOOTSTRAP_REQUIRED', ...(estateRoute ? {} : { bootstrap }) }, 503)
         // ANYBROWSER hook: seeded worlds only (above). `world` is the name this Worker gives the objects, never the seedId.
         if (vaultRoute) return await handleVaultRequest({ request, url, env, world: 'node-main-v1', ready: bootstrap.ready, budget: vaultBudget(env, bootstrap.head.seedId, request.signal), now }) // ANYBROWSER hook
+        if (threadRoute) return await threadMount.handle({ request, url, env, ready: bootstrap.ready, seedId: bootstrap.head.seedId, access, authorize: body => edgeClass3(request, env, body), now }) // ANYBROWSER hook
         if (wantsRescueDocument(request, url)) return await rescuePageResponse() // ANYBROWSER hook: the /rescue page, signed in
         if (estateRoute) {
           if (request.method === 'GET') return await estateProjection(request, env, bootstrap, access)
@@ -2081,6 +2099,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (incoming.method === 'GET' && ((origin !== url.origin && !(incoming.method === 'GET' && origin === null)) || incoming.headers.get('sec-fetch-site') !== 'same-origin')) return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
           return await providerDoor(request, env, url, bootstrap.head.seedId)
         }
+        if (url.pathname === '/_host/crew-relay') return await crewRelay(request, env, access)
         if (url.pathname.startsWith('/_host/') || url.pathname.startsWith('/_head/') || url.pathname.startsWith('/_mirror/') || url.pathname.startsWith('/api/') || url.pathname.startsWith('/download/') || url.pathname === '/recovery' || url.pathname.startsWith('/recovery/')) return unavailable(url.pathname)
         if (!['GET', 'HEAD'].includes(request.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
         if (url.pathname.endsWith('.map') || url.pathname.includes('..') || url.pathname.includes('\\')) return json({ ok: false, code: 'ASSET_UNAVAILABLE' }, 404)

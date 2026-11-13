@@ -83,6 +83,37 @@ export function pairedModuleDrift() {
   })
 }
 
+/** Reconstruct a unified patch strictly: every context/deletion byte must match its Git base. */
+export function applyPinnedPatch(base, patch) {
+  const input = base.split('\n'), output = []
+  const lines = patch.split('\n')
+  let cursor = 0, hunks = 0
+  for (let i = 0; i < lines.length; i++) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(lines[i])
+    if (!header) continue
+    hunks++
+    const start = Number(header[1]) - 1
+    if (start < cursor || start > input.length) throw new Error('ORGAN_FIXTURE_PATCH_OFFSET')
+    output.push(...input.slice(cursor, start)); cursor = start
+    if (output.length !== Number(header[3]) - 1) throw new Error('ORGAN_FIXTURE_PATCH_OUTPUT_OFFSET')
+    let removed = 0, added = 0
+    while (++i < lines.length && !lines[i].startsWith('@@ ')) {
+      const line = lines[i], kind = line[0], value = line.slice(1)
+      if (line === '' && i === lines.length - 1) break
+      if (![' ', '-', '+'].includes(kind)) throw new Error('ORGAN_FIXTURE_PATCH_FORMAT')
+      if (kind !== '+') {
+        if (input[cursor++] !== value) throw new Error('ORGAN_FIXTURE_PATCH_CONTEXT')
+        removed++
+      }
+      if (kind !== '-') { output.push(value); added++ }
+    }
+    if (removed !== Number(header[2] ?? 1) || added !== Number(header[4] ?? 1)) throw new Error('ORGAN_FIXTURE_PATCH_COUNTS')
+    i--
+  }
+  if (!hunks) throw new Error('ORGAN_FIXTURE_PATCH_EMPTY')
+  return output.concat(input.slice(cursor)).join('\n')
+}
+
 /**
  * Tie fixtures to git history. Returns { checked: false } in a shallow clone (unless
  * AUKORA_REQUIRE_FIXTURE_PROVENANCE=1, which makes that a failure).
@@ -97,6 +128,21 @@ export function verifyPinnedProvenance(cwd = new URL('../../../', import.meta.ur
   }
   const mismatches = []
   for (const [name, entry] of Object.entries(manifest.organs)) {
+    if (entry.patchProvenance) {
+      const p = entry.patchProvenance
+      if (name !== 'seed-pearl' || !HEX40.test(p.baseCommit ?? '') || !HEX40.test(p.patchCommit ?? '')
+        || p.patchCommit !== entry.lastChangedAt || p.patchPath !== 'docs/auma/pearl/pearl-truthful-verdict.patch'
+        || !HEX64.test(p.baseSha256 ?? '') || !HEX64.test(p.patchSha256 ?? '')) throw new Error('ORGAN_FIXTURE_PATCH_PROVENANCE_INVALID')
+      if (!has(p.baseCommit) || !has(p.patchCommit)) {
+        if (process.env.AUKORA_REQUIRE_FIXTURE_PROVENANCE === '1') throw new Error('ORGAN_FIXTURE_HISTORY_UNAVAILABLE')
+        return { checked: false }
+      }
+      const show = rev => execFileSync('git', ['show', rev], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+      const base = show(`${p.baseCommit}:${entry.path}`), patch = show(`${p.patchCommit}:${p.patchPath}`)
+      if (sha256Hex(base) !== p.baseSha256 || sha256Hex(patch) !== p.patchSha256
+        || sha256Hex(applyPinnedPatch(base, patch)) !== entry.sha256) mismatches.push(`${name}@patch`)
+      continue
+    }
     for (const rev of [manifest.sourceCommit, entry.lastChangedAt]) {
       if (git('rev-parse', `${rev}:${entry.path}`) !== entry.gitBlob) mismatches.push(`${name}@${rev.slice(0, 8)}`)
     }

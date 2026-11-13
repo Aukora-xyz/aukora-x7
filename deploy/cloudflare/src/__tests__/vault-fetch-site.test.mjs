@@ -124,7 +124,7 @@ test('SHOULD 1: with a LIVE owner session, a refused vault request costs no HEAD
   const fx = await vaultEdge(t)
   // Warm: her own page reads through this isolate first (the session, bootstrap and key reads happen here).
   const mine = await fx.call(fx.warm, '/_vault/rescue', { cookie: fx.cookie, headers: { origin: null } })
-  assert.deepEqual([mine.status, mine.body], [200, { ok: true, rescues: [] }])
+  assert.deepEqual([mine.status, mine.body], [200, { ok: true, rescues: [], limit: 32 }])
   assert.ok(fx.calls.length > 0 && fx.bucket.calls.length > 0, 'the allowed read did reach HEAD and the bucket')
   // The answer a signed-out caller gets on an ordinary path, and on a vault path, today.
   const signedOutElsewhere = await fx.call(fx.warm, '/_host/estate', { headers: { origin: null } })
@@ -148,7 +148,7 @@ test('SHOULD 1: with a LIVE owner session, a refused vault request costs no HEAD
   // Her own page and the owner's own navigation are unchanged, in a cold isolate too.
   const cold = fx.isolate()
   const typed = await fx.call(cold, '/_vault/rescue', { cookie: fx.cookie, headers: { origin: null, 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } })
-  assert.deepEqual([typed.status, typed.body], [200, { ok: true, rescues: [] }])
+  assert.deepEqual([typed.status, typed.body], [200, { ok: true, rescues: [], limit: 32 }])
   assert.equal((await fx.call(cold, '/_vault/rescue', { cookie: fx.cookie, headers: { origin: null } })).status, 200)
   assert.equal((await fx.call(cold, '/_vault/blob/' + hash, { method: 'HEAD', cookie: fx.cookie, headers: { origin: null } })).status, 404)
 })
@@ -202,7 +202,7 @@ test('job 4 rule 3: an unverifiable ambient owner JWT: /rescue navigates to the 
         // The passkey session sent beside the stuck cookie decides: the vault reads and /rescue is the rescue page.
         const both = `${stuck}; ${fx.cookie}`
         const read = await fx.call(worker, '/_vault/rescue', { cookie: both, headers: { origin: null } })
-        assert.deepEqual([read.status, read.body], [200, { ok: true, rescues: [] }], at)
+        assert.deepEqual([read.status, read.body], [200, { ok: true, rescues: [], limit: 32 }], at)
         const rescue = await worker.fetch(new Request(new URL('/rescue', ORIGIN), { headers: { ...Object.fromEntries(Object.entries(navigation).filter(([, value]) => value !== null)), cookie: both, 'cf-connecting-ip': '203.0.113.41' } }), fx.env)
         const page = await rescue.text()
         assert.equal(rescue.status, 200, `${at}: ${page.slice(0, 200)}`)

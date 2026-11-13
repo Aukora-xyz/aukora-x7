@@ -1,0 +1,641 @@
+{
+  "schema": "aukora.pearl.retention-suite.v1",
+  "harness": "pearl-retention/v1",
+  "organs": [
+    "seed-receipts",
+    "auma-memory-domain",
+    "seed-superagent",
+    "seed-predict",
+    "seed-recall"
+  ],
+  "fixedNow": 1794200000000,
+  "note": "Cumulative: cases are added, never removed. A genuine owner grant cannot be accepted here; that needs the owner key, which never enters her body.",
+  "cases": [
+    {
+      "id": "receipts.append.event",
+      "scar": null,
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "base",
+        "input": {
+          "action": "append",
+          "kind": "self.edit",
+          "data": {
+            "note": "x"
+          }
+        },
+        "pick": [
+          "receipt.seq"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "receipt.seq": 1
+      }
+    },
+    {
+      "id": "receipts.chain.verify",
+      "scar": null,
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "two-receipts",
+        "input": {
+          "action": "verify"
+        },
+        "pick": [
+          "receiptsVerified"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "receiptsVerified": 2
+      }
+    },
+    {
+      "id": "receipts.chain.tamper-refused",
+      "scar": null,
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "tampered-chain",
+        "input": {
+          "action": "append",
+          "kind": "self.edit",
+          "data": {}
+        }
+      },
+      "expectError": "RECEIPT_CHAIN_INVALID"
+    },
+    {
+      "id": "receipts.grant.unsigned-refused",
+      "scar": "scar-forged-mandate-grant",
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "base",
+        "input": {
+          "action": "append",
+          "kind": "mandate.grant",
+          "data": {
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "identity": "owner",
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7
+          }
+        },
+        "pick": [
+          "reason"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "MANDATE_SIGNATURE_INVALID",
+        "reason": "envelope-missing"
+      }
+    },
+    {
+      "id": "receipts.grant.foreign-key-refused",
+      "scar": "scar-forged-mandate-grant",
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "base",
+        "input": {
+          "action": "append",
+          "kind": "mandate.grant",
+          "data": {
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "identity": "owner",
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7
+          },
+          "envelope": {
+            "schema": "aukora.x6.owner-grant.v1",
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7,
+            "expiresAt": null,
+            "identity": "owner",
+            "publicKeyHex": "9090f718bb2ea4fe21b5838622a64b2c1cc17cb6c04794f130a0804d68812b7f",
+            "signatureHex": "3d3a2e1a2b0350525870f8ac1af02df4ba8e3408c3a67eb22f321e277243ef30719aab052185accb3fb80bba6f986df3b4185f19aeaa96dfc8f207a4c9dc750c"
+          }
+        },
+        "pick": [
+          "reason"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "MANDATE_SIGNATURE_INVALID",
+        "reason": "untrusted-key"
+      }
+    },
+    {
+      "id": "receipts.grant.owner-key-forged-signature",
+      "scar": "scar-forged-mandate-grant",
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "base",
+        "input": {
+          "action": "append",
+          "kind": "mandate.grant",
+          "data": {
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "identity": "owner",
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7
+          },
+          "envelope": {
+            "schema": "aukora.x6.owner-grant.v1",
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7,
+            "expiresAt": null,
+            "identity": "owner",
+            "publicKeyHex": "962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80",
+            "signatureHex": "3d3a2e1a2b0350525870f8ac1af02df4ba8e3408c3a67eb22f321e277243ef30719aab052185accb3fb80bba6f986df3b4185f19aeaa96dfc8f207a4c9dc750c"
+          }
+        },
+        "pick": [
+          "reason"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "MANDATE_SIGNATURE_INVALID",
+        "reason": "bad-signature"
+      }
+    },
+    {
+      "id": "receipts.grant.swapped-owner-key-refused",
+      "scar": "scar-forged-mandate-grant",
+      "args": {
+        "organ": "seed-receipts",
+        "fixture": "swapped-owner-key",
+        "input": {
+          "action": "append",
+          "kind": "mandate.grant",
+          "data": {
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "identity": "owner",
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7
+          },
+          "envelope": {
+            "schema": "aukora.x6.owner-grant.v1",
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7,
+            "expiresAt": null,
+            "identity": "owner",
+            "publicKeyHex": "9090f718bb2ea4fe21b5838622a64b2c1cc17cb6c04794f130a0804d68812b7f",
+            "signatureHex": "3d3a2e1a2b0350525870f8ac1af02df4ba8e3408c3a67eb22f321e277243ef30719aab052185accb3fb80bba6f986df3b4185f19aeaa96dfc8f207a4c9dc750c"
+          }
+        },
+        "pick": [
+          "reason"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "error": "MANDATE_SIGNATURE_INVALID",
+        "reason": "owner-key-pin-mismatch"
+      }
+    },
+    {
+      "id": "dag.parents-alias-reachable",
+      "scar": "scar-dag-parents-alias",
+      "args": {
+        "organ": "auma-memory-domain",
+        "fixture": "dag-parents-alias",
+        "tool": "auma_memory_dag",
+        "input": {
+          "action": "dag_verify"
+        },
+        "pick": [
+          "reachableNodes",
+          "declaredCount"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "reachableNodes": 2,
+        "declaredCount": 2
+      }
+    },
+    {
+      "id": "dag.orphan-fails-closed",
+      "scar": "scar-dag-parents-alias",
+      "args": {
+        "organ": "auma-memory-domain",
+        "fixture": "dag-orphan",
+        "tool": "auma_memory_dag",
+        "input": {
+          "action": "dag_verify"
+        },
+        "pick": [
+          "errorCodes"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "errorCodes": [
+          "DAG_UNREACHABLE_ORPHANS"
+        ]
+      }
+    },
+    {
+      "id": "dag.write-anchored",
+      "scar": "scar-unanchored-memory",
+      "args": {
+        "organ": "auma-memory-domain",
+        "fixture": "base",
+        "tool": "auma_memory_dag",
+        "input": {
+          "action": "dag_write",
+          "key": "k",
+          "fact": "pearl fixture fact"
+        },
+        "pick": [
+          "anchor.anchored"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "anchor.anchored": 1
+      }
+    },
+    {
+      "id": "superagent.eval-accept-explicit-refused",
+      "scar": "scar-eval-accept-explicit",
+      "args": {
+        "organ": "seed-superagent",
+        "fixture": "superagent-mandate",
+        "tool": "auma_superagent",
+        "input": {
+          "action": "eval_accept",
+          "strength": "explicit",
+          "title": "t",
+          "scope": {
+            "paths": [
+              "docs/**"
+            ]
+          }
+        }
+      },
+      "expectError": "EXPLICIT_REQUIRES_CONFIRM"
+    },
+    {
+      "id": "superagent.confirm-unsigned-refused",
+      "scar": "scar-eval-accept-explicit",
+      "args": {
+        "organ": "seed-superagent",
+        "fixture": "superagent-mandate",
+        "tool": "auma_superagent",
+        "input": {
+          "action": "confirm",
+          "mandateId": "mnd_fixture",
+          "by": "owner"
+        }
+      },
+      "expectError": "OWNER_SIGNATURE_REQUIRED"
+    },
+    {
+      "id": "superagent.confirm-foreign-key-refused",
+      "scar": "scar-forged-mandate-grant",
+      "args": {
+        "organ": "seed-superagent",
+        "fixture": "superagent-mandate",
+        "tool": "auma_superagent",
+        "input": {
+          "action": "confirm",
+          "mandateId": "mnd_fixture",
+          "ownerGrant": {
+            "schema": "aukora.x6.owner-grant.v1",
+            "mandateId": "mnd_fixture",
+            "ticketId": null,
+            "scope": {
+              "paths": [
+                "docs/**"
+              ]
+            },
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "epoch": 7,
+            "expiresAt": null,
+            "identity": "owner",
+            "publicKeyHex": "9090f718bb2ea4fe21b5838622a64b2c1cc17cb6c04794f130a0804d68812b7f",
+            "signatureHex": "3d3a2e1a2b0350525870f8ac1af02df4ba8e3408c3a67eb22f321e277243ef30719aab052185accb3fb80bba6f986df3b4185f19aeaa96dfc8f207a4c9dc750c"
+          }
+        }
+      },
+      "expectError": "OWNER_KEY_UNTRUSTED"
+    },
+    {
+      "id": "predict.register-anchored",
+      "scar": "scar-epoch-miss",
+      "args": {
+        "organ": "seed-predict",
+        "fixture": "base",
+        "input": {
+          "action": "register",
+          "prediction": "fixture",
+          "metric": "declaredOrgans",
+          "expected": 2,
+          "targetBallId": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "targetEpoch": 8
+        },
+        "pick": [
+          "receipt.seq"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "receipt.seq": 1
+      }
+    },
+    {
+      "id": "predict.observe-waits-for-target",
+      "scar": "scar-epoch-miss",
+      "args": {
+        "organ": "seed-predict",
+        "fixture": "predict-pending",
+        "input": {
+          "action": "observe",
+          "predictionHash": "dbbfa94e879ef15f130e62e77c56b93c8afb8cdd33cf4f8fd183c7681c240e7b"
+        }
+      },
+      "expectError": "PREDICTION_TARGET_NOT_SELECTED"
+    },
+    {
+      "id": "recall.unanchored-not-clean",
+      "scar": "scar-unanchored-memory",
+      "args": {
+        "organ": "seed-recall",
+        "fixture": "dag-unanchored",
+        "input": {
+          "action": "context"
+        },
+        "pick": [
+          "clean",
+          "unanchoredCount"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "clean": false,
+        "unanchoredCount": 1
+      }
+    },
+    {
+      "id": "recall.anchored-clean",
+      "scar": "scar-unanchored-memory",
+      "args": {
+        "organ": "seed-recall",
+        "fixture": "dag-anchored",
+        "input": {
+          "action": "context"
+        },
+        "pick": [
+          "clean",
+          "unanchoredCount"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "clean": true,
+        "unanchoredCount": 0
+      }
+    },
+    {
+      "id": "dot.eyes.projection.no-origin",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-eyes",
+        "fixture": "base",
+        "input": {
+          "action": "projection"
+        }
+      },
+      "expectError": "EYES_ORIGIN_UNAVAILABLE"
+    },
+    {
+      "id": "dot.eyes.screenshot.no-origin",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-eyes",
+        "fixture": "base",
+        "input": {
+          "action": "screenshot"
+        }
+      },
+      "expectError": "EYES_ORIGIN_UNAVAILABLE"
+    },
+    {
+      "id": "dot.cortex.unknown-action.no-authority",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-cortex",
+        "fixture": "base",
+        "input": {
+          "action": "dot_unknown_action"
+        },
+        "pick": [
+          "voiceAuthority",
+          "mutating"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "voiceAuthority": "none",
+        "mutating": false
+      }
+    },
+    {
+      "id": "dot.continuity.unknown-action.refused",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "seed-continuity",
+        "fixture": "base",
+        "input": {
+          "action": "dot_unknown_action"
+        }
+      },
+      "expectError": "UNKNOWN_ACTION"
+    }
+  ],
+  "fixtures": {
+    "base": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n"
+    },
+    "two-receipts": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/seed/receipts.v3.jsonl": "{\"at\":\"2026-11-09T04:53:18.000Z\",\"data\":{\"note\":\"fixture one\"},\"kind\":\"self.edit\",\"leafHash\":\"215cd2bc52893d275b73a9c52fd023eea64a16d3b70d1bd748efa855352dec7c\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"schema\":\"aukora.receipt.v3\",\"seq\":1}\n{\"at\":\"2026-11-09T04:53:19.000Z\",\"data\":{\"note\":\"fixture two\"},\"kind\":\"self.edit\",\"leafHash\":\"b5ce03b66de3044bfeb03ec5ef75fb0e9f929f6c61fb02048299625bca1204c0\",\"prevHash\":\"215cd2bc52893d275b73a9c52fd023eea64a16d3b70d1bd748efa855352dec7c\",\"schema\":\"aukora.receipt.v3\",\"seq\":2}\n"
+    },
+    "tampered-chain": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/seed/receipts.v3.jsonl": "{\"at\":\"2026-11-09T04:53:18.000Z\",\"data\":{\"note\":\"fixture one\"},\"kind\":\"self.edit\",\"leafHash\":\"215cd2bc52893d275b73a9c52fd023eea64a16d3b70d1bd748efa855352dec7c\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"schema\":\"aukora.receipt.v3\",\"seq\":1}\n{\"at\":\"2026-11-09T04:53:19.000Z\",\"data\":{\"note\":\"rewritten after the fact\"},\"kind\":\"self.edit\",\"leafHash\":\"b5ce03b66de3044bfeb03ec5ef75fb0e9f929f6c61fb02048299625bca1204c0\",\"prevHash\":\"215cd2bc52893d275b73a9c52fd023eea64a16d3b70d1bd748efa855352dec7c\",\"schema\":\"aukora.receipt.v3\",\"seq\":2}\n"
+    },
+    "swapped-owner-key": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"attacker\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"9090f718bb2ea4fe21b5838622a64b2c1cc17cb6c04794f130a0804d68812b7f\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n"
+    },
+    "dag-parents-alias": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/memory/dag/HEAD.json": "{\n  \"heads\": [\n    \"8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e\"\n  ],\n  \"count\": 2,\n  \"updatedAt\": 1794200000000\n}",
+      "/dsh/home/auma/memory/dag/e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84.json": "{\n  \"parentIds\": [],\n  \"kind\": \"fact\",\n  \"key\": \"root\",\n  \"content\": \"fixture root\",\n  \"tags\": [],\n  \"createdAt\": 1794199998000,\n  \"receiptHash\": null,\n  \"ticketId\": null,\n  \"tombstoneOf\": null,\n  \"memoryId\": null,\n  \"id\": \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n}",
+      "/dsh/home/auma/memory/dag/8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e.json": "{\n  \"schema\": \"auma.memory.dag.node.v1\",\n  \"kind\": \"episodic\",\n  \"createdAt\": 1794199999000,\n  \"parents\": [\n    \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n  ],\n  \"summary\": \"child linked by `parents`\",\n  \"tags\": [],\n  \"data\": {},\n  \"id\": \"8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e\"\n}"
+    },
+    "dag-orphan": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/memory/dag/HEAD.json": "{\n  \"heads\": [\n    \"8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e\"\n  ],\n  \"count\": 3,\n  \"updatedAt\": 1794200000000\n}",
+      "/dsh/home/auma/memory/dag/e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84.json": "{\n  \"parentIds\": [],\n  \"kind\": \"fact\",\n  \"key\": \"root\",\n  \"content\": \"fixture root\",\n  \"tags\": [],\n  \"createdAt\": 1794199998000,\n  \"receiptHash\": null,\n  \"ticketId\": null,\n  \"tombstoneOf\": null,\n  \"memoryId\": null,\n  \"id\": \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n}",
+      "/dsh/home/auma/memory/dag/8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e.json": "{\n  \"schema\": \"auma.memory.dag.node.v1\",\n  \"kind\": \"episodic\",\n  \"createdAt\": 1794199999000,\n  \"parents\": [\n    \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n  ],\n  \"summary\": \"child linked by `parents`\",\n  \"tags\": [],\n  \"data\": {},\n  \"id\": \"8ff96d6609cbf7cd2dffb4e82b4e9c4e917b812f1211488a8827c2f7d8cdde5e\"\n}",
+      "/dsh/home/auma/memory/dag/e63cc0e282dadf5a17630dd1e3467fa14cf853ebc410e6bb7c1e8e4b28b24089.json": "{\n  \"parentIds\": [],\n  \"kind\": \"fact\",\n  \"key\": \"orphan\",\n  \"content\": \"nobody links here\",\n  \"tags\": [],\n  \"createdAt\": 1794199999500,\n  \"receiptHash\": null,\n  \"ticketId\": null,\n  \"tombstoneOf\": null,\n  \"memoryId\": null,\n  \"id\": \"e63cc0e282dadf5a17630dd1e3467fa14cf853ebc410e6bb7c1e8e4b28b24089\"\n}"
+    },
+    "dag-unanchored": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/memory/dag/HEAD.json": "{\n  \"heads\": [\n    \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n  ],\n  \"count\": 1,\n  \"updatedAt\": 1794200000000\n}",
+      "/dsh/home/auma/memory/dag/e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84.json": "{\n  \"parentIds\": [],\n  \"kind\": \"fact\",\n  \"key\": \"root\",\n  \"content\": \"fixture root\",\n  \"tags\": [],\n  \"createdAt\": 1794199998000,\n  \"receiptHash\": null,\n  \"ticketId\": null,\n  \"tombstoneOf\": null,\n  \"memoryId\": null,\n  \"id\": \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n}"
+    },
+    "dag-anchored": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/memory/dag/HEAD.json": "{\n  \"heads\": [\n    \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n  ],\n  \"count\": 1,\n  \"updatedAt\": 1794200000000\n}",
+      "/dsh/home/auma/memory/dag/e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84.json": "{\n  \"parentIds\": [],\n  \"kind\": \"fact\",\n  \"key\": \"root\",\n  \"content\": \"fixture root\",\n  \"tags\": [],\n  \"createdAt\": 1794199998000,\n  \"receiptHash\": null,\n  \"ticketId\": null,\n  \"tombstoneOf\": null,\n  \"memoryId\": null,\n  \"id\": \"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\"\n}",
+      "/dsh/home/auma/seed/receipts.v3.jsonl": "{\"at\":\"2026-11-09T04:53:19.000Z\",\"data\":{\"kind\":\"fact\",\"nodeId\":\"e8c63205f8d94cd305168ede5ca30722444cb3ffe19616ce677ef02c8509ae84\",\"parentIds\":[],\"payloadHash\":\"5be8f2f70fb172e9c074fff3a548c80d5fba28bc99a935e8d0e3ed60844cdf6d\"},\"kind\":\"memory.dag.append\",\"leafHash\":\"6265a990c1917e2d6bee7a56070ec01fdda37ed8aaefa91b8495d02bc47c1f97\",\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"schema\":\"aukora.receipt.v3\",\"seq\":1}\n"
+    },
+    "superagent-mandate": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/superagent/state.json": "{\n  \"version\": 1,\n  \"updatedAt\": 1794200000000,\n  \"triggers\": [],\n  \"threads\": [],\n  \"tickets\": [],\n  \"assignments\": [],\n  \"attention\": [],\n  \"outbox\": [],\n  \"mandates\": [\n    {\n      \"id\": \"mnd_fixture\",\n      \"title\": \"fixture mandate\",\n      \"scope\": {\n        \"paths\": [\n          \"docs/**\"\n        ]\n      },\n      \"strength\": \"inferred\",\n      \"confirmed\": false,\n      \"confirmedBy\": null,\n      \"expiresAt\": null,\n      \"budgetSteps\": 1\n    }\n  ]\n}"
+    },
+    "predict-pending": {
+      "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
+      "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
+      "/dsh/home/auma/seed/predict/predictions.jsonl": "{\"at\":\"2026-11-09T04:53:19.000Z\",\"confidence\":0.5,\"expected\":2,\"expectedBallId\":null,\"expectedEntry\":null,\"expectedEpoch\":null,\"expectedOrganCount\":null,\"expectedPreviousCount\":null,\"headBallId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headEpoch\":7,\"headOrganCount\":1,\"kind\":\"prediction.register\",\"metric\":\"declaredOrgans\",\"prediction\":\"fixture\",\"predictionHash\":\"dbbfa94e879ef15f130e62e77c56b93c8afb8cdd33cf4f8fd183c7681c240e7b\",\"targetBallId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"targetEpoch\":8}\n"
+    }
+  },
+  "pendingCases": [
+    {
+      "id": "aura.incomplete-when-evidence-missing",
+      "organ": "seed-aura",
+      "status": "dormant",
+      "requires": [
+        "seed-aura listed in suite.organs",
+        "pure computeAura(inputs) core extracted (CHUNK18 finding 4)"
+      ],
+      "rationale": "Standing Law #4 / NORTH-STAR 15.1.3: missing or truncated decisive evidence must produce status incomplete (UNDETERMINED), never a clean calm posture.",
+      "args": {
+        "organ": "seed-aura",
+        "fixture": "aura-evidence-absent",
+        "input": {
+          "action": "compute",
+          "wake": {
+            "pendingWakes": 0
+          },
+          "inputs": {
+            "reachableDagNodes": 0,
+            "declaredDagNodes": 0,
+            "verifiedReceipts": 0,
+            "totalReceipts": 0,
+            "activeOrgans": 22,
+            "declaredOrgans": 22,
+            "evidenceComplete": false
+          }
+        },
+        "pick": [
+          "status"
+        ]
+      },
+      "expect": {
+        "status": "incomplete"
+      }
+    },
+    {
+      "id": "aura.rejects-always-calm-scorer",
+      "organ": "seed-aura",
+      "status": "dormant",
+      "requires": [
+        "seed-aura listed in suite.organs",
+        "pure computeAura(inputs) core extracted (CHUNK18 finding 4)"
+      ],
+      "control": "known-wrong",
+      "rationale": "Known-wrong control: a scorer that always returns calm must be rejected by grader admission, not ranked and promoted.",
+      "args": {
+        "organ": "seed-aura",
+        "fixture": "aura-evidence-absent",
+        "input": {
+          "action": "compute",
+          "wake": {
+            "pendingWakes": 0
+          },
+          "inputs": {
+            "reachableDagNodes": 0,
+            "declaredDagNodes": 0,
+            "verifiedReceipts": 0,
+            "totalReceipts": 0,
+            "activeOrgans": 22,
+            "declaredOrgans": 22,
+            "evidenceComplete": false
+          },
+          "graderControl": "always-calm"
+        },
+        "pick": [
+          "admitted"
+        ]
+      },
+      "expect": {
+        "admitted": false
+      }
+    }
+  ]
+}

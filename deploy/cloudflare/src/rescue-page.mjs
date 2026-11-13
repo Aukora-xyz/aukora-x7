@@ -76,12 +76,15 @@ a { color: rgb(150, 180, 255); }
   /* --aukora-text-secondary */
   color: rgb(184, 188, 196);
 }
-#rescue-detail p, #rescue-left-list p {
+#rescue-detail p, #rescue-left-list p, #rescue-state p, #rescue-threads p {
   margin-top: 4px; font-size: 0.9375rem; font-variant-numeric: tabular-nums;
   /* --aukora-text-secondary */
   color: rgb(184, 188, 196);
 }
-#rescue-left { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+#rescue-left, #rescue-cloud-state { margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(255, 255, 255, 0.1); }
+#rescue-threads button { margin-top: 6px; padding: 8px 12px; font-size: 0.9375rem; }
+/* --dsw-static-neutral-bluish-00 */
+#rescue-wait { margin-top: 20px; font-weight: 500; color: rgb(255, 255, 255); }
 noscript { display: block; margin-top: 16px; color: rgb(184, 188, 196); }
 @media (prefers-reduced-motion: reduce) { button { transition: none; } }
 @media (forced-colors: active) {
@@ -95,14 +98,21 @@ const SCRIPT = RESCUE_PAGE_SCRIPT
 const HEAD = '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
   + '<title>Rescue copy</title><style>' + STYLE + '</style></head>\n'
 const HTML = HEAD + '<body><main><h1>A second copy of this browser</h1><p class="lede">Rescue copy</p>'
-  + '<p>This page copies what this browser holds of hers: every thread, every home file, her storage’s own records and her Auma Live chat logs. Other saved settings stay in this browser. '
+  + '<p>This page copies what this browser holds of hers: every thread, her home files, her storage’s own records and her Auma Live chat logs. Other saved settings stay in this browser. '
+  // job 2: the two ways out, kept apart before anything is pressed (her private folder stays out of her cloud).
+  + 'The copy saved on this computer holds every home file; the copy in her cloud holds every home file except her private folder, which stays in this browser and is said by its size only. '
   + 'Secret files (her keys, sign-in files and anything named like them; for her cloud, also files named like keys, secrets, credentials or passwords) are left in this browser only; they are listed below by kind, never by name or content. '
-  + 'Every piece is checked against its SHA-256 and read back. Nothing in this browser is changed: this page only reads, and it does not start her app.</p>'
+  + 'Every piece is checked against its SHA-256 and read back. Nothing in this browser is changed: this page only reads, and it does not start her app. '
+  + 'After a checked copy, Join her threads in her cloud makes the copied conversations her threads there, and Check from her cloud reads one thread back, piece by piece, on any device.</p>'
+  + '<p id="rescue-wait">Wait until she has finished answering. Leave this tab in front. This takes a few minutes.</p>'
   + '<button id="rescue-cloud" type="button" disabled>Copy to her cloud</button>'
+  + '<button id="rescue-join" type="button" hidden disabled>Join her threads in her cloud</button>'
   + '<button id="rescue-local" type="button" disabled>Save a copy on this computer</button>'
   + '<p id="rescue-status" role="status" aria-live="polite" aria-atomic="true"></p>'
   + '<button id="rescue-signin" type="button" hidden>Sign in again</button>'
   + '<div id="rescue-detail" aria-live="polite"></div>'
+  + '<section id="rescue-cloud-state" aria-labelledby="rescue-state-heading"><h2 id="rescue-state-heading">In her cloud</h2>'
+  + '<div id="rescue-state" aria-live="polite"></div><div id="rescue-threads"></div></section>'
   + '<section id="rescue-left" aria-labelledby="rescue-left-heading" hidden><h2 id="rescue-left-heading">Left in this browser only</h2><div id="rescue-left-list"></div></section>'
   + '</main><noscript>Enable JavaScript to make a copy. Nothing can be read without it.</noscript><script>' + SCRIPT + '</script></body></html>'
 const BUSY_HTML = HEAD + '<body><main><h1>A second copy of this browser</h1><p class="lede">Rescue copy</p>'

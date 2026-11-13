@@ -21,8 +21,8 @@ import { FingerprintWaiting } from './portal/FingerprintWaiting.tsx'
 import { ThreadsLane, type ThreadsLaneProps } from './portal/ThreadsLane.tsx'
 import { panelIdOfSurface } from './service.ts'
 import type { WorkReaderDoor } from './work/index.ts'
-import { NewBuildButton, sessionOf, WORK_SURFACE } from './work/WorkSurface.tsx'
-import { useReloadNotice } from './portal/build-notice.ts'
+import { sessionOf, WORK_SURFACE } from './work/WorkSurface.tsx'
+import { NOTICES_SURFACE, useNoticeFeed } from './portal/notices.ts'
 import { AURA_SURFACE } from './aura/model.ts'
 
 /**
@@ -580,11 +580,15 @@ export function AppFrame({
   }, [compact, state.compactLane, weights])
   const activePanelId = panelIdOfSurface(state.activeSurface)
   // THE RELOAD NOTICE, WHICHEVER APP IS OPEN: "a newer Auma is published" or
-  // "a new build is live", on the same Reload button Work and Aura carry (portal/build-notice.ts). Those two surfaces
-  // show it themselves, through their own button, while they are the open app; then the frame neither shows it nor
-  // reads for it, so it is never shown twice and never read twice.
-  const surfaceShowsNotice = state.activeSurface === WORK_SURFACE || state.activeSurface === AURA_SURFACE
-  const reloadNotice = useReloadNotice(!surfaceShowsNotice)
+  // "a new build is live" (portal/build-notice.ts). NOTHING FLOATS: the frame draws no notice of its
+  // own; it feeds the page's notices (portal/notices.ts), which the gold Notices launcher, first in the system menu,
+  // counts and its surface lists. Work and Aura read and show it themselves, through their own header button, while they
+  // are the open app, and publish what they find into the same list; then the frame does not read for it, so it is never
+  // read twice (a notice it already found stays). Nor does it read while Notices itself is open: opening Notices sends
+  // no request; the list shows what was already found.
+  const surfaceReadsNotice = state.activeSurface === WORK_SURFACE || state.activeSurface === AURA_SURFACE
+    || state.activeSurface === NOTICES_SURFACE
+  useNoticeFeed(!surfaceReadsNotice)
   const activeMenuSlot = MENU_SLOTS[menuTab]
   // EVERY FACT, EACH ONE MARKED KNOWN OR UNKNOWN. The strip never substitutes a number for a lookup that failed.
   const waitingLanes = waitingLanesOf(lanesAnswer, Date.now())
@@ -801,13 +805,6 @@ export function AppFrame({
             </div>
           )}
         </div>
-        {/* At the foot of the centre lane, in its own row: a lane has no corner at its foot, and the row takes its
-            height from the app's, so it covers no corner and no control of the app at any width. */}
-        {reloadNotice === null || surfaceShowsNotice ? null : (
-          <div className={css.buildNotice} data-build-notice>
-            <NewBuildButton release={null} notice={reloadNotice} />
-          </div>
-        )}
       </LaneShell>
 
       <LaneShell

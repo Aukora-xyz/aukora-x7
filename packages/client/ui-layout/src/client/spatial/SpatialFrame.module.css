@@ -377,9 +377,8 @@
   inset: 0;
 }
 
-/* THE CENTRE LANE IS A COLUMN: the apps' stack fills it, and the reload notice, while there is one, takes a row of its
-   own at the lane's foot (AppFrame.tsx `data-build-notice`), where no corner sits. With no notice the stack fills the
-   lane exactly as before; with one, the stack is that row shorter, so the notice covers nothing of the app. */
+/* THE CENTRE LANE IS A COLUMN, AND THE APPS' STACK FILLS IT. Nothing else is drawn in it: notices live behind the
+   Notices launcher in the system menu (portal/NoticesSurface.tsx), never in a row or a pill over an app. */
 .laneCenter .laneBody {
   display: flex;
   flex-direction: column;
@@ -387,14 +386,6 @@
 
 .laneCenter .surfaceStack {
   flex: 1 1 0;
-}
-
-.buildNotice {
-  flex: none;
-  display: flex;
-  justify-content: flex-end;
-  min-width: 0;
-  padding: 0 6px 10px;
 }
 
 .menuHeader {

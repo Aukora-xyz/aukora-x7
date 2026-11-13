@@ -10,7 +10,7 @@
       "sha256": "421ee406f532c0f87111496e848241f6f42d6df31cc03b08b63928947afe1f1e"
     }
   },
-  "repin": "A T2 change to server/aura-rules.mjs or an intended organ contract change requires re-pinning these fixtures with git show <commit>:<path>, never by hand-editing.",
+  "repin": "Historical fixtures use git show; Pearl J4 is reconstructed from the exact Git base and proposal patch recorded in patchProvenance, never hand-edited.",
   "organs": {
     "seed-aura": {
       "path": "mirror/home/auma/seed/organs/seed-aura.js",
@@ -21,10 +21,17 @@
     },
     "seed-pearl": {
       "path": "mirror/home/auma/seed/organs/seed-pearl.js",
-      "sha256": "f711328e53531d86286f3fbbbb8f9a6399c5f97097e91c1dd27372e105db29a3",
-      "gitBlob": "90459a4771eeb65265e852480dd24488b5584d52",
-      "bytes": 37176,
-      "lastChangedAt": "0000000000000000000000000000000000000000"
+      "sha256": "5b578cbc5c20a430211f444b2803a530792c8437f4ce6ae00e44d49e1dceeadd",
+      "gitBlob": "b14706b34ac1a527f057fdc46807e0f1bee2fc10",
+      "bytes": 39527,
+      "lastChangedAt": "0000000000000000000000000000000000000000",
+      "patchProvenance": {
+        "baseCommit": "0000000000000000000000000000000000000000",
+        "baseSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "patchCommit": "0000000000000000000000000000000000000000",
+        "patchPath": "docs/auma/pearl/pearl-truthful-verdict.patch",
+        "patchSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
     },
     "seed-predict": {
       "path": "mirror/home/auma/seed/organs/seed-predict.js",

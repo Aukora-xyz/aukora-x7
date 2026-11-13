@@ -102,6 +102,7 @@ class AlvPlayer extends AudioWorkletProcessor {
     this.priming = true;
     this.started = false;
     this.streamEnded = false;
+    this.turn = 0; // VOICE hook: the speech turn whose frames may play; a frame tagged with an older one never does
     this.port.onmessage = (e) => {
       const m = e.data;
       if (m.cmd === 'begin') {
@@ -113,12 +114,15 @@ class AlvPlayer extends AudioWorkletProcessor {
         this.streamEnded = false;
       }
       else if (m.cmd === 'push') {
+        if (Number.isSafeInteger(m.turn) && m.turn < this.turn) return; // VOICE hook
         const pcm = new Int16Array(m.pcm);
+        if (Number.isSafeInteger(m.turn)) pcm.turn = m.turn; // VOICE hook
         if (pcm.length) { this.q.push(pcm); this.available += pcm.length; }
       }
       else if (m.cmd === 'end') this.streamEnded = true;
       else if (m.cmd === 'cut') { this.cutting = true; this.target = 0; }
       else if (m.cmd === 'clear') this.clear();
+      else if (m.cmd === 'turn') { if (Number.isSafeInteger(m.turn) && m.turn > this.turn) { this.turn = m.turn; this.clear(); } } // VOICE hook: a new speech turn drops every queued frame at once
     };
   }
 
@@ -149,6 +153,7 @@ class AlvPlayer extends AudioWorkletProcessor {
   take() {
     while (this.q.length) {
       const head = this.q[0];
+      if (head.turn !== undefined && head.turn < this.turn) { this.available -= head.length - this.qi; this.q.shift(); this.qi = 0; continue; } // VOICE hook
       if (this.qi < head.length) {
         const sample = head[this.qi++] / 32768;
         this.available--;

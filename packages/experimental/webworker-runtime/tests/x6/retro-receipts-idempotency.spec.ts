@@ -129,7 +129,7 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
 
   it('deduplicates across both ball.promote and head.promote and derives T1/T2 approval honestly', () => {
     const existing = [
-      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 1, kind: 'ball.promote', data: { epoch: 63, ballId: '90b6e125748baa5b' } }),
+      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 1, kind: 'ball.promote', data: { epoch: 63, ballId: 'e16db168315ddc9e' } }),
       JSON.stringify({ schema: 'aukora.receipt.v3', seq: 2, kind: 'head.promote', data: { epoch: 64, ballId: '05e739c37236c35a16b3baa92a9a5f526db26da56761d254b73675138490bb96' } }),
       JSON.stringify({ schema: 'aukora.receipt.v3', seq: 3, kind: 'head.promote', data: { epoch: 65, ballId: '98b06a0eb5458ddcdf14577168edadf2b03a861a698fb44c07c72b7bce7d6dcd' } }),
     ].join('\n') + '\n'
@@ -219,7 +219,7 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
     const ballId = 'b'.repeat(64)
     const data = { ballId, parentBallId: 'a'.repeat(64), epoch: 151, tier: 'T1' }
     for (const invalid of [{ ballId: 'short' }, { ballId: 'z'.repeat(64) }, { parentBallId: null },
-      { parentBallId: '90b6e125748baa5b' }, { parentBallId: 'g'.repeat(64) }, { tier: 'T3' }, { tier: undefined }]) {
+      { parentBallId: 'e16db168315ddc9e' }, { parentBallId: 'g'.repeat(64) }, { tier: 'T3' }, { tier: undefined }]) {
       expect(await append({ kind: 'head.promote', epoch: 151, ballId, data: { ...data, ...invalid } }))
         .toEqual({ ok: false, deduplicated: false })
     }
@@ -234,7 +234,7 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
   it('preserves seq 1 through 150 including the historical short-id epoch-63 leaf at seq 134', async () => {
     const original = Array.from({ length: 150 }, (_, index) => JSON.stringify({ schema: 'aukora.receipt.v3', seq: index + 1,
       kind: index === 133 ? 'head.promote' : 'synthetic',
-      data: index === 133 ? { epoch: 63, ballId: '90b6e125748baa5b' } : {} })).join('\n') + '\n'
+      data: index === 133 ? { epoch: 63, ballId: 'e16db168315ddc9e' } : {} })).join('\n') + '\n'
     let text = original
     const append = createSerializedPromotionReceiptAppender({ readReceiptsJsonl: () => text,
       appendReceipt: async (kind, data) => { text += JSON.stringify({ kind, data }) + '\n'; return { ok: true } } })

@@ -13,7 +13,7 @@ Maturity labels used on this page and in every new claim you write:
 | Label | Meaning |
 | --- | --- |
 | IMPLEMENTED | Code and tests are in this tree. |
-| RECORDED RUN | Shown in [docs/RUN-RECORD.md](docs/RUN-RECORD.md). |
+| RECORDED RUN (of an earlier tree) | Shown in [docs/RUN-RECORD.md](docs/RUN-RECORD.md). |
 | INDEPENDENTLY VERIFIED | Run by someone other than the authors. Nothing has this label yet. |
 | UNVERIFIED | Claimed or written, but no test here holds it or no run shows it. |
 | DIRECTION | Not built. |
@@ -34,22 +34,22 @@ node scripts/verify-lite.mjs
 ```
 
 - Needs Node 24.9 or newer and nothing else. It runs 22 test files one at a time with Node's own test runner, compares each file's failure count with that file's row in [docs/KNOWN-RED-TESTS.md](docs/KNOWN-RED-TESTS.md), and exits 0 only when every failure is on that list.
-- The last line it prints should read: `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`. This was seen on one machine (Node 24.11.1), three runs in a row, each in 40 to 45 seconds. That is not in the run record, so treat it as UNVERIFIED until you see it yourself.
-- The 12 failures are in three files: `server/memory.test.mjs` 3, `server/predict.test.mjs` 6 and `server/receipts-policy.test.mjs` 3. This is a different and much smaller run than the recorded one in section 3, so its numbers are not the state of the project.
+- The last line it prints should read: `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`. This was seen on one machine (Node 24.11.1), three runs in a row, each in 40 to 45 seconds. That is not in the run record (of an earlier tree), so treat it as UNVERIFIED until you see it yourself.
+- The 12 failures are in three files: `server/memory.test.mjs` 3, `server/predict.test.mjs` 6 and `server/receipts-policy.test.mjs` 3. This is a different and much smaller run than the recorded one (of an earlier tree) in section 3, so its numbers are not the state of the project.
 - It does **not** run the authority tests: the approval spent once, the proof-failure rule, the owner-only ids, the night grant (one passkey approval that covers a bounded set of later ordinary changes), the transition classifier and the rollback gap reproduction. Those import npm packages this repository does not ship. The script says so in its output.
 - `--with-packages` adds 16 authority test files after an install. That option is UNVERIFIED: nobody has run it from a clean install.
 - It is a smoke check for a fresh clone, not proof that the authority rule holds.
 
 ## 3. Install and run the full suites
 
-These are the steps of the one recorded run, taken from [docs/RUN-RECORD.md](docs/RUN-RECORD.md). That run was on one machine (Node v24.11.1, pnpm 11.28.5, vitest 4.1.11), with `HOME`, the XDG folders, the npm cache and `TMPDIR` pointed at a scratch folder, and one heavy step at a time. Do the same: set `HOME` to an empty folder.
+These are the steps of the one recorded run (of an earlier tree), taken from [docs/RUN-RECORD.md](docs/RUN-RECORD.md). That run was on one machine (Node v24.11.1, pnpm 11.28.5, vitest 4.1.11), with `HOME`, the XDG folders, the npm cache and `TMPDIR` pointed at a scratch folder, and one heavy step at a time. Do the same: set `HOME` to an empty folder.
 
 | Step | Command | Recorded result |
 | --- | --- | --- |
-| Install | `pnpm install --frozen-lockfile` | RECORDED RUN used `--offline --store-dir <a local pnpm store>` with registry metadata already in the cache: 1,458 packages. An online install is not recorded: UNVERIFIED. |
-| Build | `DSH_CLIENT_COMMIT_HASH=0000000 PORT=<a free port> node server/build-preview.mjs` | RECORDED RUN: exit 0, 260 files in `apps/web/dist`. `NODE_OPTIONS=--max-old-space-size=5632` was set. |
-| Boot | `PORT=<a free port> X6_OWNER_EMAIL=<made up> X6_OWNER_PUBLIC_KEY_HEX=<64 random hex> pnpm run x6:start` | RECORDED RUN: the local host listened on 127.0.0.1 and was stopped with SIGTERM. |
-| Dry run | `node server/cloudflare-bootstrap-cli.mjs --dry-run` | RECORDED RUN: ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`, epoch 1. A ball is the manifest that names every organ (a replaceable module of Auma) by hash; its epoch is its version number. |
+| Install | `pnpm install --frozen-lockfile` | RECORDED RUN (of an earlier tree) used `--offline --store-dir <a local pnpm store>` with registry metadata already in the cache: 1,458 packages. An online install is not recorded: UNVERIFIED. |
+| Build | `DSH_CLIENT_COMMIT_HASH=0000000 PORT=<a free port> node server/build-preview.mjs` | RECORDED RUN (of an earlier tree): exit 0, 260 files in `apps/web/dist`. `NODE_OPTIONS=--max-old-space-size=5632` was set. |
+| Boot | `PORT=<a free port> X6_OWNER_EMAIL=<made up> X6_OWNER_PUBLIC_KEY_HEX=<64 random hex> pnpm run x6:start` | RECORDED RUN (of an earlier tree): the local host listened on 127.0.0.1 and was stopped with SIGTERM. |
+| Dry run | `node server/cloudflare-bootstrap-cli.mjs --dry-run` | RECORDED RUN (of an earlier tree): ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`, epoch 1. A ball is the manifest that names every organ (a replaceable module of Auma) by hash; its epoch is its version number. |
 
 Two warnings:
 
@@ -66,7 +66,7 @@ The test suites:
 | Runtime | `pnpm exec vitest run packages/experimental/webworker-runtime/tests --maxWorkers=3` | 1,711 | 1,708 | 3 |
 | All | | 5,502 | 5,399 | 90 |
 
-All of these numbers are RECORDED RUN. 89 of the 90 failures are on the red list; the 90th (`packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)") was found by that run and is now listed. On macOS and Windows, `vitest.config.ts` leaves out two runtime specs that only run on Linux.
+All of these numbers are RECORDED RUN (of an earlier tree). 89 of the 90 failures are on the red list; the 90th (`packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)") was found by that run and is now listed. On macOS and Windows, `vitest.config.ts` leaves out two runtime specs that only run on Linux.
 
 That run had no browser session, no Cloudflare deployment, no model call and no passkey ceremony. A pass on your machine does not cover those either.
 

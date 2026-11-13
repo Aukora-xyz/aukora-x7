@@ -49,8 +49,8 @@ const proposalValue = async (over: Record<string, unknown> = {}) => {
     schema: 'aukora.staged-repo-proposal.v1', branch: mergeBody.branch, title: 'Enforce the checkpoint signer policy', summary: 'Ports the fixture rule.',
     baseSha: sha('a'), headSha: sha('b'), treeSha: sha('c'),
     changedFiles: [
-      { path: 'mirror/home/auma/seed/organs/seed-receipts.js', status: 'modified', additions: 10, deletions: 2, t2Protected: true },
-      { path: 'server/aura.test.mjs', status: 'modified', additions: 3, deletions: 0, t2Protected: false },
+      { path: 'mirror/home/auma/seed/organs/seed-echo.js', status: 'modified', additions: 10, deletions: 2, t2Protected: true },
+      { path: 'apps/web/src/spatial/aura.ts', status: 'modified', additions: 3, deletions: 0, t2Protected: false },
     ],
     ciStatus: 'passed', stagedAt: Date.UTC(2026, 10, 11, 4), mergeBody: body,
     binding: await class3Action({ audience: ORIGIN, method: 'POST', pathname: '/_host/repo', body }),
@@ -141,8 +141,8 @@ describe('the repo proposal card', () => {
     expect(card.textContent).toContain('Enforce the checkpoint signer policy · auma/proposal/fix-receipts-signer-policy · 2 files · CI passed')
     expect(card.querySelector('[data-repo-proposal-move]')?.textContent).toBe(`${sha('a').slice(0, 12)} → ${sha('b').slice(0, 12)}`)
     expect(card.textContent).toContain('2 changed, 1 of them protected (T2)')
-    expect(card.querySelector('[data-repo-proposal-file="mirror/home/auma/seed/organs/seed-receipts.js"]')?.textContent)
-      .toBe('T2 · modified mirror/home/auma/seed/organs/seed-receipts.js +10 −2')
+    expect(card.querySelector('[data-repo-proposal-file="mirror/home/auma/seed/organs/seed-echo.js"]')?.textContent)
+      .toBe('T2 · modified mirror/home/auma/seed/organs/seed-echo.js +10 −2')
     expect(card.querySelector<HTMLButtonElement>('[data-repo-proposal-approve]')?.disabled).toBe(false)
     expect(card.querySelector('[data-repo-proposal-ci-warning]')).toBeNull()
     expect(container.querySelector('[role="dialog"]')).toBeNull()
@@ -433,17 +433,27 @@ describe('review fixes', () => {
     const { mergeOutcomeOf, mergeOutcomeWords } = await import('../src/client/spatial/aumlok/repo-proposal.ts')
     const proposal = parseRepoProposal(await proposalValue()) as RepoProposal
     expect(mergeOutcomeOf({ status: 200, body: { ok: true, commitSha: sha('b') } }, proposal)).toEqual({ kind: 'merged', commitSha: sha('b') })
-    expect(mergeOutcomeWords({ kind: 'merged', commitSha: sha('b') }, proposal)).toBe(`Merged: main is now ${sha('b').slice(0, 12)} (${mergeBody.branch}).`)
+    // Review, MUST 4: the host's ok establishes GitHub shows the head in main (main may be past it), not that main is it.
+    expect(mergeOutcomeWords({ kind: 'merged', commitSha: sha('b') }, proposal)).toBe(`Merged: GitHub shows ${sha('b').slice(0, 12)} in main (${mergeBody.branch}).`)
     // An ok with no commit, or another commit (a merge or squash commit), is not taken as this merge.
     for (const body of [{ ok: true }, { ok: true, commitSha: sha('e') }]) {
-      expect(mergeOutcomeOf({ status: 200, body }, proposal)).toEqual({ kind: 'unclear', detail: 'the host said ok but did not confirm main is at the approved head' })
+      expect(mergeOutcomeOf({ status: 200, body }, proposal)).toEqual({ kind: 'unclear', detail: 'the host said ok but did not confirm the approved head in main' })
     }
     // A deadline after the change was sent, or an answer that says its effect is unknown: unclear, never "main did not move".
     expect(mergeOutcomeOf({ status: 408, body: { ok: false, code: 'BROKER_TIMEOUT' } }, proposal).kind).toBe('unclear')
     expect(mergeOutcomeOf({ status: 409, body: { ok: false, code: 'X', outcome: 'unknown' } }, proposal).kind).toBe('unclear')
     expect(mergeOutcomeOf({ status: 409, body: { ok: false, code: 'REPO_HEAD_CONFLICT' } }, proposal)).toEqual({ kind: 'refused', code: 'REPO_HEAD_CONFLICT' })
-    expect(mergeOutcomeWords({ kind: 'refused', code: 'REPO_HEAD_CONFLICT' }, proposal)).toBe('The host refused the merge (REPO_HEAD_CONFLICT); main did not move.')
+    expect(mergeOutcomeWords({ kind: 'refused', code: 'REPO_HEAD_CONFLICT' }, proposal)).toBe('The host refused the merge (REPO_HEAD_CONFLICT) before sending it; this merge did not move main.')
+    // Review: a spent approval says plainly that he approves again.
+    expect(mergeOutcomeOf({ status: 409, body: { ok: false, code: 'REPO_APPROVAL_SPENT_VOID', next: 'x' } }, proposal)).toEqual({ kind: 'refused', code: 'REPO_APPROVAL_SPENT_VOID' })
+    expect(mergeOutcomeWords({ kind: 'refused', code: 'REPO_APPROVAL_SPENT_VOID' }, proposal)).toBe('Nothing was sent, so this merge did not move main, and this approval is used up: approve again to merge (REPO_APPROVAL_SPENT_VOID).')
     expect(mergeOutcomeOf({ status: 502, body: null }, proposal).kind).toBe('unclear')
+    // MUST 4: an earlier merge held as unknown past the margin says so in plain words, never void.
+    const held = mergeOutcomeOf({ status: 409, body: { ok: false, code: 'REPO_REF_OUTCOME_UNKNOWN', outcome: 'unknown', held: true, mainSha: 'c'.repeat(40) } }, proposal)
+    // Review, MUST 4: the broker's held answer does not say it was sent (a marked attempt may not have been) nor
+    // that main lacks it (a failed comparison is unknown too): "may have been sent", "without confirming that merge in it".
+    expect(held).toEqual({ kind: 'unclear', detail: `A merge approved earlier may have been sent, and GitHub shows main at ${'c'.repeat(12)} without confirming that merge in it; it stays held until you release it with Touch ID, and if it lands later the next read records it as merged` })
+    expect(mergeOutcomeWords(held, proposal)).not.toMatch(/void|did not move/u)
     const renamed = { ...(await proposalValue()), changedFiles: [{ path: 'docs/gate.yml', previous_filename: '.github/workflows/gate.yml', status: 'renamed' }] }
     const problems = (await repoProposalProblems(parseRepoProposal(renamed) as RepoProposal, ORIGIN)).problems
     expect(problems.join(' | ')).toContain('.github/workflows/gate.yml → docs/gate.yml')

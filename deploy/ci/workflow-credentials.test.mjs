@@ -137,7 +137,7 @@ for (const [file, job] of Object.entries(CREDENTIALED)) test(`the ${job} job of 
 test('every action on the deploy, rollback, watch and observe paths and in the proposal gate is pinned by full commit SHA', () => {
   // The two small workflows use two actions each; the observer five (its two jobs); the deploy and the proposal gate keep
   // their original floor.
-  const floor = { 'deploy-x61.yml': 6, 'proposal-gate.yml': 6, 'rollback-x61.yml': 2, 'watch-x61.yml': 2, 'observe-x61.yml': 5 }
+  const floor = { 'deploy-x61.yml': 6, 'proposal-gate.yml': 6, 'proposal-checks.yml': 16, 'rollback-x61.yml': 2, 'watch-x61.yml': 2, 'observe-x61.yml': 5 }
   for (const [name, least] of Object.entries(floor)) {
     const uses = text(name).match(/uses: \S+/g)
     assert.ok(uses.length >= least, name)

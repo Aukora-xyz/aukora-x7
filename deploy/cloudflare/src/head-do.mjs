@@ -28,6 +28,7 @@ import { CLOUD_WAKE_EVIDENCE_TOOLS } from './wake-evidence.mjs'
 import { NIGHT_GRANT_RECORD_SCHEMA, nightGrantCovers, nightGrantFailure, nightGrantPlainWords, nightGrantState, normalizeNightGrantTerms } from './night-grant.mjs'
 // NOSTR hook: her signed head announcement (owner publish + the internal latest read). Not a relay.
 import { NOSTR_ANCHOR_ROUTE, NOSTR_ANCHOR_LATEST_PATH, handleNostrAnchorRoute } from './nostr-anchor.mjs'
+import { ELEVEN_SPEECH_HEAD_ROUTE, handleElevenSpeechHeadRoute } from './eleven-speech.mjs' // VOICE hook
 
 /** The night-grant route's own throttle: attempts per window, separate from the passkey lockout. */
 export const NIGHT_GRANT_ATTEMPTS = 20
@@ -1436,6 +1437,7 @@ async function reserveOwnerSpeechPass(storage, request, ownerEmail) {
 const REPO_STAGE_KEY = 'head:staged-repo-proposal'
 const REPO_ATTEMPT_KEY = 'head:repo-merge-attempt'
 const REPO_OUTCOME_KEY = 'head:last-repo-merge-outcome'
+const REPO_ATTEMPT_OWNER_KEY = 'head:repo-merge-attempt-owner' // LOOP hook: the attempt's owner nonce and state, beside the record the build before reads
 const REPO_PROPOSAL_BYTES = 96 * 1024
 const repoSha = value => typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)
 const repoBranch = value => typeof value === 'string' && /^auma\/(?:sandbox|proposal)\/[a-z0-9][a-z0-9._-]{1,60}$/.test(value)
@@ -1498,6 +1500,71 @@ function repoOwnerContext(request, env) {
   return { audience, expiresAt, seedId: request.headers.get('x-x6-bootstrap-seed') }
 }
 
+/** LOOP hook (MUST 3 and 4): a merge attempt is claimed in the SAME transaction that consumes his approval, and
+ * carries the owner nonce the calling operation made. States: claimed (approval spent, nothing sent), marked (the ref // LOOP hook
+ * update is about to be sent), dispatched (sent, outcome unknown); merged and void are its last outcome, derived from the // LOOP hook
+ * outcome's status when answering. Only the owning call (by nonce) advances or settles it. Any other call gets 409 // LOOP hook
+ * REPO_MERGE_PENDING with the attempt's age until it is older than the broker's deadline plus the margin; then it is // LOOP hook
+ * reconciled from what GitHub says (reconcile_merge). ROLLBACK SAFE: the attempt record and // LOOP hook
+ * the outcome record keep exactly the shapes the build before this change reads (status pending or unknown; no state), so // LOOP hook
+ * a rollback still answers /_head/promotion-status; the nonce, the state and the approval's expiry live beside the attempt // LOOP hook
+ * under REPO_ATTEMPT_OWNER_KEY, which that build never reads. An attempt with no matching owner record (written before // LOOP hook
+ * this change, or by a rolled-back build) reads as marked or dispatched with no owner (it may have been sent): only // LOOP hook
+ * reconciliation or the owner's release settles it, and status, reconcile and the card agree on that. */ // LOOP hook
+export const REPO_MERGE_ACTION_DEADLINE_MS = 10000 // LOOP hook: cloud-brokers CLOUD_BROKER_LIMITS.timeoutMs, pinned equal by repo-merge-approval.test.mjs
+export const REPO_MERGE_MARGIN_MS = 50000 // LOOP hook
+export const REPO_MERGE_RECONCILE_AFTER_MS = REPO_MERGE_ACTION_DEADLINE_MS + REPO_MERGE_MARGIN_MS // LOOP hook
+const repoOwnerNonce = value => typeof value === 'string' && /^[A-Za-z0-9_-]{22,128}$/.test(value) // LOOP hook
+const repoAttemptControl = (value, pending) => repoKeys(value, ['attemptId', 'owner', 'state', 'approvalExpiresAt']) && value.attemptId === pending?.attemptId // LOOP hook
+  && repoOwnerNonce(value.owner) && ['claimed', 'marked', 'dispatched'].includes(value.state) && (value.state === 'dispatched') === (pending.status === 'unknown') // LOOP hook
+  && Number.isSafeInteger(value.approvalExpiresAt) && value.approvalExpiresAt > 0 ? value : null // LOOP hook: anything else is ignored, never trusted
+const repoAttemptState = (pending, control) => control?.state ?? (pending.status === 'unknown' ? 'dispatched' : 'marked') // LOOP hook: no owner record: a legacy attempt, which may have been sent
+const repoOutcomeAnswer = outcome => ({ ...outcome, state: outcome.code === REPO_VOID_BY_OWNER ? 'void-by-owner' : REPO_OUTCOME_STATE[outcome.status] }) // LOOP hook: in the answer, never stored
+const REPO_OUTCOME_STATE = Object.freeze({ succeeded: 'merged', failed: 'void', unknown: 'dispatched' }) // LOOP hook
+/** LOOP hook (MUST 4): time alone never voids an attempt that reached `marked` or `dispatched`. A later call // LOOP hook
+ * settles it merged when main is the approved head or the head is an ancestor of main (the broker asks GitHub's compare // LOOP hook
+ * endpoint: verification.headInMain); otherwise it stays REPO_REF_OUTCOME_UNKNOWN until the owner releases it with a // LOOP hook
+ * fresh Class 3 approval over { action: 'release_attempt', attemptId, baseSha, headSha }. The release is stored in the // LOOP hook
+ * old outcome shape (status failed, code REPO_ATTEMPT_VOID_BY_OWNER) and, beside it, under REPO_RELEASED_KEY, which the // LOOP hook
+ * build before never reads; a later read that finds the released head in main settles it "merged after release". // LOOP hook
+ * Review, MUST 2: released attempts are kept BY ATTEMPT ID (stored as one entry per id, written by repoReleasedStored), at most // LOOP hook
+ * REPO_RELEASED_MAX; a release never overwrites another. At the bound the oldest RESOLVED one (merged after release) is // LOOP hook
+ * dropped first; when every kept one is still unresolved a new release is refused (REPO_RELEASE_LIMIT), before his // LOOP hook
+ * approval is spent, because dropping one would forget a merge that may still land. Each unresolved one is read again on // LOOP hook
+ * every reconcile, a newer attempt held or not (cloud-brokers reconcileReleasedAll). */ // LOOP hook
+const REPO_VOID_BY_OWNER = 'REPO_ATTEMPT_VOID_BY_OWNER' // LOOP hook
+const REPO_RELEASED_KEY = 'head:repo-merge-released-by-attempt' // LOOP hook
+export const REPO_RELEASED_MAX = 4 // LOOP hook: each unresolved one costs up to four GitHub reads on every reconcile
+const repoReleased = value => repoKeys(value, ['attemptId', 'branch', 'baseSha', 'headSha', 'treeSha', 'releasedAt', 'state'], ['mergedSeenAt']) // LOOP hook
+  && repoAttemptId(value.attemptId) && repoBranch(value.branch) && [value.baseSha, value.headSha, value.treeSha].every(repoSha) && value.baseSha !== value.headSha // LOOP hook
+  && Number.isSafeInteger(value.releasedAt) && value.releasedAt > 0 && (value.state === 'void-by-owner' ? !Object.hasOwn(value, 'mergedSeenAt') // LOOP hook
+    : value.state === 'merged-after-release' && Number.isSafeInteger(value.mergedSeenAt) && value.mergedSeenAt > 0) // LOOP hook
+const repoReleasedAnswer = value => ({ attemptId: value.attemptId, branch: value.branch, baseSha: value.baseSha, headSha: value.headSha, treeSha: value.treeSha, // LOOP hook
+  releasedAt: value.releasedAt, state: value.state, ...(Object.hasOwn(value, 'mergedSeenAt') ? { mergedSeenAt: value.mergedSeenAt } : {}) }) // LOOP hook
+const repoReleasedSet = value => isObject(value) && Object.keys(value).length <= REPO_RELEASED_MAX // LOOP hook
+  && Object.entries(value).every(([id, record]) => repoReleased(record) && record.attemptId === id) // LOOP hook
+/** LOOP hook: the kept releases, oldest first; [] when none. */
+const repoReleasedList = set => Object.values(set ?? {}).sort((a, b) => a.releasedAt - b.releasedAt || (a.attemptId < b.attemptId ? -1 : 1)) // LOOP hook
+/** LOOP hook: the kept releases are a LIST of { attemptId, ... } in memory; this one helper is the storage // LOOP hook
+ * boundary that turns the list into the stored shape, one entry per attempt id (unchanged since it was introduced). Every write of // LOOP hook
+ * REPO_RELEASED_KEY goes through it: no object literal with a key that cannot be read by name, no spread, no dynamic delete. */ // LOOP hook
+const repoReleasedStored = list => Object.fromEntries(list.map(kept => [kept.attemptId, kept])) // LOOP hook
+const REPO_RELEASE_LIMIT_WORDS = `${REPO_RELEASED_MAX} merges released earlier are still unresolved (GitHub has not shown them in main), and the host keeps at most ${REPO_RELEASED_MAX} so that a merge that may still land is never forgotten; a new release waits until one of them shows up in main, or until his passkey terms name the oldest one (forgets: its attempt id) to stop watching it` // LOOP hook
+const repoVerification = v => repoKeys(v, ['mainSha', 'branchSha', 'treeSha', 'checkedAt'], ['headInMain']) && repoSha(v.mainSha) // LOOP hook
+  && (v.branchSha === null || repoSha(v.branchSha)) && repoSha(v.treeSha) && Number.isSafeInteger(v.checkedAt) && v.checkedAt > 0 // LOOP hook
+  && (!Object.hasOwn(v, 'headInMain') || v.headInMain === null || typeof v.headInMain === 'boolean') // LOOP hook
+/** LOOP hook: what GitHub says proves the approved head is in main: main is it, or it is an ancestor of main. */
+const repoHeadInMain = (v, body) => v.treeSha === body.treeSha && (v.mainSha === body.headSha || v.headInMain === true) // LOOP hook
+const repoReleaseBody = value => repoKeys(value, ['action', 'attemptId', 'baseSha', 'headSha'], ['forgets']) && value.action === 'release_attempt' // LOOP hook
+  && repoAttemptId(value.attemptId) && repoSha(value.baseSha) && repoSha(value.headSha) && value.baseSha !== value.headSha // LOOP hook
+  && (!Object.hasOwn(value, 'forgets') || repoAttemptId(value.forgets) && value.forgets !== value.attemptId) // LOOP hook: the release his terms name to forget
+const repoReleaseBinding = async (value, body, audience) => repoReleaseBody(body) && repoKeys(value, ['schema', 'audience', 'method', 'pathname', 'bodySha256']) // LOOP hook
+  && value.schema === 'aukora.class3.action.v1' && value.audience === audience && value.method === 'POST' && value.pathname === '/_host/repo' // LOOP hook
+  && isSha(value.bodySha256) && value.bodySha256 === await digest(canonicalJson(body)) // LOOP hook
+const repoAge = pending => Math.max(0, Date.now() - pending.startedAt) // LOOP hook
+const repoApprovalRefusal = error => Object.assign(new Error('CLASS3_WEBAUTHN_REQUIRED'), { // LOOP hook: thrown, so the transaction rolls back
+  code: typeof error?.code === 'string' && /^CLASS3_[A-Z0-9_]{1,60}$/.test(error.code) ? error.code : 'CLASS3_WEBAUTHN_REQUIRED', status: 403 }) // LOOP hook
+// LOOP hook
 async function validRepoAttempt(value, audience, seedId) {
   return repoKeys(value, ['attemptId', 'status', 'startedAt', 'seedId', 'mergeBody', 'binding', 'proposalDigest'])
     && repoAttemptId(value.attemptId) && ['pending', 'unknown'].includes(value.status) && isSha(seedId) && value.seedId === seedId
@@ -1525,6 +1592,9 @@ async function readRepoProposalStatus(storage, audience) {
       if (!await validRepoAttempt(pending, audience, bootstrap?.seedId) || proposal === undefined
         || pending.proposalDigest !== await digest(canonicalJson(proposal))) invalid()
     }
+    const control = pending === undefined ? null : repoAttemptControl(await tx.get(REPO_ATTEMPT_OWNER_KEY), pending) // LOOP hook
+    const releasedSet = await tx.get(REPO_RELEASED_KEY) // LOOP hook: a damaged set is not shown, never trusted
+    const releases = repoReleasedSet(releasedSet) ? repoReleasedList(releasedSet).map(repoReleasedAnswer) : [] // LOOP hook
     let lastRepoMergeOutcome = null
     if (last !== undefined) {
       if (!validRepoStoredOutcome(last)) invalid()
@@ -1533,33 +1603,41 @@ async function readRepoProposalStatus(storage, audience) {
         ...(last.status === 'succeeded' ? { commitSha: last.commitSha } : { code: last.code }) }
     }
     return { stagedRepoProposal: proposal ?? null, lastRepoMergeOutcome,
-      repoMergeAttempt: pending ? { attemptId: pending.attemptId, status: pending.status, branch: pending.mergeBody.branch,
-        headSha: pending.mergeBody.headSha, startedAt: pending.startedAt } : null }
+      repoMergeAttempt: pending ? { attemptId: pending.attemptId, status: pending.status, state: repoAttemptState(pending, control), // LOOP hook
+        branch: pending.mergeBody.branch, baseSha: pending.mergeBody.baseSha, headSha: pending.mergeBody.headSha, startedAt: pending.startedAt, // LOOP hook
+        ageMs: repoAge(pending), reconcileAfterMs: REPO_MERGE_RECONCILE_AFTER_MS } : null, // LOOP hook
+      repoMergeReleased: releases.at(-1) ?? null, repoMergeReleases: releases } // LOOP hook: the newest, and every kept one by attempt id
   })
 }
 
-/** Claims fence GitHub dispatch across object recreation. Only the broker consumes Class 3 approval.
+/** Claims fence GitHub dispatch across object recreation. LOOP hook: begin_merge consumes his Class 3 approval inside
+ * its own transaction (context.consumeApproval), so an approval is never spent without its claimed attempt. // LOOP hook
  * Unknown remote outcomes stay blocked. Receipt commits are atomic; notifications are best effort.
  */
 async function mutateRepoProposal(storage, input, context) {
-  const { audience, expiresAt, seedId } = context
+  const { audience, expiresAt, seedId, consumeApproval } = context // LOOP hook
+  const ownerCall = ['mark_merge', 'merge_outcome'].includes(input?.action) // LOOP hook
   if (input?.action === 'stage') {
     if (!repoKeys(input, ['action', 'proposal']) || !await validRepoProposal(input.proposal, audience)
       || !repoProposalBranch(input.proposal.branch)) return fail('REPO_PROPOSAL_INVALID')
   } else if (input?.action === 'begin_merge') {
-    if (!repoKeys(input, ['action', 'mergeBody', 'binding']) || !await repoBinding(input.binding, input.mergeBody, audience)
+    if (!repoKeys(input, ['action', 'mergeBody', 'binding', 'owner']) || !repoOwnerNonce(input.owner) || !await repoBinding(input.binding, input.mergeBody, audience) // LOOP hook
       || !repoProposalBranch(input.mergeBody.branch)) return fail('REPO_MERGE_BINDING_INVALID')
-  } else if (input?.action === 'merge_outcome') {
-    if (!repoKeys(input, ['action', 'attemptId', 'outcome']) || !repoAttemptId(input.attemptId) || !repoOutcome(input.outcome)) return fail('REPO_MERGE_OUTCOME_INVALID')
+  } else if (ownerCall) { // LOOP hook
+    if (!repoKeys(input, input.action === 'mark_merge' ? ['action', 'owner'] : ['action', 'owner', 'outcome'], ['attemptId']) || !repoOwnerNonce(input.owner) // LOOP hook
+      || Object.hasOwn(input, 'attemptId') && !repoAttemptId(input.attemptId) || input.action === 'merge_outcome' && !repoOutcome(input.outcome)) return fail('REPO_MERGE_OUTCOME_INVALID') // LOOP hook
   } else if (input?.action === 'inspect_merge') {
     if (!repoKeys(input, ['action'])) return fail('REPO_PROPOSAL_ACTION_INVALID')
   } else if (input?.action === 'reconcile_merge') {
-    const v = input.verification
-    if (!repoKeys(input, ['action', 'attemptId', 'mergeBody', 'binding', 'verification']) || !repoAttemptId(input.attemptId)
-      || !await repoBinding(input.binding, input.mergeBody, audience)
-      || !repoKeys(v, ['mainSha', 'branchSha', 'treeSha', 'checkedAt']) || !repoSha(v.mainSha)
-      || !(v.branchSha === null || repoSha(v.branchSha)) || !repoSha(v.treeSha)
-      || !Number.isSafeInteger(v.checkedAt) || v.checkedAt <= 0) return fail('REPO_RECONCILE_INVALID')
+    if (!repoKeys(input, ['action', 'attemptId', 'mergeBody', 'binding', 'verification']) || !repoAttemptId(input.attemptId) // LOOP hook
+      || !await repoBinding(input.binding, input.mergeBody, audience) || !repoVerification(input.verification)) return fail('REPO_RECONCILE_INVALID') // LOOP hook
+  } else if (input?.action === 'release_attempt') { // LOOP hook (MUST 4): the owner's release, over its own exact terms
+    if (!repoKeys(input, ['action', 'release', 'binding', 'verification']) || !await repoReleaseBinding(input.binding, input.release, audience) // LOOP hook
+      || !repoVerification(input.verification)) return fail('REPO_RELEASE_INVALID') // LOOP hook
+  } else if (input?.action === 'inspect_released') { // LOOP hook
+    if (!repoKeys(input, ['action'])) return fail('REPO_PROPOSAL_ACTION_INVALID') // LOOP hook
+  } else if (input?.action === 'reconcile_released') { // LOOP hook
+    if (!repoKeys(input, ['action', 'attemptId', 'verification']) || !repoAttemptId(input.attemptId) || !repoVerification(input.verification)) return fail('REPO_RECONCILE_INVALID') // LOOP hook
   } else return fail('REPO_PROPOSAL_ACTION_INVALID')
   // A retry of the storage callback reuses one identity and never dispatches remote work.
   const attemptId = input.action === 'begin_merge' ? crypto.randomUUID() : null
@@ -1568,29 +1646,98 @@ async function mutateRepoProposal(storage, input, context) {
     if (bootstrap?.phase !== 'complete' || bootstrap.seedId !== seedId) return fail('BOOTSTRAP_REQUIRED', 503)
     if (expiresAt <= Date.now()) return fail('REPO_PROPOSAL_OWNER_REQUIRED', 403)
     const pending = await tx.get(REPO_ATTEMPT_KEY), last = await tx.get(REPO_OUTCOME_KEY)
-    if (input.action === 'inspect_merge' || input.action === 'reconcile_merge') {
+    const control = isObject(pending) ? repoAttemptControl(await tx.get(REPO_ATTEMPT_OWNER_KEY), pending) : null // LOOP hook
+    const release = async () => { await tx.delete(REPO_ATTEMPT_KEY); await tx.delete(REPO_ATTEMPT_OWNER_KEY) } // LOOP hook
+    if (input.action === 'inspect_released' || input.action === 'reconcile_released') { // LOOP hook: a released attempt, read again
+      const set = await tx.get(REPO_RELEASED_KEY) // LOOP hook
+      if (set !== undefined && !repoReleasedSet(set)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503) // LOOP hook
+      if (input.action === 'inspect_released') { // LOOP hook
+        const releases = repoReleasedList(set).map(repoReleasedAnswer) // LOOP hook
+        return { ok: true, released: releases.at(-1) ?? null, releases } // LOOP hook
+      } // LOOP hook
+      const keptList = repoReleasedList(set), released = keptList.find(kept => kept.attemptId === input.attemptId) // LOOP hook: by its id, whichever is newest
+      if (released === undefined) return fail('REPO_MERGE_ATTEMPT_STALE', 409) // LOOP hook
+      const v = input.verification, at = Date.now() // LOOP hook
+      if (v.checkedAt < released.releasedAt || v.checkedAt > at || at - v.checkedAt > 60000) return fail('REPO_RECONCILE_STALE', 409) // LOOP hook
+      if (released.state !== 'void-by-owner' || !repoHeadInMain(v, released)) return { ok: true, reconciled: false, released: repoReleasedAnswer(released) } // LOOP hook
+      const seen = { ...released, state: 'merged-after-release', mergedSeenAt: at } // LOOP hook
+      await tx.put(REPO_RELEASED_KEY, repoReleasedStored(keptList.map(kept => kept === released ? seen : kept))) // LOOP hook: only this one changes
+      const record = { attemptId: released.attemptId, at, branch: released.branch, baseSha: released.baseSha, headSha: released.headSha, treeSha: released.treeSha } // LOOP hook
+      // LOOP hook: the stored outcome becomes merged when it is still this attempt's; a newer attempt's outcome stays its own. // LOOP hook
+      if (last !== undefined && validRepoStoredOutcome(last) && last.attemptId === released.attemptId) await tx.put(REPO_OUTCOME_KEY, { ...record, status: 'succeeded', commitSha: released.headSha }) // LOOP hook
+      const proposal = await tx.get(REPO_STAGE_KEY) // LOOP hook
+      if (pending === undefined && await validRepoProposal(proposal, audience) && ['branch', 'baseSha', 'headSha', 'treeSha'].every(key => proposal.mergeBody[key] === released[key])) await tx.delete(REPO_STAGE_KEY) // LOOP hook
+      return { ok: true, reconciled: true, released: repoReleasedAnswer(seen), outcome: { ...record, status: 'succeeded', commitSha: released.headSha, state: 'merged-after-release' }, // LOOP hook
+        notification: { type: 'repo:merged', commitSha: released.headSha, branch: released.branch } } // LOOP hook
+    } // LOOP hook
+    if (input.action === 'inspect_merge' || input.action === 'reconcile_merge' || input.action === 'release_attempt') { // LOOP hook
       if (pending === undefined) return fail('REPO_MERGE_ATTEMPT_MISSING', 409)
       if (!await validRepoAttempt(pending, audience, seedId) || last !== undefined && !validRepoStoredOutcome(last)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503)
-      if (input.action === 'inspect_merge') return { ok: true, attemptId: pending.attemptId, mergeBody: pending.mergeBody, binding: pending.binding }
-      if (pending.attemptId !== input.attemptId || canonicalJson(pending.mergeBody) !== canonicalJson(input.mergeBody)
-        || canonicalJson(pending.binding) !== canonicalJson(input.binding)) return fail('REPO_MERGE_ATTEMPT_STALE', 409)
+      const age = repoAge(pending), timing = { ageMs: age, reconcileAfterMs: REPO_MERGE_RECONCILE_AFTER_MS } // LOOP hook
+      if (input.action === 'inspect_merge') return { ok: true, attemptId: pending.attemptId, mergeBody: pending.mergeBody, binding: pending.binding, // LOOP hook
+        state: repoAttemptState(pending, control), startedAt: pending.startedAt, ...timing } // LOOP hook
+      const releasing = input.action === 'release_attempt' // LOOP hook
+      if (releasing ? pending.attemptId !== input.release.attemptId || pending.mergeBody.baseSha !== input.release.baseSha || pending.mergeBody.headSha !== input.release.headSha // LOOP hook
+        : pending.attemptId !== input.attemptId || canonicalJson(pending.mergeBody) !== canonicalJson(input.mergeBody) // LOOP hook
+        || canonicalJson(pending.binding) !== canonicalJson(input.binding)) return fail('REPO_MERGE_ATTEMPT_STALE', 409) // LOOP hook
       const v = input.verification, at = Date.now()
       if (v.checkedAt < pending.startedAt || v.checkedAt > at || at - v.checkedAt > 60000) return fail('REPO_RECONCILE_STALE', 409)
-      // A base/divergent ref cannot prove an in-flight write failed. Never redispatch it.
-      if (v.mainSha !== pending.mergeBody.headSha || v.treeSha !== pending.mergeBody.treeSha) {
-        return { ok: true, reconciled: false, outcome: { status: 'unknown', code: 'REPO_MERGE_PENDING' } }
+      const body = pending.mergeBody, record = { attemptId: pending.attemptId, at, branch: body.branch, baseSha: body.baseSha, headSha: body.headSha, treeSha: body.treeSha } // LOOP hook
+      if (repoHeadInMain(v, body)) { // LOOP hook: main is the approved head or contains it: merged, at any age, with no approval spent
+        const outcome = { ...record, status: 'succeeded', commitSha: body.headSha } // LOOP hook
+        await tx.put(REPO_OUTCOME_KEY, outcome) // LOOP hook
+        await release() // LOOP hook
+        const proposal = await tx.get(REPO_STAGE_KEY) // LOOP hook
+        if (await validRepoProposal(proposal, audience) && await digest(canonicalJson(proposal)) === pending.proposalDigest) await tx.delete(REPO_STAGE_KEY) // LOOP hook
+        return { ok: true, reconciled: true, outcome: repoOutcomeAnswer(outcome), notification: { type: 'repo:merged', commitSha: outcome.commitSha, branch: outcome.branch } } // LOOP hook
       }
-      const outcome = { attemptId: pending.attemptId, status: 'succeeded', at, branch: pending.mergeBody.branch,
-        baseSha: pending.mergeBody.baseSha, headSha: pending.mergeBody.headSha, treeSha: pending.mergeBody.treeSha, commitSha: pending.mergeBody.headSha }
-      await tx.put(REPO_OUTCOME_KEY, outcome)
-      await tx.delete(REPO_ATTEMPT_KEY)
-      const proposal = await tx.get(REPO_STAGE_KEY)
-      if (await validRepoProposal(proposal, audience) && await digest(canonicalJson(proposal)) === pending.proposalDigest) await tx.delete(REPO_STAGE_KEY)
-      return { ok: true, reconciled: true, outcome, notification: { type: 'repo:merged', commitSha: outcome.commitSha, branch: outcome.branch } }
+      // LOOP hook: younger than the deadline plus the margin, its owning call may still be running: a base or divergent
+      // ref proves nothing yet, so nothing is released and nothing is redispatched; a release waits too. // LOOP hook
+      if (age <= REPO_MERGE_RECONCILE_AFTER_MS) return releasing ? fail('REPO_MERGE_PENDING', 409, { outcome: 'unknown', ...timing }) // LOOP hook
+        : { ok: true, reconciled: false, outcome: { status: 'unknown', code: 'REPO_MERGE_PENDING' }, ...timing } // LOOP hook
+      // LOOP hook: past the margin, an attempt still `claimed` is void whatever main is: its owning call sends the ref update
+      // only after its mark is answered, so an unmarked attempt sent nothing. No approval is spent on it. // LOOP hook
+      if (control?.state === 'claimed') { // LOOP hook
+        const outcome = { ...record, status: 'failed', code: 'REPO_APPROVAL_SPENT_VOID' } // LOOP hook
+        await tx.put(REPO_OUTCOME_KEY, outcome) // LOOP hook
+        await release() // LOOP hook
+        return { ok: true, reconciled: true, outcome: repoOutcomeAnswer(outcome) } // LOOP hook
+      } // LOOP hook
+      // LOOP hook (MUST 4): marked, dispatched or a legacy record, found by a later call, with main neither the head
+      // nor containing it: whatever the age and whatever main is (its base included: a ref update still in flight may land), // LOOP hook
+      // it stays unknown and says so, until the owner releases it. // LOOP hook
+      if (!releasing) return { ok: true, reconciled: false, outcome: { status: 'unknown', code: 'REPO_REF_OUTCOME_UNKNOWN' }, mainSha: v.mainSha, baseSha: body.baseSha, headSha: body.headSha, ...timing } // LOOP hook
+      // LOOP hook: the owner's release consumes his fresh approval over these exact terms in this transaction; a refusal throws,
+      // so nothing is written. Then the attempt is void-by-owner and a new merge may begin. // LOOP hook
+      // LOOP hook: room for it among the kept releases is decided BEFORE his approval is spent.
+      const kept = await tx.get(REPO_RELEASED_KEY) // LOOP hook
+      if (kept !== undefined && !repoReleasedSet(kept)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503) // LOOP hook
+      const keptList = repoReleasedList(kept), oldest = keptList.find(record => record.state === 'void-by-owner') // LOOP hook: the oldest unresolved one
+      const resolved = keptList.find(record => record.state === 'merged-after-release') ?? null // LOOP hook: the oldest resolved one
+      // LOOP hook: at the bound with every kept release unresolved, the owner's way out is a
+      // release whose passkey terms also name the OLDEST unresolved one (forgets: its id; the card shows its head): it is // LOOP hook
+      // dropped in this transaction. Naming one is accepted only then, and only that one; otherwise refused before his // LOOP hook
+      // approval is spent, so nothing is forgotten that need not be. // LOOP hook
+      const forgets = input.release.forgets, full = keptList.length >= REPO_RELEASED_MAX // LOOP hook
+      if (forgets !== undefined && (!full || resolved !== null || oldest?.attemptId !== forgets)) return fail('REPO_RELEASE_FORGET_STALE', 409, { limit: REPO_RELEASED_MAX }) // LOOP hook
+      const dropped = !full ? null : forgets !== undefined ? oldest : resolved ?? false // LOOP hook
+      if (dropped === false) return fail('REPO_RELEASE_LIMIT', 409, { limit: REPO_RELEASED_MAX, unresolved: keptList.length, reason: REPO_RELEASE_LIMIT_WORDS, // LOOP hook
+        oldest: { attemptId: oldest.attemptId, branch: oldest.branch, headSha: oldest.headSha } }) // LOOP hook
+      if (keptList.some(each => each.attemptId === pending.attemptId)) return fail('REPO_MERGE_ATTEMPT_STALE', 409) // LOOP hook: never overwritten
+      let approval // LOOP hook
+      try { approval = await consumeApproval?.(tx, input.binding) } catch (error) { throw repoApprovalRefusal(error) } // LOOP hook
+      if (approval?.ok !== true || canonicalJson(approval.binding) !== canonicalJson(input.binding) || !Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= Date.now()) throw repoApprovalRefusal() // LOOP hook
+      const outcome = { ...record, status: 'failed', code: REPO_VOID_BY_OWNER } // LOOP hook
+      await tx.put(REPO_OUTCOME_KEY, outcome) // LOOP hook
+      await release() // LOOP hook
+      const released = { attemptId: pending.attemptId, branch: body.branch, baseSha: body.baseSha, headSha: body.headSha, treeSha: body.treeSha, releasedAt: at, state: 'void-by-owner' } // LOOP hook
+      await tx.put(REPO_RELEASED_KEY, repoReleasedStored([...keptList.filter(each => each !== dropped), released])) // LOOP hook: the dropped one (if any) leaves, this one joins
+      return { ok: true, reconciled: true, released: repoReleasedAnswer(released), outcome: repoOutcomeAnswer(outcome), mainSha: v.mainSha, ...timing } // LOOP hook
     }
-    if (input.action !== 'merge_outcome') {
+    if (!ownerCall) { // LOOP hook
       if (last !== undefined && !validRepoStoredOutcome(last)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503)
-      if (pending !== undefined || last?.status === 'unknown') return fail('REPO_MERGE_PENDING', 409, { outcome: 'unknown' })
+      if (pending !== undefined || last?.status === 'unknown') return fail('REPO_MERGE_PENDING', 409, { outcome: 'unknown', // LOOP hook
+        ...(isObject(pending) && Number.isSafeInteger(pending.startedAt) ? { ageMs: repoAge(pending), reconcileAfterMs: REPO_MERGE_RECONCILE_AFTER_MS } : {}) }) // LOOP hook
       if (input.action === 'stage') {
         await tx.put(REPO_STAGE_KEY, input.proposal)
         return { ok: true, proposal: input.proposal, notification: { type: 'repo:staged', proposal: input.proposal } }
@@ -1599,19 +1746,35 @@ async function mutateRepoProposal(storage, input, context) {
       if (proposal === undefined) return fail('REPO_PROPOSAL_MISSING', 409)
       if (!await validRepoProposal(proposal, audience)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503)
       if (canonicalJson(proposal.mergeBody) !== canonicalJson(input.mergeBody) || canonicalJson(proposal.binding) !== canonicalJson(input.binding)) return fail('REPO_PROPOSAL_CHANGED', 409)
-      await tx.put(REPO_ATTEMPT_KEY, { attemptId, status: 'pending', startedAt: Date.now(), seedId,
+      // LOOP hook: every check above passed; his approval is consumed here, in this transaction, and the attempt claimed
+      // in the same one. A refusal throws, so neither the consumption nor the claim is written. // LOOP hook
+      let approval // LOOP hook
+      try { approval = await consumeApproval?.(tx, proposal.binding) } catch (error) { throw repoApprovalRefusal(error) } // LOOP hook
+      if (approval?.ok !== true || canonicalJson(approval.binding) !== canonicalJson(proposal.binding) // LOOP hook
+        || !Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= Date.now()) throw repoApprovalRefusal() // LOOP hook
+      const startedAt = Date.now() // LOOP hook
+      await tx.put(REPO_ATTEMPT_KEY, { attemptId, status: 'pending', startedAt, seedId, // LOOP hook
         mergeBody: proposal.mergeBody, binding: proposal.binding, proposalDigest: await digest(canonicalJson(proposal)) })
-      return { ok: true, attemptId }
+      await tx.put(REPO_ATTEMPT_OWNER_KEY, { attemptId, owner: input.owner, state: 'claimed', approvalExpiresAt: approval.expiresAt }) // LOOP hook
+      return { ok: true, attemptId, startedAt, approvalExpiresAt: approval.expiresAt } // LOOP hook
     }
-    if (!isObject(pending) || pending.attemptId !== input.attemptId) return fail('REPO_MERGE_ATTEMPT_STALE', 409)
+    // LOOP hook: only the call that claimed the attempt (its owner nonce) advances or settles it; a legacy record has none.
+    if (!isObject(pending) || control === null || control.owner !== input.owner || Object.hasOwn(input, 'attemptId') && pending.attemptId !== input.attemptId) return fail('REPO_MERGE_ATTEMPT_STALE', 409) // LOOP hook
     if (!await validRepoAttempt(pending, audience, seedId)) return fail('REPO_PROPOSAL_STORAGE_INVALID', 503)
-    if (pending.status === 'unknown' && input.outcome.status === 'failed') return fail('REPO_MERGE_OUTCOME_UNKNOWN', 409, { outcome: 'unknown' })
+    const state = control.state // LOOP hook
+    if (input.action === 'mark_merge') { // LOOP hook: claimed -> marked; a retry after a lost answer is the same mark
+      if (state === 'dispatched') return fail('REPO_MERGE_OUTCOME_UNKNOWN', 409, { outcome: 'unknown' }) // LOOP hook
+      if (state === 'claimed') await tx.put(REPO_ATTEMPT_OWNER_KEY, { ...control, state: 'marked' }) // LOOP hook
+      return { ok: true, attemptId: pending.attemptId, state: 'marked' } // LOOP hook
+    } // LOOP hook
+    // LOOP hook: void (failed) only from claimed or marked: the owner knows nothing was sent. Once dispatched, never.
+    if (state === 'dispatched' && input.outcome.status === 'failed') return fail('REPO_MERGE_OUTCOME_UNKNOWN', 409, { outcome: 'unknown' }) // LOOP hook
     if (input.outcome.status === 'succeeded' && input.outcome.commitSha !== pending.mergeBody.headSha) return fail('REPO_MERGE_OUTCOME_INVALID')
-    const outcome = { attemptId: input.attemptId, ...input.outcome, at: Date.now(), branch: pending.mergeBody.branch,
+    const outcome = { attemptId: pending.attemptId, ...input.outcome, at: Date.now(), branch: pending.mergeBody.branch, // LOOP hook
       baseSha: pending.mergeBody.baseSha, headSha: pending.mergeBody.headSha, treeSha: pending.mergeBody.treeSha }
     await tx.put(REPO_OUTCOME_KEY, outcome)
-    if (outcome.status === 'unknown') await tx.put(REPO_ATTEMPT_KEY, { ...pending, status: 'unknown' })
-    else await tx.delete(REPO_ATTEMPT_KEY)
+    if (outcome.status === 'unknown') { await tx.put(REPO_ATTEMPT_KEY, { ...pending, status: 'unknown' }); await tx.put(REPO_ATTEMPT_OWNER_KEY, { ...control, state: 'dispatched' }) } // LOOP hook
+    else await release() // LOOP hook
     let notification
     if (outcome.status === 'succeeded') {
       const proposal = await tx.get(REPO_STAGE_KEY)
@@ -1619,7 +1782,7 @@ async function mutateRepoProposal(storage, input, context) {
       if (await validRepoProposal(proposal, audience) && await digest(canonicalJson(proposal)) === pending.proposalDigest) await tx.delete(REPO_STAGE_KEY)
       notification = { type: 'repo:merged', commitSha: outcome.commitSha, branch: outcome.branch }
     }
-    return { ok: true, outcome, ...(notification ? { notification } : {}) }
+    return { ok: true, outcome: repoOutcomeAnswer(outcome), ...(notification ? { notification } : {}) } // LOOP hook
   })
 }
 
@@ -2155,6 +2318,7 @@ export class X61HeadDurableObject {
       }
       const bootstrap = await this.store.bootstrapStatus()
       if (bootstrap.phase !== 'complete' || ((messagesRoute || statusRoute || wakeRoute || mirrorUpdateRoute || aumlokRoute || governanceRoute || checkpointPolicyRoute || diagnosticsRoute || stateDiffRoute || speechPassBudgetRoute || repoProposalRoute || estateRoute) && request.headers.get('x-x6-bootstrap-seed') !== bootstrap.seedId)) return Response.json(fail('BOOTSTRAP_REQUIRED', 503, { phase: bootstrap.phase, seedId: bootstrap.seedId }), { status: 503 })
+      if (path === ELEVEN_SPEECH_HEAD_ROUTE) return await handleElevenSpeechHeadRoute(request, { url, seedId: bootstrap.seedId, storage: this.state.storage, ownerEmail: this.env?.OWNER_EMAIL }) // VOICE hook
       // NOSTR hook: the owner's publication of her signed head announcement, and the Worker's internal latest read.
       if (path === NOSTR_ANCHOR_ROUTE || path === NOSTR_ANCHOR_LATEST_PATH) return await handleNostrAnchorRoute(request, { url, bootstrap, storage: this.state.storage, env: this.env,
         owner: repoOwnerContext(request, this.env) !== null, readSelectedHead: tx => selected(tx), authorizeInTransaction: (tx, body) => this.authorizeClass3InTransaction(tx, request, body) })
@@ -2180,7 +2344,8 @@ export class X61HeadDurableObject {
         const context = repoOwnerContext(request, this.env)
         if (!context) return Response.json(fail('REPO_PROPOSAL_OWNER_REQUIRED', 403), { status: 403 })
         if (!/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') ?? '')) return Response.json(fail('REPO_PROPOSAL_INVALID'), { status: 400 })
-        const result = await mutateRepoProposal(this.state.storage, await readBoundedBootstrapJson(request, REPO_PROPOSAL_BYTES + 1024), context)
+        const result = await mutateRepoProposal(this.state.storage, await readBoundedBootstrapJson(request, REPO_PROPOSAL_BYTES + 1024), { ...context, // LOOP hook
+          consumeApproval: (tx, binding) => this.aumlokStore?.consumeApprovalInTransaction(tx, request.headers.get('x-x6-class3-approval'), binding, binding.audience) }) // LOOP hook
         const { notification, ...body } = result
         if (notification) {
           try { await this.broadcast(notification) }
@@ -2287,6 +2452,33 @@ export class X61HeadDurableObject {
         if (!this.aumlokOrigins.includes(input?.binding?.audience)) return Response.json(fail('CLASS3_WEBAUTHN_REQUIRED', 403), { status: 403 })
         return Response.json(await this.consumeClass3(input.token, input.binding, input.binding.audience), { headers: { 'cache-control': 'no-store' } })
       }
+      // HOLDER hook: READ-ONLY, for the Worker alone (internal mark; no public route reaches it): was THIS approval (its
+      // HOLDER hook: bearer) consumed for THIS exact action (`binding`)? `consumed`, `unconsumed`, `other` (it approves
+      // HOLDER hook: another action: never to be accepted for this one), `none` (HEAD can show it was never consumed: a
+      // HOLDER hook: bearer of a shape HEAD never issues, or a binding for another origin) or `unknown`. The verdict is the
+      // HOLDER hook: store's own validated view (its MACs checked, status()); the raw row only maps the bearer's hash to
+      // HOLDER hook: its approval id. Job 4: an approval's history can be discarded (it expired, or the device that
+      // HOLDER hook: made it was removed), so a bearer of HEAD's own shape whose live record is absent is never `none`:
+      // HOLDER hook: review: `forgotten` (HEAD read its store and holds no live record: may be spent, no repeat can tell),
+      // HOLDER hook: kept apart from `unknown` (HEAD's own read failed: a repeat may tell). Nothing is written, consumed,
+      // HOLDER hook: counted or audited. thread-mount.mjs asks it on a repeat.
+      if (path === '/_head/class3-inspect' && request.method === 'POST') { // HOLDER hook
+        const input = await readBoundedBootstrapJson(request, AUMLOK_LIMITS.requestBytes) // HOLDER hook
+        let approval = 'none' // HOLDER hook
+        try { // HOLDER hook
+          if (this.aumlokStore && isObject(input) && typeof input.token === 'string' && isObject(input.binding) && this.aumlokOrigins.includes(input.binding.audience)) { // HOLDER hook
+            const tokenHash = await digest(input.token) // HOLDER hook: aumlok.mjs keeps SHA-256 hex of the bearer
+            const stored = await this.state.storage.get('aumlok:v1') // HOLDER hook: aumlok.mjs AUMLOK_STORAGE_KEY
+            const record = Array.isArray(stored?.approvals) ? stored.approvals.find(item => item?.tokenHash === tokenHash) : undefined // HOLDER hook
+            const grant = typeof record?.approvalId === 'string' ? (await this.aumlokStore.status()).approvedGrants.find(item => item.approvalId === record.approvalId) : undefined // HOLDER hook
+            if (grant) approval = canonicalJson(grant.binding) !== canonicalJson(input.binding) ? 'other' : grant.consumedAt === null ? 'unconsumed' : 'consumed' // HOLDER hook
+            // HOLDER hook: no live record: a kept but lapsed one, or a bearer of the shape HEAD issues (32 random
+            // HOLDER hook: bytes, base64url, as aumlok.mjs approvalFor requires) whose record may be gone: `forgotten`.
+            else if (record !== undefined || /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(input.token)) approval = 'forgotten' // HOLDER hook
+          } // HOLDER hook
+        } catch { approval = 'unknown' } // HOLDER hook
+        return Response.json({ ok: true, approval }, { headers: { 'cache-control': 'no-store' } }) // HOLDER hook
+      } // HOLDER hook
       if (path === '/_host/governance/verify' && request.method === 'POST') {
         if (url.search || url.hash || request.headers.get('origin') !== url.origin || request.headers.get('sec-fetch-site') !== 'same-origin') return Response.json(fail('CLASS3_ORIGIN_REQUIRED', 403), { status: 403 })
         const input = await readBoundedBootstrapJson(request, AUMLOK_LIMITS.requestBytes)

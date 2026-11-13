@@ -10,6 +10,8 @@ const STAGE = 'head:staged-repo-proposal'
 const ATTEMPT = 'head:repo-merge-attempt'
 const OUTCOME = 'head:last-repo-merge-outcome'
 const deferred = () => Promise.withResolvers()
+// The call that claims an attempt names it by this nonce; only it advances or settles the attempt (MUST 3b).
+const OWNER = 'fixture-owner-nonce-0000000000001', APPROVAL = 'fixture-approval-token'
 
 function storageFixture() {
   let data = new Map(), tail = Promise.resolve(), hook = null
@@ -58,9 +60,18 @@ async function proposal(label = 'first', branch = `auma/proposal/${label}`) {
 async function fixture() {
   const storage = storageFixture(), notifications = []
   const env = { PUBLIC_HOST: new URL(ORIGIN).host, OWNER_EMAIL: 'owner@example.invalid', OWNER_PUBLIC_KEY_HEX: '11'.repeat(32), AUMLOK_CUSTODY_PEPPER: '22'.repeat(32) }
+  // MUST 3: begin_merge consumes his approval inside HEAD's own transaction. A synthetic approval store stands in
+  // for AUMLOK (the real one needs a passkey ceremony): it accepts the fixture token once per begin and counts each call.
+  const approvals = { calls: [], refuse: null }
   const create = () => {
     const head = new X61HeadDurableObject({ storage, getWebSockets: () => [] }, env)
     head.broadcast = async value => { notifications.push(value) }
+    head.aumlokStore = { consumeApprovalInTransaction: async (tx, token, binding, origin) => {
+      approvals.calls.push({ token, binding, origin, inTransaction: typeof tx?.put === 'function' })
+      if (approvals.refuse) { await approvals.refuse(tx); throw Object.assign(new Error('CLASS3_WEBAUTHN_REQUIRED'), { code: 'CLASS3_WEBAUTHN_REQUIRED', status: 403 }) }
+      if (token !== APPROVAL) throw Object.assign(new Error('CLASS3_WEBAUTHN_REQUIRED'), { code: 'CLASS3_WEBAUTHN_REQUIRED', status: 403 })
+      return { ok: true, binding, approvalId: null, expiresAt: Date.now() + 60000 }
+    } }
     return head
   }
   const head = create(), code = 'export const organ = "synthetic";\n', sha = await digest(code)
@@ -85,9 +96,10 @@ async function fixture() {
   }
   const status = object => call(undefined, { path: '/_head/promotion-status', head: object })
   const stage = (p, options) => call({ action: 'stage', proposal: p }, options)
-  const begin = (p, options) => call({ action: 'begin_merge', mergeBody: p.mergeBody, binding: p.binding }, options)
-  const outcome = (attemptId, value, options) => call({ action: 'merge_outcome', attemptId, outcome: value }, options)
-  return { storage, env, access, seedId, ball, head, create, notifications, call, stage, begin, outcome, status }
+  const begin = (p, options = {}) => call({ action: 'begin_merge', mergeBody: p.mergeBody, binding: p.binding, owner: options.owner ?? OWNER },
+    { ...options, headers: { 'x-x6-class3-approval': APPROVAL, ...options.headers } })
+  const outcome = (attemptId, value, options = {}) => call({ action: 'merge_outcome', attemptId, owner: options.owner ?? OWNER, outcome: value }, options)
+  return { storage, env, access, seedId, ball, head, create, notifications, call, stage, begin, outcome, status, approvals }
 }
 
 function failure(result, status, code) {
@@ -132,8 +144,11 @@ test('inspect and reconcile require internal identity, matching seed and an unex
 
 test('inspection returns only correlated merge identity without mutating persisted state', async () => {
   const fx = await pendingFixture(), before = fx.storage.snapshot(), notifications = structuredClone(fx.notifications)
-  assert.deepEqual((await fx.call({ action: 'inspect_merge' }, { head: fx.create() })).body,
-    { ok: true, attemptId: fx.attemptId, mergeBody: fx.p.mergeBody, binding: fx.p.binding })
+  // Also the attempt's state and age, so a second call can say how long to wait; never its owner nonce.
+  const { ageMs, ...inspected } = (await fx.call({ action: 'inspect_merge' }, { head: fx.create() })).body
+  assert.deepEqual(inspected, { ok: true, attemptId: fx.attemptId, mergeBody: fx.p.mergeBody, binding: fx.p.binding, state: 'dispatched',
+    startedAt: (await fx.storage.get(ATTEMPT)).startedAt, reconcileAfterMs: 60000 })
+  assert.equal(Number.isSafeInteger(ageMs) && ageMs >= 0, true)
   assert.deepEqual(fx.storage.snapshot(), before); assert.deepEqual(fx.notifications, notifications)
   failure(await fx.call({ action: 'inspect_merge', attemptId: fx.attemptId }), 400, 'REPO_PROPOSAL_ACTION_INVALID')
   const empty = await fixture()
@@ -172,6 +187,66 @@ test('base, divergent main and wrong tree preserve both pending and unknown reco
   }
 })
 
+test('MUST 4 (rewrites MUST 3d): past the deadline plus margin a CLAIMED attempt is void whatever main is; a DISPATCHED one stays unknown with main at its base too, and is merged once its head is in main', async () => {
+  for (const unknown of [false, true]) {
+    // Main never moved. Claimed (never marked, so nothing was sent): void, his approval spent, the stage stays.
+    // Dispatched: a ref update that was sent may still land, so time alone never voids it (MUST 4).
+    const base = await pendingFixture(unknown)
+    await base.storage.put(ATTEMPT, { ...await base.storage.get(ATTEMPT), startedAt: Date.now() - 60001 })
+    const baseBefore = base.storage.snapshot(), input = base.input(); input.verification.mainSha = base.p.baseSha; input.verification.headInMain = false
+    const answer = await base.call(input)
+    assert.equal(answer.status, 200)
+    if (unknown) {
+      assert.equal(answer.body.reconciled, false); assert.deepEqual(answer.body.outcome, { status: 'unknown', code: 'REPO_REF_OUTCOME_UNKNOWN' })
+      assert.equal(answer.body.mainSha, base.p.baseSha); assert.equal(answer.body.baseSha, base.p.baseSha); assert.equal(answer.body.headSha, base.p.headSha)
+      assert.equal(answer.body.ageMs >= 60001, true); assert.equal(answer.body.reconcileAfterMs, 60000)
+      assert.deepEqual(base.storage.snapshot(), baseBefore)
+      assert.equal((await base.status(base.create())).body.repoMergeAttempt.state, 'dispatched')
+    } else {
+      assert.equal(answer.body.reconciled, true)
+      assert.equal(answer.body.outcome.status, 'failed'); assert.equal(answer.body.outcome.state, 'void'); assert.equal(answer.body.outcome.code, 'REPO_APPROVAL_SPENT_VOID')
+      const view = (await base.status(base.create())).body
+      assert.equal(view.repoMergeAttempt, null); assert.equal(view.lastRepoMergeOutcome.status, 'failed'); assert.deepEqual(view.stagedRepoProposal, base.p)
+    }
+    assert.equal(base.notifications.some(item => item.type === 'repo:merged'), false)
+    // Main somewhere else, the head not in it (or GitHub could not say): dispatched stays unknown with both values;
+    // claimed is void whatever main is.
+    for (const headInMain of [false, null]) {
+      const other = await pendingFixture(unknown)
+      await other.storage.put(ATTEMPT, { ...await other.storage.get(ATTEMPT), startedAt: Date.now() - 60001 })
+      const before = other.storage.snapshot(), divergent = other.input(); divergent.verification.mainSha = 'e'.repeat(40); divergent.verification.headInMain = headInMain
+      const held = await other.call(divergent)
+      assert.equal(held.status, 200)
+      if (unknown) {
+        assert.equal(held.body.reconciled, false)
+        assert.deepEqual(held.body.outcome, { status: 'unknown', code: 'REPO_REF_OUTCOME_UNKNOWN' })
+        assert.equal(held.body.mainSha, 'e'.repeat(40)); assert.equal(held.body.baseSha, other.p.baseSha); assert.equal(held.body.headSha, other.p.headSha)
+        assert.deepEqual(other.storage.snapshot(), before)
+      } else {
+        assert.equal(held.body.reconciled, true); assert.equal(held.body.outcome.code, 'REPO_APPROVAL_SPENT_VOID'); assert.equal(held.body.outcome.state, 'void')
+        assert.equal((await other.status(other.create())).body.repoMergeAttempt, null)
+      }
+    }
+    // Main at a third commit that CONTAINS the head (SHOULD 1): merged, young or old, claimed or dispatched.
+    for (const age of [1000, 60001]) {
+      const ahead = await pendingFixture(unknown)
+      await ahead.storage.put(ATTEMPT, { ...await ahead.storage.get(ATTEMPT), startedAt: Date.now() - age })
+      const contained = ahead.input(); contained.verification.mainSha = 'e'.repeat(40); contained.verification.headInMain = true
+      const merged = await ahead.call(contained)
+      assert.equal(merged.body.reconciled, true, `${unknown} ${age}`); assert.equal(merged.body.outcome.state, 'merged'); assert.equal(merged.body.outcome.commitSha, ahead.p.headSha)
+      assert.equal((await ahead.status()).body.lastRepoMergeOutcome.status, 'succeeded')
+      // The wrong tree is never merged, whatever ancestry says.
+      const wrong = await pendingFixture(unknown), tree = wrong.input(); tree.verification.mainSha = 'e'.repeat(40); tree.verification.headInMain = true; tree.verification.treeSha = 'e'.repeat(40)
+      assert.equal((await wrong.call(tree)).body.reconciled, false)
+    }
+  }
+  // Exactly at the limit it is still young: nothing is released.
+  const young = await pendingFixture(false)
+  await young.storage.put(ATTEMPT, { ...await young.storage.get(ATTEMPT), startedAt: Date.now() - 59000 })
+  const input = young.input(); input.verification.mainSha = young.p.baseSha
+  assert.deepEqual((await young.call(input)).body.outcome, { status: 'unknown', code: 'REPO_MERGE_PENDING' })
+})
+
 test('stale attempts, changed valid bindings and stale observation times cannot complete a merge', async () => {
   const fx = await pendingFixture(), before = fx.storage.snapshot()
   const wrongAttempt = fx.input(); wrongAttempt.attemptId = crypto.randomUUID()
@@ -195,7 +270,7 @@ test('malformed evidence and caller-added authority are refused without writes',
     value => { value.verification.mainSha = 'bad' }, value => { value.verification.branchSha = false },
     value => { delete value.verification.treeSha }, value => { value.verification.treeSha = 'F'.repeat(40) },
     value => { value.verification.checkedAt = 0 }, value => { value.verification.checkedAt = 'now' },
-    value => { value.verification.extra = true }, value => { value.owner = fx.access },
+    value => { value.verification.extra = true }, value => { value.owner = fx.access }, value => { value.verification.headInMain = 'yes' }, value => { value.verification.headInMain = 1 },
   ]) {
     const input = structuredClone(fx.input()); mutate(input)
     failure(await fx.call(input), 400, 'REPO_RECONCILE_INVALID')

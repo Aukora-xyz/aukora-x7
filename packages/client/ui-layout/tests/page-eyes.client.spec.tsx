@@ -72,7 +72,7 @@ describe('Round 36: auma_eyes in the page when the host has none', () => {
     const fetchImpl = (async (input: RequestInfo | URL) => {
       const path = String(input)
       if (path === '/_head/ball?meta=1') return Response.json({ ok: true, ballId: 'b'.repeat(64), epoch: 164, lease: null })
-      if (path === '/api/health') return Response.json({ ok: true, buildSha: '84b95c22aaaa' })
+      if (path === '/api/health') return Response.json({ ok: true, buildSha: 'cab991aeaaaa' })
       return new Response('no', { status: 404 })
     }) as typeof fetch
     const channel = page as unknown as BroadcastChannel
@@ -95,9 +95,9 @@ describe('Round 36: auma_eyes in the page when the host has none', () => {
       type Shot = { frame: string; pngBase64: string; watermark: EyesStamp; ringPath: string; projection: EyesProjection }
       const answer = await shot.json() as Shot
       expect(answer.frame).toBe('layout-drawing')
-      expect(answer.watermark).toEqual({ epoch: '164', build: '84b95c22aaaa', at: '2026-11-10T09:00:00.000Z',
+      expect(answer.watermark).toEqual({ epoch: '164', build: 'cab991aeaaaa', at: '2026-11-10T09:00:00.000Z',
         sha256: createHash('sha256').update(JSON.stringify(answer.projection)).digest('hex') })
-      expect(stampWords(answer.watermark)).toBe(`epoch 164 · 84b95c22aaaa · 2026-11-10T09:00:00.000Z · sha256 ${answer.watermark.sha256}`)
+      expect(stampWords(answer.watermark)).toBe(`epoch 164 · cab991aeaaaa · 2026-11-10T09:00:00.000Z · sha256 ${answer.watermark.sha256}`)
       expect(drawn.at(-1)?.stamp).toEqual(answer.watermark)
       for (const path of CAPTURE_PATHS) expect(Buffer.from(vfs.readFileSync(path)).toString('base64')).toBe(PNG)
       expect(answer.ringPath).toBe(`${CAPTURE_RING_DIR}/20261110T090000000Z-${answer.watermark.sha256.slice(0, 12)}.png`)

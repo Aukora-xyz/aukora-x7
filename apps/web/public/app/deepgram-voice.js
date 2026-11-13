@@ -103,6 +103,12 @@ export const DISCARD_MS = 1500;
 export const FLUX_KEEPALIVE_MS = 25000;
 /** The most text sent to Deepgram as one piece; a longer sentence is sent as several pieces, whole. */
 export const SPEAK_PIECE_CHARS = 1800;
+/**
+ * How long Deepgram waits in silence before it decides he has finished speaking (`endpointing` on the listening
+ * stream). It comes BEFORE his `final` reaches the page, so the timing line cannot measure it and shows it as this
+ * constant. Named here so the listening URL and the line can never disagree; its value is unchanged (B4 is later).
+ */
+export const END_OF_SPEECH_MS = 800;
 const OWNER_CHANNEL = 'auma-live-voice-owner';
 
 /**
@@ -508,7 +514,7 @@ export function voiceSocketFor(url, deps = {}) {
     let upstream;
     try {
       upstream = new WebSocketImpl(`${LISTEN_URL}?model=nova-3&encoding=linear16&sample_rate=16000&channels=1&interim_results=true`
-        + '&endpointing=800&utterance_end_ms=1000&vad_events=true&smart_format=true'
+        + `&endpointing=${END_OF_SPEECH_MS}&utterance_end_ms=1000&vad_events=true&smart_format=true`
         + '&keyterm=Auma&keyterm=Aukora&keyterm=Pentora&keyterm=AUMLOK&keyterm=Sienna&mip_opt_out=true', ['bearer', pass]);
     } catch { finish(1006); return; }
     listen = upstream;
@@ -615,4 +621,165 @@ export function voiceInputPlan(facts = {}) {
   // Still waiting on the organ: nothing is known to be missing yet, so nothing is said and nothing else listens.
   if (fact('organPending')) return inputPlan('organ', null, false);
   return inputPlan('typing', VOICE_INPUT_UNAVAILABLE_STATUS, true);
+}
+
+// ---- the timing line: where the time of one voice turn goes (measurement only) ----
+//
+// WHY. "Voice works great, still a bit slow." Nothing in the page measured a turn from his last word to her first
+// sound, so no change to make her faster could be judged. Auma Live stamps `performance.now()` at each step of a spoken
+// turn and hands the stamps here; this keeps the last TIMING_TURNS_KEPT turns IN PAGE MEMORY ONLY and writes ONE plain
+// line for the transcript drawer. Nothing is stored, nothing is sent anywhere, no timer is set: it is plain arithmetic
+// over numbers the page gives it, so it cannot change what the voice loop asks for or says.
+//
+// THE STAGES, in the order they happen (each stamp is the page's own clock when the page saw the event):
+//   heard       his `final` became a turn (aumalive.js requestTurn). The END_OF_SPEECH_MS wait is before this.
+//   sent        the page posted the turn to her session adapter (aumalive.js transmit).
+//   journaled, accepted, started
+//               `{t:'mark', v:'journaled'|'accepted'|'started'}` frames from the session adapter (genesis-live.js,
+//               the page-mind lane). Until it sends them, the hand-off and thinking stages are shown as "?".
+//   firstToken  the first text frame of her reply, field tags included.
+//   firstText   her first word (her field tags stripped).
+//   firstPhrase the first phrase handed to the voice.
+//   firstAudio  the first audio of that phrase arriving at the page (needs firstPhrase).
+//   firstSound  the player reporting her audible (needs firstAudio): her first sound.
+// A mark frame may also carry `model`, `effort`, `toolRounds` (model rounds with tools before her first word) and
+// `promptBytes`; they are kept with the turn, bounded, and not shown.
+//
+// THE CUT-OFF SIGN (the sceptic's): he spoke again (a second final, or Deepgram's SpeechStarted) after a final and
+// before her first sound while her reply was still on its way, or within SPOKE_AGAIN_AFTER_MS after her first sound.
+
+/** How many turns the line remembers. */
+export const TIMING_TURNS_KEPT = 20;
+/** He spoke again this soon after her first sound: counted as a likely cut-off. */
+export const SPOKE_AGAIN_AFTER_MS = 2000;
+const TIMING_STAMPS = Object.freeze(['sent', 'journaled', 'accepted', 'started', 'firstToken', 'firstText', 'firstPhrase', 'firstAudio', 'firstSound']);
+const MARK_STAMPS = Object.freeze(['journaled', 'accepted', 'started']);
+const isTime = value => typeof value === 'number' && Number.isFinite(value);
+const isCount = value => Number.isSafeInteger(value) && value >= 0;
+const seconds = ms => (ms / 1000).toFixed(1);
+const span = (from, to) => (isTime(from) && isTime(to) && to >= from ? seconds(to - from) : '?');
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+};
+/** From his `final` to her first sound, when both were measured. */
+const turnTotal = turn => (isTime(turn.firstSound) && turn.firstSound >= turn.heard ? turn.firstSound - turn.heard : null);
+
+/**
+ * The drawer's line for these turns, or '' while no turn has reached her first sound. Pure.
+ * @param {ReadonlyArray<object>} turns - oldest first, as `createTurnTimes().turns()` gives them.
+ * @param {number} [endOfSpeechMs] - the fixed wait before `heard`, shown as a constant.
+ * @returns {string}
+ */
+export function timingLine(turns, endOfSpeechMs = END_OF_SPEECH_MS) {
+  const list = Array.isArray(turns) ? turns.filter(isRecord) : [];
+  const measured = list.filter(turn => turnTotal(turn) !== null);
+  // The last reply that ended: measured to her first sound, or closed (cut, aborted, browser voice) before it.
+  const last = list.filter(turn => turnTotal(turn) !== null || turn.cut === true).at(-1);
+  if (!last) return '';
+  const usual = measured.length > 0 ? `usual ${seconds(median(measured.map(turnTotal)))} s over ${measured.length}` : '';
+  let line = turnTotal(last) === null
+    ? `last reply: cut before first sound${usual ? `; ${usual}` : ''}`
+    : `last reply ${seconds(turnTotal(last))} s to first sound (plus ${seconds(endOfSpeechMs)} s end-of-speech wait): `
+      + `hand-off ${span(last.heard, last.started)}, thinking ${span(last.started, last.firstText)}, voice ${span(last.firstText, last.firstSound)}; `
+      + usual;
+  const again = list.filter(turn => turn.againBefore === true || turn.againAfter === true).length;
+  if (again > 0) line += `; you spoke again early in ${again} of ${list.length}`;
+  return line;
+}
+
+/**
+ * The page's recorder for the timing line. Every method takes the page's `performance.now()` and returns nothing the
+ * voice loop uses; a call with a bad time or an unknown stage does nothing.
+ * @param {object} [options]
+ * @param {(line: string) => void} [options.onChange] - called with the new line whenever it changes.
+ * @param {number} [options.endOfSpeechMs] - the wait shown as a constant (default END_OF_SPEECH_MS).
+ */
+export function createTurnTimes(options = {}) {
+  const onChange = isRecord(options) && typeof options.onChange === 'function' ? options.onChange : () => {};
+  const endOfSpeechMs = isRecord(options) && isTime(options.endOfSpeechMs) ? options.endOfSpeechMs : END_OF_SPEECH_MS;
+  const turns = [];
+  // THE TURN WHOSE REPLY IS PLAYING: set by `claim`, cleared by `close`. Her audio and her sound are credited to it
+  // alone, never to whichever turn is newest: a turn cut before her first sound must not take a later turn's sound.
+  let current = null;
+  let shown = '';
+  const changed = () => {
+    const line = timingLine(turns, endOfSpeechMs);
+    if (line === shown) return;
+    shown = line;
+    try { onChange(line); } catch { /* the line is a view; it never stops a turn */ }
+  };
+  const held = turn => isRecord(turn) && turns.includes(turn);
+  const stamp = (turn, stage, at) => {
+    if (!held(turn) || !TIMING_STAMPS.includes(stage) || !isTime(at) || turn[stage] !== undefined) return;
+    if (stage === 'firstAudio' && turn.firstPhrase === undefined) return;   // audio before her phrase is not hers
+    if (stage === 'firstSound' && turn.firstAudio === undefined) return;    // a sound before her audio is the last reply's
+    turn[stage] = at;
+    changed();
+  };
+  /** He spoke again: a second final, or SpeechStarted. `busy`: her reply is still on its way (thinking or speaking). */
+  const spokeAgain = (at, busy) => {
+    const last = turns.at(-1);
+    if (!last || !isTime(at) || at < last.heard) return;
+    const sound = isTime(last.firstSound) ? last.firstSound : last.firstAudio;
+    if (!isTime(sound)) { if (busy === true) last.againBefore = true; }
+    else if (at >= sound && at - sound <= SPOKE_AGAIN_AFTER_MS) last.againAfter = true;
+    changed();
+  };
+  /** The playing turn ends: if her first sound was not measured, it is marked cut and left out of "usual". */
+  const close = () => {
+    const turn = current;
+    current = null;
+    if (!held(turn) || isTime(turn.firstSound)) return;
+    turn.cut = true;
+    changed();
+  };
+  return Object.freeze({
+    /** His final became a turn: the cut-off sign is checked on the turn before, then a new turn starts. */
+    heard(at, busy) {
+      if (!isTime(at)) return;
+      spokeAgain(at, busy);
+      turns.push({ heard: at, claimed: false, againBefore: false, againAfter: false });
+      while (turns.length > TIMING_TURNS_KEPT) turns.shift();
+      changed();
+    },
+    spokeAgain,
+    /**
+     * The turn the page is about to send: the newest heard one, once. Null when there is none to send. It becomes the
+     * playing turn; the one playing before it is closed.
+     */
+    claim() {
+      const last = turns.at(-1);
+      if (!last || last.claimed) return null;
+      close();
+      last.claimed = true;
+      current = last;
+      return last;
+    },
+    /**
+     * No later audio is the playing turn's: call it when a turn that was not heard is sent (no claim), when a turn is
+     * cut or aborted, and when a reply goes out through the browser's own voice (no audio reaches the page).
+     */
+    close,
+    /** A step of a claimed turn; the first stamp of each stage wins. */
+    mark: stamp,
+    /** A `{t:'mark'}` frame from her session adapter. */
+    frame(turn, event, at) {
+      if (!held(turn) || !isRecord(event)) return;
+      if (typeof event.model === 'string' && event.model.trim()) turn.model = event.model.trim().slice(0, 80);
+      if (typeof event.effort === 'string' && event.effort.trim()) turn.effort = event.effort.trim().slice(0, 24);
+      if (isCount(event.toolRounds) && event.toolRounds <= 1000) turn.toolRounds = event.toolRounds;
+      if (isCount(event.promptBytes)) turn.promptBytes = event.promptBytes;
+      if (MARK_STAMPS.includes(event.v)) stamp(turn, event.v, at);
+    },
+    /** Her audio (`firstAudio`) or her sound (`firstSound`), for the playing turn only (claimed and not closed). */
+    audio(stage, at) {
+      if (!current || (stage !== 'firstAudio' && stage !== 'firstSound')) return;
+      stamp(current, stage, at);
+    },
+    line: () => shown,
+    /** A copy of the turns kept, oldest first. */
+    turns: () => turns.map(turn => ({ ...turn })),
+  });
 }

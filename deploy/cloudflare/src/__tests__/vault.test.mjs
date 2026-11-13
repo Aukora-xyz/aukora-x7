@@ -349,7 +349,7 @@ test('a 100-piece index verifies in three calls and the manifest is written once
   assert.equal(again.json.verifiedAt, manifest.verifiedAt)
   assert.equal(putOps(h.bucket).length, writesBefore)
   const listed = await h.call('GET', '/_vault/rescue')
-  assert.deepEqual(listed.json, { ok: true, rescues: [{ id: rescue.id, verifiedAt: manifest.verifiedAt, files: 1, bytes: 100 * SMALL, clientId: 'client-1' }] })
+  assert.deepEqual(listed.json, { ok: true, rescues: [{ id: rescue.id, verifiedAt: manifest.verifiedAt, files: 1, bytes: 100 * SMALL, clientId: 'client-1' }], limit: 32 })
 })
 
 test('verify with no cursor, an empty one, cursor=abc, or a cursor never given out is 400', async () => {

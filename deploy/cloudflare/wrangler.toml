@@ -27,6 +27,12 @@ PROVIDER_BUDGET_WINDOW_MS = "60000"
 PROVIDER_BUDGET_REQUESTS = "1000"
 PROVIDER_BUDGET_TOKENS = "50000000"
 PROVIDER_MAX_OUTPUT_TOKENS = "256000"
+ELEVENLABS_MAX_CHARS_PER_DAY = "100000"
+ELEVENLABS_MAX_COST_PER_DAY = "4"
+ELEVENLABS_PRICE_PER_1K_CHARS = "0.04"
+ELEVENLABS_CHARS_PER_PASS = "5000"
+# Her voice in Auma Live: ELEVENLABS_VOICE_ID is not set in this template. A deployer sets their own voice id, as a
+# [vars] line here or as a Worker secret; an empty value is refused (eleven-speech.test.mjs). The key is always a secret.
 
 [[durable_objects.bindings]]
 name = "HEAD"

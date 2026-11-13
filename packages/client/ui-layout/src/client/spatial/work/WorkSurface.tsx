@@ -29,8 +29,9 @@ import {
 import type { DagHeadView, HeadView, WorkGraph } from './work-model.ts'
 import { workBridge } from './bridge.ts'
 import {
-  APPROVAL_FINISHING_WORDS, holdReload, reloadUnlessHeld, useReloadHeld, useReloadNotice, type ReloadNotice,
+  APPROVAL_FINISHING_WORDS, holdReload, reloadUnlessHeld, useReloadHeld, type ReloadNotice,
 } from '../portal/build-notice.ts'
+import { useReloadNoticeFeed } from '../portal/notices.ts'
 import type { BridgePhase, BridgeRead, BridgeReceipts, BridgeSnapshot, BridgeToolBody } from './bridge.ts'
 import css from './Work.module.css'
 import { foldAttention, headingKey, type AttentionRow } from './attention.ts'
@@ -418,7 +419,8 @@ export function WorkSurface({ activeSurface, useSessions, reader, labels, t }: W
   const liveRefreshRef = useRef<() => void>(() => {})
   const newBuild = useNewBuild(active)
   // The edge's own build and her published head: the same Reload button, when the host selects nothing.
-  const reloadNotice = useReloadNotice(active)
+  // The same read also feeds the Notices launcher (portal/notices.ts), so it is gold while Work is open.
+  const reloadNotice = useReloadNoticeFeed(active)
   // Read only to show the edge's owner sign-in when it asks for one; where the page runs is Sovereignty's to say.
   const hostMode = useHostMode(active)
   // THE HOST'S OWN FACTS (Round 18): `/__x6/facts`, set beside this tab's recomputation below.

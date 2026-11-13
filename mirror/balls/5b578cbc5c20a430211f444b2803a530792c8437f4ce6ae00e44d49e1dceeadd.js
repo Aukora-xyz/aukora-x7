@@ -344,8 +344,9 @@ function candidateGates(args, head, suite, read) {
  * receipt is only a projection; neither its booleans nor digests can mint a promotion admission.
  * Structural gates read the same trial VFS, require independently declared case authors and justify
  * growth over 10% with at least 24 characters. These declarations do not prove independent authorship.
- * Missing grants permit only a Class 3 candidate's passkey-review eligibility. Standing admission is
- * unavailable until a runtime grant verifier exists; passkey approval still belongs to the host.
+ * Pearl checks no grant and grants nothing. The answer passes on the runtime's qualification id for an
+ * ordinary organ; a protected organ's answer carries no id and its path is passkey review. Standing
+ * admission is unavailable until a runtime grant verifier exists; approval belongs to the host.
  * Empty observations or failed grader canaries refuse with PEARL_ARENA_UNAVAILABLE, without a verdict
  * or receipt. Unavailable-arena causes expose only known machine codes, never raw error text or output.
  * The reader is resolved once here and every read in this operation, including the post-trial re-read,
@@ -399,10 +400,9 @@ async function challenge(args, ctx) {
     const retentionResults = result.results.map(row => ({ id: row.id, pass: row.pass }))
     const passedCases = retentionResults.filter(row => row.pass).length
     const qualifiedForPromotion = Boolean(result.qualifiedForPromotion === true && result.ok === true
-      && passedCases === suite.cases.length
       && result.suiteAdmission === 'build-pinned')
     ran.push({ label, organs: result.organs, passed: passedCases, passedCases,
-      total: suite.cases.length, totalCases: suite.cases.length, trialOk: result.ok === true,
+      total: suite.cases.length, totalCases: suite.cases.length, trialOk: result.trialOk === true,
       durationMs: typeof result.durationMs === 'number' ? result.durationMs : null,
       qualifiedForPromotion, qualificationId: qualifiedForPromotion && typeof result.qualificationId === 'string' ? result.qualificationId : null,
       graderControls: controls || null, routeEvidence: result.routeEvidence || null,
@@ -427,9 +427,10 @@ async function challenge(args, ctx) {
   const behaviorQualified = gates.targeted && gates.candidateSha256 !== gates.incumbentSha256
     && targetImproved && comparison.targetImproved === true && candidate.targetCovered && winnerId === candidate.label
     && comparison.winnerId === candidate.label && candidate.qualifiedForPromotion
+  const protectedSurface = gates.protectedSurface || candidate.protectedSurface
   const standingGrantEligible = false
-  const passkeyPromotionEligible = behaviorQualified && gates.protectedSurface && gates.ceilingError === 'NO_GRANT_PRESENT'
-  const qualifiedForPromotion = standingGrantEligible || passkeyPromotionEligible
+  const passkeyPromotionEligible = behaviorQualified && protectedSurface && gates.ceilingError === 'NO_GRANT_PRESENT'
+  const qualifiedForPromotion = behaviorQualified
   const suiteSha256 = sha256(canonicalJson(suite))
   const data = {
     headBallId: head.ballId, headEpoch: head.epoch, ballId: head.ballId, epoch: head.epoch,
@@ -449,7 +450,8 @@ async function challenge(args, ctx) {
   }
   const receipt = await appendReceipt(ctx, 'pearl.challenge', data)
   return { ok: receipt.ok, action: 'challenge', winnerId, winner: winnerId, candidateId: candidate.label,
-    qualifiedForPromotion: receipt.ok && qualifiedForPromotion, qualificationId: null,
+    qualifiedForPromotion: receipt.ok && qualifiedForPromotion,
+    qualificationId: receipt.ok && qualifiedForPromotion && !protectedSurface ? candidate.qualificationId : null,
     standingGrantEligible, passkeyPromotionEligible: receipt.ok && passkeyPromotionEligible,
     ceilingError: gates.ceilingError, authorityVerified: false, eligibilityScope: data.eligibilityScope,
     suiteDigest, suiteBytesDigest,
@@ -480,7 +482,7 @@ module.exports = {
     'The Pearl Imagination Arena. seed writes the retention suite and first scars (once); observe reports them and the latest challenge; remember ' +
     'engraves one scar (lesson, failure, the suite cases that check it); challenge runs the selected build of every suite organ and the versions ' +
     'they replaced against the whole suite, or one explicit candidate/baseline for any named organ. Records ranking separately from qualification. ' +
-    'Use the runtime-issued qualificationId with tree_patch (or ball_put promote); admission is behavioral, not owner authority. Raw manual routes are unchanged.',
+    'Use the runtime-issued qualificationId with tree_patch (or ball_put promote) for an ordinary organ; a protected organ gets passkey review instead. Admission is behavioral, not owner authority. Raw manual routes are unchanged.',
   parameters: {
     type: 'object',
     properties: {

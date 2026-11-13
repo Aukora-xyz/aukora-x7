@@ -32,6 +32,8 @@ import { AUMA_LIVE_AUTO_HOME, GENESIS_PROVIDER, genesisLiveFetch, findTransport 
 import { classifySelfQuestion, answerSelfQuestion, renderSelfAnswer, createSelfIndexReader, speechWouldDelete } from '/app/self-index.js';
 import { createPersonaPlexAudio } from '/app/personaplex-audio.js';
 import { voiceSocketFor, forgetNoPass, voiceInputPlan, ORGAN_WAIT_MS } from '/app/deepgram-voice.js';
+import { createTurnTimes, END_OF_SPEECH_MS } from '/app/deepgram-voice.js'; // timing stamp
+import { speechSocketFor, phraseCut, showHerVoiceLine, ELEVEN_VOICE_PICK } from '/app/elevenlabs-voice.js'; // VOICE hook
 import {
   createHomeSession, turnSessionId, transcriptLogKey, headerSessionId, refusalSentence, fallbackSentence,
   SESSION_HEADER, FALLBACK_HEADER, REFUSAL_HEADER, HOME_WAIT_MS,
@@ -658,7 +660,7 @@ const voice = {
     if (!this.enabled || !this.owner) return;
     if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
     let ws;
-    try { ws = voiceSocketFor(`${SIDECAR_WS}?owner=${encodeURIComponent(this.owner)}`); } catch { this.retry(); return; }
+    try { ws = speechSocketFor(`${SIDECAR_WS}?owner=${encodeURIComponent(this.owner)}`, { inner: voiceSocketFor }); } catch { this.retry(); return; } // VOICE hook
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
     ws.onmessage = (e) => {
@@ -932,6 +934,10 @@ export function mountAumaLive(root, options = {}) {
   // typing works. Its words come from `voiceInputPlan` (/app/deepgram-voice.js) and nowhere else; see `showVoiceInput`.
   const logVoice = el('div', 'alv-log-voice'); logVoice.hidden = true;
   logHead.append(logVoice);
+  // THE TIMING LINE: where the last spoken turn's time went, in the same style as the line above, shown from the
+  // first measured turn on. Measurement only: see `createTurnTimes` (/app/deepgram-voice.js). Every line that feeds it
+  // is marked "timing stamp" and only stamps; none of them changes what the voice loop asks for or says.
+  const logTiming = el('div', 'alv-log-voice alv-log-timing'); logTiming.hidden = true; logHead.append(logTiming); // timing stamp
   const logBody = el('div', 'alv-log-body');
   const logEmpty = el('div', 'alv-log-empty'); logEmpty.textContent = 'nothing said yet — open the channel and talk, or type to her below.';
   const compose = document.createElement('form'); compose.className = 'alv-log-compose';
@@ -971,12 +977,14 @@ export function mountAumaLive(root, options = {}) {
   let duplex = false, herAudible = false, ttsPending = 0, ttsId = 0;
   // True while the organ is sending a sentence this page no longer asks for (a cut turn's tail): its audio is dropped.
   let staleSpeech = false;
+  const turnTimes = createTurnTimes({ endOfSpeechMs: END_OF_SPEECH_MS, onChange: (line) => { logTiming.textContent = line; logTiming.hidden = !line; } }); // timing stamp
   // THE GATE, AND HER OWN LAST SENTENCE. The gate decides which captured frames may reach the recogniser while
   // she is audible; `lastSpoken` is what a transcript is compared against, so her voice cannot become a turn
   // even if a frame slips past. See `/app/aumalive-duplex.js` for why the mic stayed open and what changed.
   const duplexGate = new DuplexGate({ bargeInFrames: 4 });
   let lastSpoken = '';
   let lastSpokenAt = Number.NEGATIVE_INFINITY;
+  let speechTurn = 0; const herVoiceOffered = () => voice.voices.some(v => v?.id === ELEVEN_VOICE_PICK); // VOICE hook: the player's speech turn, counted only while her ElevenLabs voice is offered
   let gateStrictAnnounced = false;
   let lastMicRms = 0;
   const ttsRequests = new Map();
@@ -1419,6 +1427,7 @@ export function mountAumaLive(root, options = {}) {
         if (m.t === 'lvl') {
           field.sayEnv = Math.min(1, Math.max(field.sayEnv, m.rms * 26));
           const playbackAudible = m.audible === true;
+          if (playbackAudible) turnTimes.audio('firstSound', performance.now()); // timing stamp
           const audible = playbackAudible || ttsPending > 0;
           const audibleChanged = audible !== herAudible;
           if (audible || herAudible) lastSpokenAt = performance.now();
@@ -1683,6 +1692,7 @@ export function mountAumaLive(root, options = {}) {
   // ---- her voice out ----
   function pushPcm(arrayBuf) {
     if (!ctx || !playerNode) return;
+    if (herVoiceOffered()) { playerNode.port.postMessage({ cmd: 'push', pcm: arrayBuf, turn: speechTurn }, [arrayBuf]); return; } // VOICE hook
     // Keep PCM native until it reaches the audio thread. Per-packet conversion
     // and resampling here reset interpolation at every WebSocket boundary and
     // competed with the field renderer on the UI thread, producing clicks and
@@ -1713,6 +1723,8 @@ export function mountAumaLive(root, options = {}) {
     // reply dropped while nothing was playing would otherwise leave the gate closed and the microphone unheard.
     duplexGate.herSpeaking(false, performance.now());
   }
+
+  function cutSpeechTurn() { speechTurn += 1; playerNode?.port.postMessage({ cmd: 'turn', turn: speechTurn }); if (ttsRequests.size > 0) staleSpeech = true; dropHer(); } // VOICE hook: a turn-scoped cut, at once, before a replacement turn is admitted
 
   function cutHerVoice() {
     // Anything the organ is still sending for the sentence being cut is stale from this moment (see tts_begin).
@@ -1779,6 +1791,7 @@ export function mountAumaLive(root, options = {}) {
       if (!channel || micMuted) return;
       const text = (m.text || '').trim();
       if (!text) return;
+      if (voice.ws?.herEcho?.(text, herStillAudible(), isSelfEcho)) { duplexGate.selfEchoes = (duplexGate.selfEchoes || 0) + 1; return; } // VOICE hook
       // HER OWN SENTENCE IS NOT A USER TURN within the 1,500 ms room-echo window while or right after she speaks.
       const echoWindowOpen = herStillAudible() || (performance.now() - lastSpokenAt) <= 1500;
       if (echoWindowOpen && isSelfEcho(text, lastSpoken)) {
@@ -1831,7 +1844,12 @@ export function mountAumaLive(root, options = {}) {
       if (request?.failed) return;
       toast(`${organName()} faltered after playback began — the channel is still open`, 7000);
     },
+    speech_notice(m) { if (typeof m.say === 'string' && m.say) toast(m.say.slice(0, 160), 7000); }, // VOICE hook
   };
+  // Her first audio, and his SpeechStarted, are stamped on the way IN to the handlers above, which are left as they are.
+  const herAudioIn = voice.on.pcm, hisSpeechIn = voice.on.vad; // timing stamp
+  voice.on.pcm = (buf) => { if (!staleSpeech) turnTimes.audio('firstAudio', performance.now()); herAudioIn(buf); }; // timing stamp
+  voice.on.vad = (m) => { if (channel && m?.speaking) turnTimes.spokeAgain(performance.now(), streaming || herStillAudible()); hisSpeechIn(m); }; // timing stamp
   if (surfaceActive && channel) voice.enable(voiceClaim);
   if (channel && voice.ready) { duplex = true; populateVoices(); }
   setOrb();
@@ -1853,6 +1871,7 @@ export function mountAumaLive(root, options = {}) {
       const hint = el('span', 'alv-vhint'); hint.textContent = v.hint || '';
       b.append(top, hint);
       b.addEventListener('click', async () => {
+        if (herVoiceOffered()) { bargeIn(); cutSpeechTurn(); } // VOICE hook
         chosenVoice = v.id; voicePicked = true;
         [...voiceList.children].forEach((c) => c.classList.toggle('on', c === b));
         await ensureAudio();
@@ -1863,12 +1882,14 @@ export function mountAumaLive(root, options = {}) {
       });
       voiceList.append(b);
     });
+    showHerVoiceLine(voiceList, voice.ws); // VOICE hook
   }
   // click the gear to open/close; click anywhere else closes it. No hover.
   let panelOpen = false;
   function togglePanel(force) {
     panelOpen = force === undefined ? !panelOpen : force;
     if (panelOpen) home.start();   // a no-op once the host has answered; otherwise ask now, not at the next backoff
+    if (panelOpen) showHerVoiceLine(voiceList, voice.ws); // VOICE hook
     panel.classList.toggle('show', panelOpen);
     gear.classList.toggle('on', panelOpen);
   }
@@ -2043,6 +2064,7 @@ export function mountAumaLive(root, options = {}) {
     }, 12000);
   }
   function speakFallback(text) {
+    turnTimes.close(); // timing stamp
     if (!('speechSynthesis' in window) || !text.trim()) return;
     try {
       const u = new SpeechSynthesisUtterance(text.trim());
@@ -2243,6 +2265,7 @@ export function mountAumaLive(root, options = {}) {
   function requestTurn(text, spoken = false) {
     text = String(text || '').trim();
     if (!text) { if (streaming || herStillAudible()) bargeIn(); return; }
+    if (spoken && duplex && !canvasMode) turnTimes.heard(performance.now(), streaming || herStillAudible()); // timing stamp
     // Recorded at once, in the transcript of the session this turn would go through NOW (a turn in flight keeps
     // its own); `settleTurnSession` moves it if the host answered through another one.
     if (!streaming) bindTranscript(turnSessionNow());
@@ -2278,6 +2301,7 @@ export function mountAumaLive(root, options = {}) {
     // WHAT SHE IS ABOUT TO SAY, so the recogniser cannot hand it back as a user turn.
     lastSpoken = t;
     lastSpokenAt = performance.now();
+    if (first && duplex && herVoiceOffered()) cutSpeechTurn(); // VOICE hook
     if (duplex) {
       const id = ++ttsId;
       ttsPending++;
@@ -2379,6 +2403,8 @@ export function mountAumaLive(root, options = {}) {
 
     presenceBlocked = false;
     field.burst = 1; field.think = 1; setMode('thinking');
+    const clock = heard && duplex ? turnTimes.claim() : null; // timing stamp
+    if (!clock) turnTimes.close(); // timing stamp
     await ensureAudio();
 
     const failTurn = (message) => {
@@ -2409,6 +2435,7 @@ export function mountAumaLive(root, options = {}) {
       // 'pass': her index or session list did not answer, so this is doubt, not an answer; she takes the turn as any turn.
       if (selfAnswer.status !== 'pass') {
         setMode('speaking'); field.think = 0.4;
+        { const at = performance.now(); turnTimes.mark(clock, 'firstText', at); turnTimes.mark(clock, 'firstPhrase', at); } // timing stamp
         // Never hand the voice a text its sanitizer would cut words from: the answer is in the transcript whole instead.
         const selfSpoken = renderSelfAnswer(selfAnswer, 'spoken');
         speakVoiceText(speechWouldDelete(selfSpoken) ? 'My full answer is in the transcript; part of it cannot be read aloud.' : selfSpoken);
@@ -2466,6 +2493,7 @@ export function mountAumaLive(root, options = {}) {
       if (!tail) return;
       if (!duplex && !endOfTurn) return;
       if (endOfTurn) { speakChunk(tail, firstFlush); sentTo = full.length; firstFlush = false; return; }
+      if (chosenVoice === ELEVEN_VOICE_PICK) { const phraseEnd = phraseCut(tail, firstFlush); if (phraseEnd > 0) { speakChunk(tail.slice(0, phraseEnd), firstFlush); sentTo += phraseEnd; firstFlush = false; } return; } // VOICE hook
       // First-sentence + whole-remainder cadence (AUKORA.xyz Sienna Flux tuning):
       // Speak the opening sentence immediately so she answers without waiting for the full completion, then hold the
       // remainder for `endOfTurn` so Flux synthesizes the rest as one continuous multi-sentence turn with zero gaps
@@ -2489,6 +2517,7 @@ export function mountAumaLive(root, options = {}) {
     };
 
     try {
+      turnTimes.mark(clock, 'sent', performance.now()); // timing stamp
       const res = await presenceFetch(PRESENCE_ENDPOINT, {
         method: 'POST', signal: abortCtl.signal,
         headers: { 'content-type': 'application/json' },
@@ -2521,11 +2550,15 @@ export function mountAumaLive(root, options = {}) {
           const m = p.match(/^data:\s*(.*)$/m); if (!m) continue;
           let ev; try { ev = JSON.parse(m[1]); } catch { continue; }
           armPresenceTimer(PRESENCE_IDLE_TIMEOUT_MS);
+          if (ev.t === 'mark') turnTimes.frame(clock, ev, performance.now()); // timing stamp
           if (ev.t === 'tok') {
+            turnTimes.mark(clock, 'firstToken', performance.now()); // timing stamp
             full += dirs.push(ev.v);
+            if (full.trim()) turnTimes.mark(clock, 'firstText', performance.now()); // timing stamp
             if (!spoke && full.trim()) { spoke = true; setMode('speaking'); field.think = 0.4; }
             field.sayEnv = Math.min(1, field.sayEnv + 0.1);
             flushSpeech(false);
+            if (!firstFlush) turnTimes.mark(clock, 'firstPhrase', performance.now()); // timing stamp
           } else if (ev.t === 'field') {
             // the door splits her body-language tags into typed events now;
             // the local dirs filter stays as defense in depth for older doors
@@ -2599,6 +2632,7 @@ export function mountAumaLive(root, options = {}) {
         return;
       }
       flushSpeech(true);
+      if (!firstFlush) turnTimes.mark(clock, 'firstPhrase', performance.now()); // timing stamp
       if (full.trim()) addTurn('auma', sanitizeForVoice(full), lastReplyId);   // record her reply, with the id the why link needs
       endTurn();
     } catch (e) {
@@ -2625,6 +2659,7 @@ export function mountAumaLive(root, options = {}) {
   }
 
   function endTurn(how) {
+    if (how === 'cut') turnTimes.close(); // timing stamp
     clearReplyWatchdog();
     streaming = false; curAbort = null; field.think = 0;
     if (canvasMode) {

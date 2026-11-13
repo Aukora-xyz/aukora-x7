@@ -12,8 +12,21 @@ import { createGateLockoutStore } from './gate-lockout.mjs'
 import { CLOUD_WAKE_EVIDENCE_TOOLS } from './wake-evidence.mjs'
 import { MIRROR_SECRET_NAMES, MIRROR_SECRET_PREFIXES, MIRROR_SECRET_RULE_VERSION, secretShapedPart } from './mirror-secret-paths.mjs'
 import { worldBudgetCall, worldBudgetLimits, worldBudgetInput } from './world-budget.mjs' // ANYBROWSER hook: one world budget row
+import { chargeWorldBudgetIn } from './world-budget.mjs' // ANYBROWSER hook: thread lines are charged inside the append's own transaction
+import { checkLease, edgeMayWrite, homeFreezeMode, leaseAction, leaseHeldAt, leaseMode, leaseStillNamed, leaseSummary } from './world-lease.mjs' // ANYBROWSER hook: one writer (leaseStillNamed, leaseHeldAt)
+import { MIRROR_WAKE_CLIENT_ID, retireClientSlot, retiredClientAnswer, slotRetireMode } from './mirror-client-slots.mjs' // ANYBROWSER hook: slots are tombstoned, never lost (only under MIRROR_SLOT_RETIRE=retire)
+import { readTombstone } from './mirror-slot-tombstone.mjs' // ANYBROWSER hook
+import { noteWrote, recordHomePending, validHomeInput, worldStatus } from './world-home.mjs' // ANYBROWSER hook: when a browser last wrote; home pending
+import { threadCommit, threadLimits } from './thread-log.mjs' // ANYBROWSER hook: the thread log's MIRROR half
 
 const BOOTSTRAP = 'mirror:bootstrap:v1'
+// JOIN hook (MUST 2b): the thread ops that write, and the named answer that rolls a committing transaction back.
+const THREAD_WRITE_OPS = new Set(['append', 'seal', 'import', 'retract', 'keep']) // JOIN hook
+const threadRollback = (status, code) => Object.assign(new Error(code), { threadRollback: { status, body: { ok: false, code } } }) // JOIN hook
+const threadAnswerRollback = answer => Object.assign(new Error('THREAD_NOTHING_COMMITTED'), { threadRollback: { status: answer.status, body: answer.body } }) // JOIN hook
+const LEASE_EXTENDING_CODES = new Set(['APPLIED', 'IMPORTED', 'RETRACTED', 'KEPT']) // JOIN hook: the thread writes that commit bytes
+// JOIN hook: how long a thread step lets waiting home saves go first before it joins the queue anyway.
+const THREAD_SAVE_FIRST_MS = 10000 // JOIN hook
 const PREFIX = 'mirror:v2:'
 const ENTRY = `${PREFIX}entry:`
 const RECEIPT = `${PREFIX}receipt:`
@@ -439,7 +452,7 @@ export async function readMirrorWakeText(storage, { path, seedId, signal, env = 
  * Atomic fence advancement makes concurrent browser batches stale, not silently overwritten.
  * Checkpoint ids are retained in the file for replay refusal; capacity exhaustion never evicts history.
  */
-export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signal } = {}) {
+export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signal, now = Date.now() /* ANYBROWSER hook */, mode /* JOIN hook */, slots /* JOIN hook */ } = {}) {
   if (!auraObject(input) || Object.keys(input).sort().join(',') !== 'at,evidence,head,id'
     || !auraHash(input.id) || !Number.isSafeInteger(input.at) || input.at < 0 || input.at > 8640000000000000
     || !auraObject(input.head) || Object.keys(input.head).sort().join(',') !== 'ballId,epoch' || !auraHash(input.head.ballId) || !auraCount(input.head.epoch)
@@ -460,11 +473,19 @@ export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signa
       if (canonicalJson(previous) !== canonicalJson(payload)) fail('MIRROR_WAKE_CHECKPOINT_CONFLICT', 409)
       return { ok: true, id: input.id, revision: fence.revision, replayed: true }
     }
+    // ANYBROWSER hook: the cloud wake yields to her live browser: nothing is written while a lease is live (HEAD hands
+    // ANYBROWSER hook: its model CLOUD_WAKE_CHECKPOINT_UNAVAILABLE and the wake step goes on without this checkpoint).
+    // JOIN hook: only under WRITER_LEASE=enforce; in the default mode a lease is recorded, never enforced (main's answer).
+    if (mode === 'enforce' && !(await edgeMayWrite(tx, now))) return { ok: false, code: 'MIRROR_WAKE_WRITER_LIVE', yielded: true } // ANYBROWSER hook
     const nextText = text + JSON.stringify(payload) + '\n'
     if (rows.length >= 128 || size(nextText) > 65536) fail('MIRROR_WAKE_CHECKPOINT_FULL', 507)
     // Use the existing ordered ACK protocol so the next browser publish can validate the fence.
     const replay = await readMirrorReplayState(tx, fence)
-    const clientId = '5e000004-0000-4000-8000-000000000004'
+    const clientId = MIRROR_WAKE_CLIENT_ID // ANYBROWSER hook: the one exported constant (was this same id as a literal)
+    // JOIN hook: the tombstone is read only when slots can be retired (MIRROR_SLOT_RETIRE=retire) or the lease is enforced;
+    // JOIN hook: by default this is main's checkpoint exactly (no row of wave 3 is read).
+    const wakeSlot = mode === 'enforce' || slots === 'retire' ? await readTombstone(tx, clientId) : null // ANYBROWSER hook: a tombstoned wake id is refused, never revived
+    if (wakeSlot) fail(wakeSlot.corrupt ? 'SLOT_TOMBSTONE_UNAVAILABLE' : 'CLIENT_SLOT_RETIRED', wakeSlot.corrupt ? 503 : 409) // ANYBROWSER hook
     const client = replay.clients.get(clientId)
     if (!client && replay.clients.size >= MIRROR_LIMITS.clients) fail('MIRROR_CLIENT_LIMIT', 507)
     const seq = (client?.seq ?? 0) + 1, receiptDigest = await mirrorDigest(payload)
@@ -677,7 +698,13 @@ const snapshotResponse = async (storage, request, reserveSnapshot) => {
 }
 
 /** Atomically persist entries, global revision, bounded replay acknowledgments and client sequence. Stale output is retained separately, never rebased. */
-export async function publishMirror(storage, envelope) {
+export async function publishMirror(storage, envelope, { now = Date.now(), mode, retire, homeFreeze } = {} /* ANYBROWSER hook */) {
+  // JOIN hook: with no setting (`mode` observe, `retire` off, `homeFreeze` record) a home save performs
+  // JOIN hook: EXACTLY main's storage operations and answers: no tombstone, lease or write-time row is read or written.
+  // JOIN hook: Tombstones are read when slots can be retired or the lease is enforced; the lease only when enforced;
+  // JOIN hook: the write time only when the lease or the home freeze is enforced (the one reader of it, HOME_PENDING).
+  const slotsRead = retire === 'retire' || mode === 'enforce', leased = mode === 'enforce', noteWrites = leased || homeFreeze === 'enforce' // JOIN hook
+  const clock = typeof now === 'function' ? now : () => now // JOIN hook: read when judged, never captured before a wait
   if (envelope?.v !== 2) fail('MIRROR_OUTBOX_PROTOCOL_REQUIRED', 409)
   const { batch, digest } = envelope
   if (!batch || typeof batch.clientId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(batch.clientId) || !Number.isSafeInteger(batch.seq) || batch.seq < 1 || batch.id !== `${batch.clientId}:${batch.seq}` || typeof digest !== 'string' || await mirrorDigest(batch) !== digest) fail('INVALID_MIRROR_BATCH')
@@ -692,9 +719,17 @@ export async function publishMirror(storage, envelope) {
   return storage.transaction(async tx => {
     const current = await readFence(tx)
     const replayState = await readMirrorReplayState(tx, current)
+    const retired = slotsRead ? await retiredClientAnswer(tx, replayState, batch, { mode, fence: current }) : null // ANYBROWSER hook: a retired browser is answered by name, before anything else (an unknown one only under enforce)
+    if (retired) return retired // ANYBROWSER hook
     const key = RECEIPT + batch.id
     const existing = replayState.receipts.get(key)
     if (existing && existing.digest === digest && existing.id === batch.id) return { ...existing, replayed: true }
+    // ANYBROWSER hook: one writer, decided from the edge's lease row in this transaction; a replayed batch kept its receipt above.
+    // JOIN hook: ONLY under WRITER_LEASE=enforce. In the default mode a home save never reads the lease (a reference it
+    // JOIN hook: carries is ignored, as main ignores it): today's app knows no lease and re-posts a 423 or 410 batch (up to
+    // JOIN hook: 34 MiB) every 60 s (idb-persist.ts deliveryRefusal). The tombstone was read just above (slotChecked).
+    const writer = leased ? await checkLease(tx, envelope.lease ?? null, clock, { mode, clientId: batch.clientId, slotChecked: true }) : { ok: true } // ANYBROWSER hook
+    if (!writer.ok) return writer // ANYBROWSER hook: 423, 410, or the named 409 CLIENT_SLOT_RETIRED; never a conflictCode
     if (pathRefusal) throw pathRefusal
     if (existing) return retainConflict(tx, envelope, current, 'MIRROR_REPLAY_CONFLICT')
     const head = replayState.clients.get(batch.clientId)
@@ -703,7 +738,9 @@ export async function publishMirror(storage, envelope) {
     if (batch.cloudBase.lineageId !== current.lineageId || batch.cloudBase.revision !== current.revision) return retainConflict(tx, envelope, current, 'MIRROR_GLOBAL_FENCE_CONFLICT')
     if (current.revision === Number.MAX_SAFE_INTEGER) fail('MIRROR_GLOBAL_REVISION_LIMIT', 507)
     if (batch.seq !== (head?.seq ?? 0) + 1) return retainConflict(tx, envelope, current, 'MIRROR_SEQUENCE_GAP')
-    if (!head && replayState.clients.size >= MIRROR_LIMITS.clients) fail('MIRROR_CLIENT_LIMIT', 507)
+    // ANYBROWSER hook (the ONE replacement): a full table retires one idle slot as a tombstone; 507 only when none may be retired.
+    // JOIN hook: retirement needs MIRROR_SLOT_RETIRE=retire; by default a full table is main's 507, nothing is retired.
+    if (!head && replayState.clients.size >= MIRROR_LIMITS.clients && !(retire === 'retire' && await retireClientSlot(tx, replayState, { incomingClientId: batch.clientId, now: clock() }))) fail('MIRROR_CLIENT_LIMIT', 507) // ANYBROWSER hook
     const pruneKeys = planMirrorReplayPrune(replayState, batch.clientId)
     const hidden = { rows: 0 }
     const before = await readEntries(tx, hidden)
@@ -728,6 +765,7 @@ export async function publishMirror(storage, envelope) {
     await putValue(tx, FENCE, nextFence)
     await putValue(tx, key, receipt)
     await putValue(tx, HEAD + batch.clientId, { seq: batch.seq, digest })
+    if (noteWrites) await noteWrote(tx, batch.clientId, clock()) // ANYBROWSER hook: an APPLIED home save is a write; a replayed receipt is not (noted only when enforced; else lastWroteAt is null)
     return receipt
   })
 }
@@ -871,7 +909,7 @@ export async function bootstrapMirror(storage, input) {
  * Synchronous throws and rejected delivery promises cannot undo the committed receipt.
  * Omitted onUpdated performs no notification. Clients must poll after disconnect or missed delivery.
  */
-export async function handleMirrorRequest(request, storage, { authorized = false, onUpdated, reserveSnapshot } = {}) {
+export async function handleMirrorRequest(request, storage, { authorized = false, onUpdated, reserveSnapshot, writerLease = 'observe' /* ANYBROWSER hook */, homeFreeze = 'record' /* ANYBROWSER hook */, slotRetire = 'off' /* JOIN hook */ } = {}) {
   if (!authorized) return reply({ ok: false, code: 'UNAUTHORIZED' }, 401)
   try {
     const url = new URL(request.url)
@@ -879,7 +917,7 @@ export async function handleMirrorRequest(request, storage, { authorized = false
     if (path === '/_mirror/status' && url.search && url.search !== '?compact=1') return reply({ ok: false, code: 'INVALID_MIRROR_STATUS_QUERY' }, 400)
     if (path === '/_mirror/delta' && request.method === 'POST') {
       const envelope = await readEnvelope(request)
-      const result = await publishMirror(storage, envelope)
+      const result = await publishMirror(storage, envelope, { now: () => Date.now() /* JOIN hook: a clock */, mode: writerLease, retire: slotRetire, homeFreeze } /* ANYBROWSER hook */)
       // The notice names only what changed: an entry the secret-path rule took as a no-op (publishableMirrorEntries)
       // changed nothing and is never named, so a mixed batch still announces its ordinary paths.
       const changed = result.ok && !result.replayed ? envelope.batch.entries.map(([path]) => path).filter(path => !hiddenStoredPath(path)) : []
@@ -904,6 +942,8 @@ export async function handleMirrorRequest(request, storage, { authorized = false
         const resetPaths = await readResets(tx)
         // ANYBROWSER hook: `clients` = browser slots in use (their sequence heads; the cap is `limits.clients`). Counted, never read.
         const clients = (await tx.list({ prefix: 'mirror:v2:head:', limit: MIRROR_LIMITS.clients + 1 })).size // ANYBROWSER hook
+        // JOIN hook: main's answer at main's cost, byte for byte: no `world` field and no wave 3 read here.
+        // JOIN hook: the lease, her pending home and the thread counts are on `/_mirror/lease` status and `/_thread/index`.
         return { clients /* ANYBROWSER hook */, ok: true, ...protocolFields(fence), runtime: 'cloudflare', snapshotFormat: SNAPSHOT_FORMAT, resetCount: resetPaths.length, entryCount: entries.length, fileCount: entries.filter(([, wire]) => wire.kind === 'file').length, directoryCount: entries.filter(([, wire]) => wire.kind === 'dir').length, homeFiles: entries.filter(([path]) => path.startsWith('/dsh/home/')).map(([path]) => path.slice('/dsh/home/'.length)), workspaceFiles: entries.filter(([path]) => path.startsWith('/dsh/workspace/')).map(([path]) => path.slice('/dsh/workspace/'.length)), memoryHistorySupported: false, limits: MIRROR_LIMITS }
       }))
     }
@@ -1320,8 +1360,10 @@ export async function guestGateDecision(storage, action, subject, now = Date.now
   })
 }
 
+import { holderStartUp } from './world-lease.mjs' // HOLDER hook: her body's record is read once at object start
 export class MirrorDO {
-  constructor(state, env) { this.state = state; this.storage = state.storage; this.env = env; this.queue = Promise.resolve(); this.notificationPending = false; this.snapshotReaders = 0; this.diagnostics = createEdgeDiagnostics('mirror-object-instance') }
+  constructor(state, env) { this.state = state; this.storage = state.storage; this.env = env; this.queue = Promise.resolve(); this.notificationPending = false; this.snapshotReaders = 0; this.diagnostics = createEdgeDiagnostics('mirror-object-instance')
+    this.queue = holderStartUp(this.storage) } // HOLDER hook: every request waits behind it (enqueue); with no holder row it is one get
   // One bounded attempt, no outbox or retries. Further events are dropped while a
   // request remains unsettled, even after timeout. Polling recovers missed delivery.
   async notifyHead(update, seedId) {
@@ -1347,7 +1389,38 @@ export class MirrorDO {
     finally { clearTimeout(timer) }
   }
   fetch(request) { return this.diagnostics.observe(request, () => this.handleRequest(request)) }
+  // JOIN hook: one thread step at a time in this object, and a save that is waiting goes first. A home
+  // save is counted from its arrival to its answer (a counter only: no storage operation, no change to its answer). A
+  // `/_mirror/thread` call takes the one thread turn, then, while saves are waiting, lets them go first (at most
+  // THREAD_SAVE_FIRST_MS), and only then joins the queue. So a save waits behind at most ONE import step, however many
+  // importers (isolates, pages) there are.
   handleRequest(request) {
+    const { pathname } = new URL(request.url) // JOIN hook
+    if (request.method === 'POST' && pathname === '/_mirror/thread') return this.threadTurn(request) // JOIN hook
+    if (request.method !== 'POST' || pathname !== '/_mirror/delta') return this.enqueue(request) // JOIN hook
+    this.savesWaiting = (this.savesWaiting ?? 0) + 1 // JOIN hook
+    const answered = this.enqueue(request) // JOIN hook
+    const settle = () => { // JOIN hook
+      this.savesWaiting -= 1 // JOIN hook
+      if (this.savesWaiting === 0) for (const wake of (this.saveWaiters ?? []).splice(0)) wake() // JOIN hook
+    } // JOIN hook
+    answered.then(settle, settle) // JOIN hook
+    return answered // JOIN hook
+  }
+  async threadTurn(request) { // JOIN hook
+    const previous = this.threadQueue ?? Promise.resolve() // JOIN hook
+    let release // JOIN hook
+    this.threadQueue = new Promise(resolve => { release = resolve }) // JOIN hook
+    try { // JOIN hook
+      await previous // JOIN hook
+      if (this.savesWaiting > 0) await new Promise(resolve => { // JOIN hook
+        const timer = setTimeout(resolve, THREAD_SAVE_FIRST_MS) // JOIN hook
+        ;(this.saveWaiters ??= []).push(() => { clearTimeout(timer); resolve() }) // JOIN hook
+      }) // JOIN hook
+      return await this.enqueue(request) // JOIN hook
+    } finally { release() } // JOIN hook
+  }
+  enqueue(request) {
     const operation = this.queue.then(async () => {
       if (request.headers.get('x-x6-internal-authorized') !== '1') return reply({ ok: false, code: 'UNAUTHORIZED' }, 401)
       try {
@@ -1363,7 +1436,7 @@ export class MirrorDO {
             if (!auraObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'path')) return reply({ ok: false, code: 'MIRROR_WAKE_REQUEST_INVALID' }, 400)
             return reply(await readMirrorWakeText(this.storage, { path: input.path, seedId, signal: request.signal, env: this.env }))
           }
-          return reply(await appendMirrorWakeCheckpoint(this.storage, input, { seedId, signal: request.signal }))
+          return reply(await appendMirrorWakeCheckpoint(this.storage, input, { seedId, signal: request.signal, mode: leaseMode(this.env) /* JOIN hook */, slots: slotRetireMode(this.env) /* JOIN hook */ }))
         }
         if (path === '/_mirror/estate' && (request.method !== 'GET' || url.href.includes('?') || url.hash
           || request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length') !== '0')) return reply({ ok: false, code: 'ESTATE_REQUEST_INVALID' }, 400)
@@ -1408,6 +1481,64 @@ export class MirrorDO {
           if (!input) return reply({ ok: false, code: 'WORLD_BUDGET_REQUEST_INVALID' }, 400) // ANYBROWSER hook
           return reply({ ok: true, budget: await worldBudgetCall(this.storage, { ...input, now: Date.now(), limits: worldBudgetLimits(this.env) }) }) // ANYBROWSER hook
         } // ANYBROWSER hook
+        // ANYBROWSER hook: the world lease, internal only (the Worker forwards an owner's `{input, ownerApproved}`; it sets
+        // ANYBROWSER hook: ownerApproved true only after his passkey approved that exact request). One transaction per call.
+        if (path === '/_mirror/lease') { // ANYBROWSER hook
+          if (request.method !== 'POST' || url.search || url.href.endsWith('?') || url.hash || !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) return reply({ ok: false, code: 'LEASE_REQUEST_INVALID' }, 400) // ANYBROWSER hook
+          let body // ANYBROWSER hook
+          try { body = await readBoundedBootstrapJson(request, 1024) } catch (error) { if (error?.status === 400) return reply({ ok: false, code: 'LEASE_REQUEST_INVALID' }, 400); throw error } // ANYBROWSER hook
+          if (!auraObject(body) || Object.keys(body).sort().join() !== 'input,ownerApproved' || typeof body.ownerApproved !== 'boolean') return reply({ ok: false, code: 'LEASE_REQUEST_INVALID' }, 400) // ANYBROWSER hook
+          const leased = await leaseAction(this.storage, body.input, { now: () => Date.now() /* JOIN hook: read after the row */, ownerApproved: body.ownerApproved === true, homeFreeze: homeFreezeMode(this.env) }) // ANYBROWSER hook
+          return reply(leased.body, leased.status) // ANYBROWSER hook
+        } // ANYBROWSER hook
+        // ANYBROWSER hook: the thread log's MIRROR half, internal only: `{op, input, home?}` (3 MiB at most; `home` only beside an
+        // ANYBROWSER hook: import). ONE transaction: the lease, the budget, the commit, `wrote`, and the pending home.
+        if (path === '/_mirror/thread') { // ANYBROWSER hook
+          if (request.method !== 'POST' || url.search || url.href.endsWith('?') || url.hash || !/^application\/json(?:\s*;|$)/i.test(request.headers.get('content-type') || '')) return reply({ ok: false, code: 'THREAD_REQUEST_INVALID' }, 400) // ANYBROWSER hook
+          const body = await readBoundedBootstrapJson(request, 3 * 1024 * 1024) // ANYBROWSER hook
+          const keys = auraObject(body) ? Object.keys(body).sort().join() : '' // ANYBROWSER hook
+          if ((keys !== 'input,op' && keys !== 'home,input,op') || typeof body.op !== 'string' || (keys === 'home,input,op' && (body.op !== 'import' || !validHomeInput(body.home)))) return reply({ ok: false, code: 'THREAD_REQUEST_INVALID' }, 400) // ANYBROWSER hook
+          const mode = leaseMode(this.env), limits = worldBudgetLimits(this.env) // ANYBROWSER hook
+          let answer // ANYBROWSER hook
+          try { // ANYBROWSER hook
+            answer = await this.storage.transaction(async tx => { // ANYBROWSER hook
+              // JOIN hook: the clock is read inside this transaction, and the lease is judged on a clock read
+              // JOIN hook: AFTER its row was read (checkLease), never on one captured before a wait.
+              const now = Date.now() // JOIN hook
+              let holder = null, judged = null // ANYBROWSER hook: the lease holder (and its reference) this commit was judged under
+              let heldUntil = null // JOIN hook: the lease's expiry BEFORE this transaction touched it (the earliest, if judged twice)
+              const result = await threadCommit(tx, body.op, body.input, { now, limits: threadLimits(this.env), // ANYBROWSER hook
+                checkLease: async (t, ref) => { const verdict = await checkLease(t, ref, () => Date.now(), { mode }); if (verdict.ok) { holder = verdict.clientId; judged = ref; heldUntil = heldUntil === null ? verdict.heldUntil ?? null : Math.min(heldUntil, verdict.heldUntil) } return verdict }, // ANYBROWSER hook (heldUntil)
+                budget: { charge: (t, call) => chargeWorldBudgetIn(t, { ...call, now, limits }) } }) // ANYBROWSER hook
+              const committed = result.status === 200 && ['APPLIED', 'IMPORTED', 'RETRACTED'].includes(result.body?.code) // ANYBROWSER hook
+              if (committed) await noteWrote(tx, holder, now) // ANYBROWSER hook: a committed append, import or retract is a write
+              if (committed && body.op === 'import' && body.home) await recordHomePending(tx, body.home, await readFence(tx), now) // ANYBROWSER hook: recorded only
+              // JOIN hook: the index answers what full status no longer carries: the lease, her pending home, and the counts.
+              if (body.op === 'index' && result.status === 200) { // JOIN hook
+                const world = await worldStatus(tx, { lease: await leaseSummary(tx, now), freeze: homeFreezeMode(this.env) }) // JOIN hook
+                return { status: 200, body: { ...result.body, home: world.home, lease: world.lease, world: { threads: world.threads, tailBytes: world.tailBytes, retired: world.retired } } } // JOIN hook
+              } // JOIN hook
+              // JOIN hook (MUST 2b; job 5, M1): the last word before a write returns success, inside its transaction. Its
+              // JOIN hook: LAST await reads the lease row (still this lease?). After it nothing awaits: the clock is read once
+              // JOIN hook: more and the lease's PRE-WRITE expiry must still be ahead of it (never the staged extension), and a
+              // JOIN hook: request already cancelled is refused; either rolls every staged write back, the extension included.
+              if (THREAD_WRITE_OPS.has(body.op) && result.status === 200) { // JOIN hook
+                const named = judged ? await leaseStillNamed(tx, judged) : true // JOIN hook: the transaction's last await
+                if (judged && !(named && leaseHeldAt(heldUntil, () => Date.now()))) throw threadRollback(410, 'WRITER_GONE') // JOIN hook
+                if (request.signal?.aborted) throw threadRollback(503, 'THREAD_REQUEST_CANCELLED') // JOIN hook (after the last await)
+              } // JOIN hook
+              // JOIN hook: only a write that committed bytes extends the lease. A write judged under a lease and then
+              // JOIN hook: refused (an answer, not a throw: 503 THREAD_MOVED, 400, 409, 507), or answered 200 with nothing
+              // JOIN hook: written, rolls back WITH its own status and body: the lease row stays exactly as it was.
+              if (judged && !(result.status === 200 && LEASE_EXTENDING_CODES.has(result.body?.code))) throw threadAnswerRollback(result) // JOIN hook
+              return result // ANYBROWSER hook
+            }) // ANYBROWSER hook
+          } catch (error) { // ANYBROWSER hook: rolled back, nothing committed
+            if (error?.threadRollback) return reply(error.threadRollback.body, error.threadRollback.status) // JOIN hook
+            return reply({ ok: false, code: 'THREAD_STORAGE_UNAVAILABLE' }, 503) // ANYBROWSER hook
+          } // ANYBROWSER hook
+          return reply(answer.body, answer.status) // ANYBROWSER hook
+        } // ANYBROWSER hook
         if (path === '/_mirror/estate') return reply(await this.storage.transaction(async tx => {
           // Read metadata only; never initialize fences or materialize file chunks.
           const fence = await tx.get(FENCE)
@@ -1444,7 +1575,7 @@ export class MirrorDO {
             ...(rawFence === null ? {} : { checkFence: JSON.parse(rawFence) }) }))
         }
         if (path === '/_mirror/prediction-status') return reply({ ok: true, seedId: bootstrap.seedId, prediction: await readPredictionReceipts(this.storage) })
-        return await handleMirrorRequest(request, this.storage, { authorized: true, reserveSnapshot: () => {
+        return await handleMirrorRequest(request, this.storage, { authorized: true, writerLease: leaseMode(this.env) /* ANYBROWSER hook */, homeFreeze: homeFreezeMode(this.env) /* ANYBROWSER hook */, slotRetire: slotRetireMode(this.env) /* JOIN hook */, reserveSnapshot: () => {
           if (this.snapshotReaders >= MIRROR_LIMITS.snapshotReaders) fail('MIRROR_SNAPSHOT_BUSY', 503)
           this.snapshotReaders++
           return () => { this.snapshotReaders-- }

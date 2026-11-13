@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/KNOWN-RED-TESTS.md
 /known-red-tests:
-  en: 91851e01ac1f8ab7
-  zh: 7b78c22c0962382c
+  en: c31939ef142c8d60
+  zh: 02b0eaa6a68b88c9
 /known-red-tests/they-cannot-pass-in-this-repository:
-  en: 99c32461317bef8e
-  zh: f50a22e2a386e498
+  en: 41c32d31463102ed
+  zh: 51f07aadeab99e2f
 /known-red-tests/red-for-reasons-not-yet-investigated:
-  en: f110dab787ed20ce
-  zh: 83c2e1f3da7eea35
+  en: 79ab13d8b70f61e2
+  zh: a7ad2a47c93211fe
 /known-red-tests/found-red-by-the-recorded-run:
-  en: c1a44791da18e1a9
-  zh: e7b68cc3301b2cb4
+  en: bc6dd5311c6af789
+  zh: a9453c39344dbeaa

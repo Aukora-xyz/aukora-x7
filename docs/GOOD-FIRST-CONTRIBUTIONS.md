@@ -6,14 +6,14 @@ Ten real starting tasks. Each is tied to a file in this tree and to a red test o
 
 **These are not opened as issues.** They live only on this page. Before you start one, open an issue or a draft pull request that names its number here, so two people do not do the same work. When one is done, the pull request that closes it also removes it from this page.
 
-Rules that apply to every task ([CONTRIBUTING.md](../CONTRIBUTING.md)): no test, cap or gate is weakened; a red row on [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md) changes only with a cause written down; every claim carries one of the labels IMPLEMENTED, RECORDED RUN, INDEPENDENTLY VERIFIED (nothing has it yet), UNVERIFIED or DIRECTION.
+Rules that apply to every task ([CONTRIBUTING.md](../CONTRIBUTING.md)): no test, cap or gate is weakened; a red row on [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md) changes only with a cause written down; every claim carries one of the labels IMPLEMENTED, RECORDED RUN (of an earlier tree), INDEPENDENTLY VERIFIED (nothing has it yet), UNVERIFIED or DIRECTION.
 
 Three words used below: an organ is one replaceable module of Auma, the AI in this repository; a ball is the manifest that names every organ by hash; the genesis head is the first ball, at epoch (version number) 1, that every node starts from.
 
 ## 1. Run the suites on a second machine
 
-- **Gap:** the only run is by the authors, on one machine, macOS ([RUN-RECORD.md](RUN-RECORD.md)). Nothing is INDEPENDENTLY VERIFIED. Two runtime specs only run on Linux (`vitest.config.ts`, lines 69 to 76).
-- **Done:** a pull request with a record in the same format as RUN-RECORD.md: tool versions, the counts of each suite, every failing case name compared with KNOWN-RED-TESTS.md, and the dry-run ball id. Linux is the most useful. RUN-RECORD.md gives no durations, so note how long the install and each suite took.
+- **Gap:** the only run is by the authors, on one machine, macOS ([RUN-RECORD.md](RUN-RECORD.md)) (a record of an earlier tree). Nothing is INDEPENDENTLY VERIFIED. Two runtime specs only run on Linux (`vitest.config.ts`, lines 69 to 76).
+- **Done:** a pull request with a record in the same format as RUN-RECORD.md (a record of an earlier tree): tool versions, the counts of each suite, every failing case name compared with KNOWN-RED-TESTS.md, and the dry-run ball id. Linux is the most useful. RUN-RECORD.md, a record of an earlier tree, gives no durations, so note how long the install and each suite took.
 - **Check:** a maintainer repeats one suite and gets the same counts. This would be the first INDEPENDENTLY VERIFIED item.
 
 ## 2. Make `server/read-limits.test.mjs` load
@@ -24,7 +24,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 3. Find out why `node-stubs.spec.ts` fails
 
-- **Red:** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)" (the case built at line 96), found by the recorded run.
+- **Red:** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)" (the case built at line 96), found by the recorded run (of an earlier tree).
 - **Done:** the called symbol and the cause are named; the stub or the test is fixed with the cause in the commit, or the row says why not.
 - **Check:** `pnpm exec vitest run packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`.
 
@@ -48,9 +48,9 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 7. Give the superagent tests a synthetic home
 
-- **Red:** `apps/web/src/spatial/superagent/superagent.test.ts` (3 of 12) and `read.spec.ts` (8 of 50) read a node's world under `mirror/home/auma/` that is not shipped. A ninth case in `read.spec.ts` ("exactly 256 referenced nodes fit the file and concurrency budgets", line 1551) depends on machine load. Neither file was in the recorded run.
+- **Red:** `apps/web/src/spatial/superagent/superagent.test.ts` (3 of 12) and `read.spec.ts` (8 of 50) read a node's world under `mirror/home/auma/` that is not shipped. A ninth case in `read.spec.ts` ("exactly 256 referenced nodes fit the file and concurrency budgets", line 1551) depends on machine load. Neither file was in the recorded run (of an earlier tree).
 - **Done:** both files run against a synthetic home created by the test; the timing case no longer depends on load.
-- **Check:** run both files and report the command you used; it is not in RUN-RECORD.md yet.
+- **Check:** run both files and report the command you used; it is not in RUN-RECORD.md yet (a record of an earlier tree).
 
 ## 8. Make the workflow-trigger tests fit a repository with triggers off
 
@@ -68,7 +68,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 - **Gap:** `server/build-preview.mjs` (lines 43 to 55) posts to `http://127.0.0.1` at `PORT`, default 4610, before and after a build. A program listening there is changed.
 - **Done:** with `PORT` unset it makes no request; a test with a listening stub shows zero calls; the warning in the docs gets shorter.
-- **Check:** the new test passes, and the build still completes with `PORT` set as in RUN-RECORD.md.
+- **Check:** the new test passes, and the build still completes with `PORT` set as in RUN-RECORD.md (a record of an earlier tree).
 
 ## More candidates, not counted above
 

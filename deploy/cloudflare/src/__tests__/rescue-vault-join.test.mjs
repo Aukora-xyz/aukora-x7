@@ -24,6 +24,7 @@ import { createWorker } from '../worker.mjs'
 import { MirrorDO } from '../mirror-do.mjs'
 import { FakeIndexedDb, FakeLocalStorage, fileEntry, dirEntry, goneEntry } from './rescue-fakes.mjs'
 import { buildRescue, createVaultBucket, createVaultBudget, createVaultFetch } from './vault-fakes.mjs'
+import { waitFor } from './wait-for.mjs'
 
 const DB = 'aukora-x6-vfs'
 const WORLD = 'node-main-v1'
@@ -337,13 +338,13 @@ test('SHOULD same-site GET: a vault read from a sibling origin (same-site, cross
   assert.equal(e.bucket.calls.length, 0, 'no bucket call')
   assert.deepEqual(e.calls, [], 'no HEAD or MIRROR call (not even the ready check)')
   const mine = await e.send('/_vault/rescue')
-  assert.deepEqual([mine.status, await json(mine)], [200, { ok: true, rescues: [] }])
+  assert.deepEqual([mine.status, await json(mine)], [200, { ok: true, rescues: [], limit: 32 }])
   const typed = await e.send('/_vault/rescue', { headers: { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } })
   assert.equal(typed.status, 200, 'the owner typing the address still reads')
   assert.equal((await e.send('/_vault/blob/' + hash, { method: 'HEAD' })).status, 404)
 })
 
-test('MUST double dots and MUST private names, THROUGH the Worker: two-dot secrets never leave; a private file that differs in her cloud is named [redacted]', async () => {
+test('MUST double dots and MUST private names, THROUGH the Worker: two-dot secrets never leave; a private file never reaches her cloud, so nothing of it is named', async () => {
   const privateBytes = enc.encode('a private line of hers')
   const privateHash = sha(privateBytes)
   const flipped = new Uint8Array(privateBytes)
@@ -356,10 +357,16 @@ test('MUST double dots and MUST private names, THROUGH the Worker: two-dot secre
   const idb = seeded(storeEntries(journal(1000), [['/dsh/home/auma/private', dirEntry()], ['/dsh/home/auma/private/diary-title.txt', fileEntry(privateBytes)],
     ['/dsh/home/..ssh', dirEntry()], ...secrets.map(([key, text]) => [key, fileEntry(text)])]))
   const result = await kitOn(e, idb).copyToCloud()
-  assert.equal(result.complete, false)
-  assert.ok(result.lines.includes('Not the same in her cloud: /dsh/home/auma/private/[redacted]'), JSON.stringify(result.lines))
+  // The private file is no longer sent, so her cloud's
+  // flipped copy of it is never asked for and the copy is complete. Before, this test asserted the mismatch line
+  // 'Not the same in her cloud: /dsh/home/auma/private/[redacted]' and complete false.
+  assert.equal(result.complete, true, result.line + ' | ' + JSON.stringify(result.lines))
+  assert.ok(result.lines.includes(`private: not carried — 1 file, ${privateBytes.length} bytes, left at origin.`), JSON.stringify(result.lines))
   assert.ok(!JSON.stringify(result).includes('diary-title'), 'the private name is never shown')
+  assert.ok(!e.bucket.calls.some(call => String(call.key).includes(privateHash)), 'her cloud is never asked for the private file')
   const index = new TextDecoder().decode(e.bucket.objects.get(`w/${WORLD}/rescue/${result.id}/pending.json`).bytes)
+  assert.ok(!index.includes('diary-title') && !index.includes('/dsh/home/auma/private') && !index.includes(privateHash), 'the index names nothing of it')
+  assert.deepEqual(JSON.parse(index).leftAtOrigin, { private: { files: 1, bytes: privateBytes.length } })
   for (const [key, mark] of secrets) {
     assert.ok(!index.includes(key.split('/').at(-1)), key + ' is not in the index')
     assert.ok(![...e.bucket.objects.values()].some(entry => Buffer.from(entry.bytes).includes(mark)), mark + ' never reached the bucket')
@@ -611,7 +618,7 @@ test('SHOULD accounting: the one overshoot the reservation allows: a piece whose
     return null
   } } })
   const vault = createVaultFetch({ bucket, budget: watched, limits: { piece: 16 }, now: () => NOW })
-  const until = async test => { for (let i = 0; i < 10000 && !test(); i++) await new Promise(resolve => setImmediate(resolve)); assert.ok(test()) }
+  const until = test => waitFor(test, String(test))
   const a = vault('/_vault/blob/' + hP, { method: 'PUT', body: P })
   await until(() => putsOfP === 1)
   const b = vault('/_vault/blob/' + hP, { method: 'PUT', body: P })

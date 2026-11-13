@@ -6,7 +6,7 @@
 
 这些都还没有解决。只有当修复进入这棵树，某个缺口才会从本页消失。
 
-本页使用的标签：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [RUN-RECORD.zh.md](RUN-RECORD.zh.md)）、INDEPENDENTLY VERIFIED（目前没有任何东西带这个标签）、UNVERIFIED（有人声称或写出来了，但这里没有测试守住它，或没有运行记录显示它）、DIRECTION（尚未构建）。
+本页使用的标签：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [RUN-RECORD.zh.md](RUN-RECORD.zh.md)，一次属于较早的一棵树的运行）、INDEPENDENTLY VERIFIED（目前没有任何东西带这个标签）、UNVERIFIED（有人声称或写出来了，但这里没有测试守住它，或没有运行记录显示它）、DIRECTION（尚未构建）。
 
 下文用到两个词：organ（器官）是 Auma 的一个可替换模块，Auma 是本仓库里的 AI；ball（球）是按哈希列出每个 organ 的清单。
 
@@ -52,7 +52,7 @@
 
 ### 6. 没有记录可复现的构建
 
-- 有一次构建在一台机器上运行（RECORDED RUN）。没有第二台机器比较过 `apps/web/dist` 的哈希，或演练球的 id `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`。
+- 有一次构建在一台机器上运行（RECORDED RUN（属于较早的一棵树））。没有第二台机器比较过 `apps/web/dist` 的哈希，或演练球的 id `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`。
 - 构建需要 `.git` 或 `DSH_CLIENT_COMMIT_HASH`，并且默认会向 4610 端口上的一个主机发送请求（`server/build-preview.mjs`，第 43 至 55 行）。
 - 由谁来做：任何第二个构建者；构建脚本由维护者负责。
 
@@ -92,10 +92,10 @@
 
 | 能做的事 | 怎么做 | 标签 |
 | --- | --- | --- |
-| 不用安装就运行 22 个测试文件；预期最后一行为 `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs`（Node 24.9 或更新版本） | UNVERIFIED：在一台机器上看到过，不在记录的运行里 |
+| 不用安装就运行 22 个测试文件；预期最后一行为 `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs`（Node 24.9 或更新版本） | UNVERIFIED：在一台机器上看到过，不在记录的运行（属于较早的一棵树）里 |
 | 对照钉住的值检查每个单元文件，不运行它 | 对 `apps/web/public/cells/*.wasm` 和 `wasm-cells.ts` 的 SHA-256 循环（见 [WHAT-IS-BUILT.zh.md](WHAT-IS-BUILT.zh.md)） | IMPLEMENTED |
 | 用没有源码的 `skillsmith` 单元作编译器，从 `aura-focus.wat` 重建 `aura-focus.wasm` | `server/aura-focus-cell.build.mjs`；测试 `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
-| 安装、构建、启动本地宿主、运行四个测试套件、运行演练 | [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)，第 3 节 | 在一台机器上的 RECORDED RUN |
+| 安装、构建、启动本地宿主、运行四个测试套件、运行演练 | [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)，第 3 节 | 在一台机器上的 RECORDED RUN（属于较早的一棵树） |
 
 ## 读者今天不能复现什么
 

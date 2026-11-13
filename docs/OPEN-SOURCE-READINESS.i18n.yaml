@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/OPEN-SOURCE-READINESS.md
 /open-source-readiness:
-  en: bc5455f32833c00e
-  zh: 5dbf76fe0198992e
+  en: 8d8f24ba6e2e40fe
+  zh: 4fd03a5be9c52b56
 /open-source-readiness/the-gaps-in-priority-order:
   en: bcbd1c637a51874d
   zh: 6f9b3cb6fe76d144
@@ -24,8 +24,8 @@
   en: ecccb352e34996e2
   zh: 3f4b41c027a8e884
 /open-source-readiness/the-gaps-in-priority-order/6-no-reproducible-build-is-recorded:
-  en: e8785abeab7abd57
-  zh: cacf0096088e9bea
+  en: 0a8c0dc43495f38c
+  zh: 2025c5fcf2e89676
 /open-source-readiness/the-gaps-in-priority-order/7-checkpoint-signers-are-synthetic:
   en: d59e7c058788195e
   zh: 3241703a003dbcda
@@ -39,8 +39,8 @@
   en: 7d58ca32f6dc9a39
   zh: 77d280c670bb96b3
 /open-source-readiness/what-a-reader-can-reproduce-today:
-  en: f6463eb201777371
-  zh: d5c553c1ef306ce9
+  en: b7c4d398f564d2a7
+  zh: 34b5bb86f69c87d2
 /open-source-readiness/what-a-reader-cannot-reproduce-today:
   en: 63f7049ced4d2c46
   zh: ca7940bdafb92a68

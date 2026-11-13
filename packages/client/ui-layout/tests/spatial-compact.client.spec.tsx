@@ -28,6 +28,8 @@ import { en as workLabels } from '../src/client/spatial/work/labels.ts'
 import { AuraPentoraSurface } from '../src/client/spatial/aura/AuraPentoraSurface.tsx'
 import { AURA_SURFACE } from '../src/client/spatial/aura/model.ts'
 import { HEAD_LAG_ROUTE } from '../src/client/spatial/portal/build-notice.ts'
+import { NoticesMenu, NoticesSurface } from '../src/client/spatial/portal/NoticesSurface.tsx'
+import { NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
 
 // The lane occupants are not what this spec is about; each stand-in keeps the one door the frame hands it.
 vi.mock('../src/client/spatial/eyes/page-eyes.ts', () => ({ installPageEyes: () => () => {} }))
@@ -1671,65 +1673,110 @@ describe('REQUEST from the runtime: the reload notice, whichever app is open', (
     )
   }
 
-  it('over any other app, or none, the frame shows it once, in a row of its own at the centre lane\'s foot', async () => {
-    const { frame, instance, lane } = mountFrame({ slots: { 'shell.surface': (owner: SlotOwner) => <RealSurfaces activeSurface={owner.activeSurface} /> } })
+  /** The system menu as the portal registers it: Notices first (order -10), then the predecessor's launchers. */
+  const systemMenu = (owner: SlotOwner) => (
+    <>
+      <NoticesMenu {...(owner as Parameters<typeof NoticesMenu>[0])} />
+      <SystemMenu {...(owner as Parameters<typeof SystemMenu>[0])} />
+    </>
+  )
+  const withNotices = (owner: SlotOwner) => (
+    <>
+      <RealSurfaces activeSurface={owner.activeSurface} />
+      <NoticesSurface {...(owner as Parameters<typeof NoticesSurface>[0])} />
+    </>
+  )
+  // The launcher's data attributes sit on its head (the button); its tone sits on the portal frame around it.
+  const noticeButton = (root: ParentNode): HTMLButtonElement => root.querySelector<HTMLButtonElement>('button[data-notices-launcher]')!
+  const noticesLauncher = (root: ParentNode): HTMLElement => noticeButton(root).closest<HTMLElement>('.ak-portal')!
+  afterEach(() => { resetNoticesForTests() })
+
+  // MOVED, NOT WEAKENED: every case that showed the frame's pill now shows the gold count on the
+  // Notices launcher and the notice's row in its list; the frame itself draws no notice anywhere.
+  it('over any other app, or none, the frame draws nothing; Notices is gold with 1, and its list has the one row', async () => {
+    const { frame, instance, lane } = mountFrame({ slots: { 'shell.surface': withNotices, 'shell.menu.system': systemMenu } })
     act(() => { instance.actions.selectSurface('identity', undefined, 'contained') })
-    const button = await waitFor(() => {
-      const [found] = shown(frame)
-      expect(found).toBeDefined()
-      return found!
-    })
-    expect(shown(frame)).toHaveLength(1)
-    expect(button.getAttribute('data-new-build')).toBe(PUBLISHED.ballId)
-    expect(button.textContent).toBe('Newer Auma · epoch 172 · Reload')
-    // Where it sits: the centre lane's body, after the apps' stack, in no corner and over no app.
-    const row = button.closest<HTMLElement>('[data-build-notice]')!
-    const body = lane('center').querySelector('[data-corner="center-left"]')?.parentElement?.lastElementChild
-    expect(row.parentElement).toBe(body)
-    expect(row.nextElementSibling).toBeNull()
-    expect(row.previousElementSibling?.querySelector('[data-surface-layer="extension"]')).not.toBeNull()
-    expect(row.querySelector('[data-corner]')).toBeNull()
+    await waitFor(() => { expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1') })
+    expect(noticesLauncher(frame).classList.contains('ak-tone-gold')).toBe(true)
+    expect(noticeButton(frame).getAttribute('aria-label')).toBe('Notices, 1 waiting')
+    expect(lane('right').contains(noticesLauncher(frame))).toBe(true)
+    // The frame draws no notice of its own, in any lane.
+    expect(frame.querySelector('[data-build-notice]')).toBeNull()
+    expect(shown(frame)).toHaveLength(0)
+    // Opening Notices lists the one notice, in her runtime's words, with its Reload.
+    fireEvent.click(noticeButton(frame))
+    expect(instance.getSnapshot().activeSurface).toBe(NOTICES_SURFACE)
+    const row = frame.querySelector<HTMLElement>(`[data-notice-id="auma:${PUBLISHED.ballId}"]`)!
+    expect(row).not.toBeNull()
+    expect(row.textContent).toContain('A newer Auma is published (epoch 172); this tab runs epoch 171. One reload brings her.')
+    expect(row.querySelector('[data-notice-action="auma"]')?.textContent).toBe('Reload')
+    expect(lane('center').contains(row)).toBe(true)
     // With no app open, the same one notice.
     act(() => { instance.actions.closeSurface() })
-    expect(shown(frame)).toHaveLength(1)
-    expect(shown(frame)[0]?.closest('[data-build-notice]')).not.toBeNull()
+    expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1')
+    expect(frame.querySelector('[data-build-notice]')).toBeNull()
   })
 
-  it('compact, the same row at the foot of the centre lane', async () => {
+  it('compact, the same gold count in the menu lane, and nothing at the foot of the centre lane', async () => {
     compactMatches = true
-    const { frame, instance, lane } = mountFrame()
+    const { frame, instance, lane, active } = mountFrame({ slots: { 'shell.menu.system': systemMenu } })
     act(() => { instance.actions.selectSurface('identity', undefined, 'contained') })
-    await waitFor(() => { expect(shown(frame)).toHaveLength(1) })
-    expect(lane('center').contains(shown(frame)[0]!)).toBe(true)
+    await waitFor(() => { expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1') })
+    expect(lane('right').contains(noticesLauncher(frame))).toBe(true)
+    expect(lane('center').querySelector('[data-build-notice], [data-new-build]')).toBeNull()
+    // The menu lane in front: the gold count is in the lane that is in front, live and not hidden.
+    act(() => { instance.actions.showCompactLane('right') })
+    expect(active()).toEqual(['right'])
+    expect(lane('right').hasAttribute('inert')).toBe(false)
+    expect(lane('right').getAttribute('aria-hidden')).not.toBe('true')
+    expect(noticeButton(frame).closest('[hidden]')).toBeNull()
+    expect(noticeButton(frame).getAttribute('aria-label')).toBe('Notices, 1 waiting')
+    expect(noticesLauncher(frame).classList.contains('ak-tone-gold')).toBe(true)
   })
 
-  it('Work or Aura open: only that app\'s own button, once, and the frame does not read for it', async () => {
-    const { frame, instance } = mountFrame({ slots: { 'shell.surface': (owner: SlotOwner) => <RealSurfaces activeSurface={owner.activeSurface} /> } })
-    // The boot app is Aura Coherence: its own Reload button carries the notice; the frame's row is not drawn.
+  it('Work or Aura open: only that app\'s own button, once, the frame does not read, and Notices counts that app\'s read', async () => {
+    const { frame, instance, lane } = mountFrame({ slots: { 'shell.surface': withNotices, 'shell.menu.system': systemMenu } })
+    // The boot app is Aura Coherence: its own Reload button carries the notice; the frame draws nothing and reads nothing.
     expect(instance.getSnapshot().activeSurface).toBe(AURA_SURFACE)
     await waitFor(() => { expect(shown(frame)).toHaveLength(1) })
     expect(frame.querySelector('[data-build-notice]')).toBeNull()
     expect(shown(frame)[0]?.closest('[data-aura-coherence-surface]')).not.toBeNull()
-    // Aura read once at mount; the frame did not read at all.
+    // Aura read once at mount; the frame did not read at all. Aura's one read also makes Notices gold with 1, on the
+    // boot screen, beside Aura's own button.
+    expect(lagReads).toBe(1)
+    await waitFor(() => { expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1') })
+    expect(noticesLauncher(frame).classList.contains('ak-tone-gold')).toBe(true)
+    expect(noticeButton(frame).getAttribute('aria-label')).toBe('Notices, 1 waiting')
+    // Opened from Aura: the row is there at once, and opening it reads nothing (the frame does not read while Notices is
+    // open, and Aura no longer reads once it is not the open app).
+    fireEvent.click(noticeButton(frame))
+    expect(instance.getSnapshot().activeSurface).toBe(NOTICES_SURFACE)
+    const row = frame.querySelector<HTMLElement>(`[data-notice-id="auma:${PUBLISHED.ballId}"]`)
+    expect(row).not.toBeNull()
+    expect(row?.textContent).toContain('A newer Auma is published (epoch 172); this tab runs epoch 171. One reload brings her.')
+    expect(lane('center').contains(row)).toBe(true)
+    expect(frame.querySelectorAll('[data-notice]')).toHaveLength(1)
+    await act(async () => { await new Promise((done) => { setTimeout(done, 50) }) })
     expect(lagReads).toBe(1)
     act(() => { instance.actions.selectSurface(WORK_SURFACE, undefined, 'contained') })
     await waitFor(() => { expect(shown(frame)).toHaveLength(1) })
     expect(frame.querySelector('[data-build-notice]')).toBeNull()
     expect(lagReads).toBe(2)
-    // Another app: Work's button is gone and the frame's row carries it, still once.
+    // Work's read of the same notice is the same row: still 1, never 2.
+    expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1')
+    // Another app: Work's button is gone, the frame reads for it, and Notices stays gold with 1; no button is drawn for it.
     act(() => { instance.actions.selectSurface('identity', undefined, 'contained') })
-    await waitFor(() => { expect(frame.querySelector('[data-build-notice] [data-new-build]')).not.toBeNull() })
-    expect(shown(frame)).toHaveLength(1)
+    await waitFor(() => { expect(lagReads).toBe(3) })
+    expect(noticeButton(frame).getAttribute('data-waiting')).toBe('1')
+    expect(shown(frame)).toHaveLength(0)
+    expect(frame.querySelector('[data-build-notice]')).toBeNull()
   })
 
-  it('the row is in the lane\'s flow at its foot: never positioned, and the apps\' stack gives it its height', () => {
-    const { desktop } = splitCompact(SHEET)
-    const row = ruleBody(desktop, '.buildNotice')
-    expect(row).not.toMatch(/position|z-index|inset|top:|bottom:|transform/u)
-    expect(row).toContain('flex: none;')
+  it('the centre lane holds only the apps\' stack: the sheet has no notice row, and the stack fills the lane', () => {
+    const { desktop, compact } = splitCompact(SHEET)
+    expect(uncommented(SHEET)).not.toContain('buildNotice')
     expect(ruleBody(desktop, '.laneCenter .laneBody')).toMatch(/display: flex;[\s\S]*flex-direction: column;/u)
     expect(ruleBody(desktop, '.laneCenter .surfaceStack')).toContain('flex: 1 1 0;')
-    // Compact moves nothing of it, beyond the band the whole centre body already starts below.
-    expect(uncommented(splitCompact(SHEET).compact)).not.toContain('buildNotice')
+    expect(uncommented(compact)).not.toContain('buildNotice')
   })
 })

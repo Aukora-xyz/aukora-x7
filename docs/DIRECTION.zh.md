@@ -7,7 +7,7 @@
 本页使用的标签，仅此几种：
 
 - **IMPLEMENTED**：代码和测试在这棵树中。
-- **RECORDED RUN**：在 [RUN-RECORD.zh.md](RUN-RECORD.zh.md) 中有记录。
+- **RECORDED RUN（属于较早的一棵树）**：在 [RUN-RECORD.zh.md](RUN-RECORD.zh.md) 中有记录。
 - **INDEPENDENTLY VERIFIED**：由作者之外的人运行过。目前还没有任何一项带有这个标签。
 - **UNVERIFIED**：有人声称或写过，但这里没有测试支持，也没有运行记录显示。
 - **DIRECTION**：尚未构建。
@@ -30,7 +30,7 @@ AI 智能体开始替人行事：在电脑、手机、网络上，在企业里�
 
 ## 今天的进展
 
-- 作者在一台机器上做了一次记录的运行：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个列在 [KNOWN-RED-TESTS.zh.md](KNOWN-RED-TESTS.zh.md) 中。RECORDED RUN。这次运行没有浏览器、没有部署、没有模型调用，也没有 passkey。
+- 作者在一台机器上做了一次记录的运行（属于较早的一棵树）：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个列在 [KNOWN-RED-TESTS.zh.md](KNOWN-RED-TESTS.zh.md) 中。RECORDED RUN（属于较早的一棵树）。这次运行没有浏览器、没有部署、没有模型调用，也没有 passkey。
 - 本树中没有记录过端到端的、经所有者批准的自我修改。UNVERIFIED。
 - 从本树部署到一个全新的账户：UNVERIFIED。
 - 恢复一份完整的已存快照，可能让一个已经用掉的批准重新生效。有一个测试复现了这一点，并把缺失的防御列为未解决项（`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`）。树中没有修复。
@@ -50,12 +50,12 @@ AI 智能体开始替人行事：在电脑、手机、网络上，在企业里�
 **今天有什么在支撑。**
 - 精确字节的批准。所有者的 passkey 批准一个请求；边缘端把这次批准绑定到这些字节的哈希，只消耗一次，并在同一个存储步骤中移动当前版本（`deploy/cloudflare/src/aumlok.mjs`、`head-do.mjs`；测试 `convergence-approval-fencing.test.mjs`、`convergence-policy.test.mjs`、`head-hardening.test.mjs`）。IMPLEMENTED。
 - 受保护 organ 的清单，只有 passkey 才能改动它们（`server/ball-transition.mjs`；测试 `deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`）。IMPLEMENTED。
-- 一个在单台机器上运行节点的本机宿主（`server/local-host.mjs`）。RECORDED RUN：一次启动，未登录，没有浏览器。
+- 一个在单台机器上运行节点的本机宿主（`server/local-host.mjs`）。RECORDED RUN（属于较早的一棵树）：一次启动，未登录，没有浏览器。
 - 一个包含 22 个测试文件的免安装检查：`node scripts/verify-lite.mjs`。它不覆盖权威方面的测试，那些需要安装。见 [WHAT-IS-BUILT.zh.md](WHAT-IS-BUILT.zh.md)。
 
 **缺少什么。** 24 个单元的源代码。一个调用编译器（`packages/experimental/webworker-runtime/src/x6/scion.ts`）或自建步骤（`mirror/home/auma/seed/organs/seed-cycle.js`）的测试。一次有记录的部署。一次使用真实 passkey 的、有记录的浏览器会话。在第二台机器上对比过的构建。部署用的值是代码内部的占位符，不只是在 `deploy/cloudflare/wrangler.toml` 里。受保护清单是源代码，所以一次代码部署不用 passkey 就能改掉它。谁持有部署凭据：UNVERIFIED。认证器签署的是一个随机挑战，不是这些字节；所有者只能通过页面看到这些字节。
 
-**完成的样子。** 作者之外的某个人在自己的机器上照着文档操作，部署到一个全新的账户，登记一个 passkey，批准一次修改，并按 [RUN-RECORD.zh.md](RUN-RECORD.zh.md) 的格式发布一份运行记录。那将是第一个 INDEPENDENTLY VERIFIED 的条目。
+**完成的样子。** 作者之外的某个人在自己的机器上照着文档操作，部署到一个全新的账户，登记一个 passkey，批准一次修改，并按 [RUN-RECORD.zh.md](RUN-RECORD.zh.md)（一份属于较早的一棵树的记录）的格式发布一份运行记录。那将是第一个 INDEPENDENTLY VERIFIED 的条目。
 
 ### 2. 连续性：经得起变化的身份、记忆、收据与恢复
 
@@ -64,8 +64,8 @@ AI 智能体开始替人行事：在电脑、手机、网络上，在企业里�
 **今天有什么在支撑。**
 - organ 列在一个 **ball** 里：一份清单，用 SHA-256 哈希点名每一个 organ。每个 ball 有一个 **epoch**，即版本号，必须恰好加一。**HEAD** 是选出当前 ball 的边缘存储（`mirror/home/balls/HEAD.json`、`deploy/cloudflare/src/head-do.mjs`；测试 `head-hardening.test.mjs`）。IMPLEMENTED。
 - **MIRROR** 是保存她主目录文件副本的边缘存储（`deploy/cloudflare/src/mirror-do.mjs`、`packages/experimental/webworker-runtime/src/storage/idb-persist.ts`；测试 `server/mirror-replay.test.mjs`）。IMPLEMENTED。
-- 收据：带签名检查点的哈希链日志（`mirror/home/auma/seed/organs/seed-receipts.js`）。IMPLEMENTED，但 `server/receipts.test.mjs` 在 RECORDED RUN 中有 6 个用例失败。边缘端检查这条链（`server/verified-facts.mjs`；测试 `server/verified-facts.test.mjs`）。IMPLEMENTED。
-- 记忆 organ（`mirror/home/auma/seed/organs/` 中的 `seed-memory.js`、`seed-recall.js`、`auma-memory-domain.js`）。IMPLEMENTED；它们的测试在 RECORDED RUN 中有失败（`server/recall.test.mjs` 50 个、`memory.test.mjs` 3 个、`absence.test.mjs` 9 个），原因未调查。**Kira** 是五个记忆一侧的 Wasm 单元的名字（`apps/web/public/cells/kira-*.wasm`）。没有 organ 调用它们：作为记忆是 UNVERIFIED。
+- 收据：带签名检查点的哈希链日志（`mirror/home/auma/seed/organs/seed-receipts.js`）。IMPLEMENTED，但 `server/receipts.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中有 6 个用例失败。边缘端检查这条链（`server/verified-facts.mjs`；测试 `server/verified-facts.test.mjs`）。IMPLEMENTED。
+- 记忆 organ（`mirror/home/auma/seed/organs/` 中的 `seed-memory.js`、`seed-recall.js`、`auma-memory-domain.js`）。IMPLEMENTED；它们的测试在 RECORDED RUN（属于较早的一棵树） 中有失败（`server/recall.test.mjs` 50 个、`memory.test.mjs` 3 个、`absence.test.mjs` 9 个），原因未调查。**Kira** 是五个记忆一侧的 Wasm 单元的名字（`apps/web/public/cells/kira-*.wasm`）。没有 organ 调用它们：作为记忆是 UNVERIFIED。
 - 救援页面、保险库、有界归档，以及恢复到一个空的边缘端（`deploy/cloudflare/src/rescue-kit.mjs`、`vault.mjs`、`cold-archive.mjs`、`recovery-restore.mjs`；测试 `rescue-pack.test.mjs`、`vault.test.mjs`、`cold-archive-bounded.test.mjs`、`recovery-restore.test.mjs`）。IMPLEMENTED。针对真实边缘端的恢复：UNVERIFIED。
 - 第二台设备：一个已登记的 passkey 批准新设备（`deploy/cloudflare/src/passkey-devices.mjs`；测试 `passkey-devices.test.mjs`）。IMPLEMENTED。真实的认证器：UNVERIFIED。
 

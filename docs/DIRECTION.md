@@ -7,7 +7,7 @@ Where this project is meant to go, and how far along each part is today. Every l
 Labels used on this page, and no others:
 
 - **IMPLEMENTED**: code and tests are in this tree.
-- **RECORDED RUN**: shown in [RUN-RECORD.md](RUN-RECORD.md).
+- **RECORDED RUN (of an earlier tree)**: shown in [RUN-RECORD.md](RUN-RECORD.md).
 - **INDEPENDENTLY VERIFIED**: run by someone other than the authors. Nothing has this label yet.
 - **UNVERIFIED**: claimed or written, but no test here holds it or no run shows it.
 - **DIRECTION**: not built.
@@ -30,7 +30,7 @@ DIRECTION, all of it: a persistent environment that one person owns. It grows wi
 
 ## Where it stands today
 
-- One recorded run on one machine by the authors: 5,502 test cases, 5,399 pass, 90 fail, 89 of them listed in [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md). RECORDED RUN. The run had no browser, no deployment, no model call and no passkey.
+- One recorded run (of an earlier tree) on one machine by the authors: 5,502 test cases, 5,399 pass, 90 fail, 89 of them listed in [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md). RECORDED RUN (of an earlier tree). The run had no browser, no deployment, no model call and no passkey.
 - No owner-approved self-change has been recorded end to end from this tree. UNVERIFIED.
 - A cloud deployment from this tree into a fresh account: UNVERIFIED.
 - Restoring a whole stored snapshot can re-enable an approval that was already spent. A test reproduces it and lists the missing defences as open items (`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`). No fix is in the tree.
@@ -50,12 +50,12 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 **Serves it today.**
 - Exact-bytes approval. The owner's passkey approves one request; the edge binds the approval to a hash of those bytes, spends it once, and moves the current version in the same storage step (`deploy/cloudflare/src/aumlok.mjs`, `head-do.mjs`; tests `convergence-approval-fencing.test.mjs`, `convergence-policy.test.mjs`, `head-hardening.test.mjs`). IMPLEMENTED.
 - The list of protected organs that only the passkey can change (`server/ball-transition.mjs`; test `deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`). IMPLEMENTED.
-- A local host that runs the node on one machine (`server/local-host.mjs`). RECORDED RUN: one boot, signed out, no browser.
+- A local host that runs the node on one machine (`server/local-host.mjs`). RECORDED RUN (of an earlier tree): one boot, signed out, no browser.
 - A no-install check of 22 test files: `node scripts/verify-lite.mjs`. It does not reach the authority tests, which need an install. See [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md).
 
 **Missing.** Sources for 24 cells. A test that calls the compiler (`packages/experimental/webworker-runtime/src/x6/scion.ts`) or the self-build step (`mirror/home/auma/seed/organs/seed-cycle.js`). A recorded deployment. A recorded browser session with a real passkey. A build compared on a second machine. Deployment values are placeholders inside code, not only in `deploy/cloudflare/wrangler.toml`. The protected list is source code, so a code deploy can change it without a passkey. Who holds the deploy credential: UNVERIFIED. The authenticator signs a random challenge, not the bytes; the owner sees the bytes only through the page.
 
-**Done looks like.** Someone other than the authors follows the docs on their own machine, deploys into a fresh account, enrols a passkey, approves one change, and publishes a run record in the format of [RUN-RECORD.md](RUN-RECORD.md). That would be the first INDEPENDENTLY VERIFIED item.
+**Done looks like.** Someone other than the authors follows the docs on their own machine, deploys into a fresh account, enrols a passkey, approves one change, and publishes a run record in the format of [RUN-RECORD.md](RUN-RECORD.md) (whose one record is of an earlier tree). That would be the first INDEPENDENTLY VERIFIED item.
 
 ### 2. Continuity: identity, memory, receipts and recovery that survive change
 
@@ -64,8 +64,8 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 **Serves it today.**
 - Organs are listed in a **ball**: one manifest that names every organ by its SHA-256 hash. Each ball has an **epoch**, a version number that must rise by exactly one. **HEAD** is the edge store that selects the current ball (`mirror/home/balls/HEAD.json`, `deploy/cloudflare/src/head-do.mjs`; test `head-hardening.test.mjs`). IMPLEMENTED.
 - **MIRROR** is the edge store that keeps a copy of her home files (`deploy/cloudflare/src/mirror-do.mjs`, `packages/experimental/webworker-runtime/src/storage/idb-persist.ts`; test `server/mirror-replay.test.mjs`). IMPLEMENTED.
-- Receipts: a hash-chained log with signed checkpoints (`mirror/home/auma/seed/organs/seed-receipts.js`). IMPLEMENTED, but `server/receipts.test.mjs` failed 6 cases in the RECORDED RUN. The edge checks the chain (`server/verified-facts.mjs`; test `server/verified-facts.test.mjs`). IMPLEMENTED.
-- Memory organs (`seed-memory.js`, `seed-recall.js`, `auma-memory-domain.js` in `mirror/home/auma/seed/organs/`). IMPLEMENTED; their tests failed in the RECORDED RUN (`server/recall.test.mjs` 50, `memory.test.mjs` 3, `absence.test.mjs` 9), cause not investigated. **Kira** is the name of five memory-side Wasm cells (`apps/web/public/cells/kira-*.wasm`). No organ calls them: UNVERIFIED as memory.
+- Receipts: a hash-chained log with signed checkpoints (`mirror/home/auma/seed/organs/seed-receipts.js`). IMPLEMENTED, but `server/receipts.test.mjs` failed 6 cases in the RECORDED RUN (of an earlier tree). The edge checks the chain (`server/verified-facts.mjs`; test `server/verified-facts.test.mjs`). IMPLEMENTED.
+- Memory organs (`seed-memory.js`, `seed-recall.js`, `auma-memory-domain.js` in `mirror/home/auma/seed/organs/`). IMPLEMENTED; their tests failed in the RECORDED RUN (of an earlier tree) (`server/recall.test.mjs` 50, `memory.test.mjs` 3, `absence.test.mjs` 9), cause not investigated. **Kira** is the name of five memory-side Wasm cells (`apps/web/public/cells/kira-*.wasm`). No organ calls them: UNVERIFIED as memory.
 - Rescue page, vault, bounded archive, and restore into an empty edge (`deploy/cloudflare/src/rescue-kit.mjs`, `vault.mjs`, `cold-archive.mjs`, `recovery-restore.mjs`; tests `rescue-pack.test.mjs`, `vault.test.mjs`, `cold-archive-bounded.test.mjs`, `recovery-restore.test.mjs`). IMPLEMENTED. A restore against a real edge: UNVERIFIED.
 - A second device: an enrolled passkey approves the new one (`deploy/cloudflare/src/passkey-devices.mjs`; test `passkey-devices.test.mjs`). IMPLEMENTED. Real authenticators: UNVERIFIED.
 

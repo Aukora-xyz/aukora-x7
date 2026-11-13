@@ -553,7 +553,11 @@ test('the piece and row hashes are byte-identical to the old way on the suite fi
     assert.deepEqual({ sha256: row.sha256, pieces: row.pieces }, await oldCut(new TextEncoder().encode(JSON.stringify(byKey.get(row.key)))), row.key)
     checked += 1
   }
-  assert.equal(checked, 10)
+  // job 1 (by order): this is the CLOUD index, which no longer holds her private file (was 10 rows, the private
+  // file among them); it says the file stayed, by count and size.
+  assert.equal(checked, 9)
+  assert.ok(!index.rows.some(row => row.key === PRIVATE_FILE))
+  assert.deepEqual(index.leftAtOrigin, { private: { files: 1, bytes: 'private words'.length } })
   assert.equal(index.rows.find(row => row.key === '/dsh/home/big.bin').pieces.length, 3)
 })
 
@@ -724,7 +728,7 @@ test('a queued save of any shape but [path, entry] pairs is never copied: it cou
   assert.equal(pack.result.complete, false)
 })
 
-test("the cloud copy also leaves main's estate names behind (not her private folder); the local pack keeps today's rule", async () => {
+test("the cloud copy also leaves main's estate names behind, and her private folder (counted, never named); the local pack keeps today's rule", async () => {
   const sensitive = ['/dsh/home/auma/server.pem', '/dsh/home/auma/node.key', '/dsh/home/auma/cert.P12', '/dsh/home/auma/my-secret.txt',
     '/dsh/home/auma/passwords/list.txt', '/dsh/home/auma/aws-credential.json', '/dsh/home/auma/old-keypair.bin', '/dsh/home/auma/private-key.txt',
     '/dsh/home/auma/Private_Key.txt']
@@ -737,11 +741,16 @@ test("the cloud copy also leaves main's estate names behind (not her private fol
   const sent = JSON.parse(new TextDecoder().decode(vault.rescues.get(cloud.id)))
   const keys = sent.rows.map(row => row.key)
   for (const key of [...sensitive, '/dsh/home/auma/passwords']) assert.ok(!keys.includes(key), key + ' must not reach her cloud')
-  assert.ok(keys.includes(PRIVATE_FILE), 'her private folder is copied (chosen by the owner)')
+  // A NEW cloud copy leaves her private folder at
+  // origin and says only its size; before, this line asserted the folder WAS copied.
+  assert.ok(!keys.some(key => key === '/dsh/home/auma/private' || key.startsWith('/dsh/home/auma/private/')), 'her private folder is not copied to her cloud')
+  assert.deepEqual(sent.leftAtOrigin, { private: { files: 1, bytes: 'private words'.length } })
+  assert.ok(![...vault.blobs.values()].some(bytes => Buffer.from(bytes).toString() === 'private words'), 'its bytes never reach her cloud')
   assert.ok(![...vault.blobs.values()].some(bytes => Buffer.from(bytes).toString() === 'MARK'))
   assert.ok(cloud.skipped.some(entry => entry.shape === 'file or folder named ….pem'))
   // The local pack: today's rule, so these names are in it.
   const local = await makePack('estate-local', { entries })
   const localKeys = parse(local.buf).index.rows.map(row => row.key)
   for (const key of sensitive) assert.ok(localKeys.includes(key), key + ' stays in the local pack')
+  assert.ok(localKeys.includes(PRIVATE_FILE), 'her private folder is in the local pack (it never leaves this computer)')
 })

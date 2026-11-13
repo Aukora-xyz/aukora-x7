@@ -100,7 +100,7 @@ kind: "package-library"
 
 ## X6.1 本地运行时
 
-`tree_patch` 和 `tree_undo` 串行执行变更，并完整保留此前的模块、配置和禁用状态，包括仅配置发生变化的情况。可选的 `expectedEpoch` 和 `expectedBallId` 在取得变更队列后检查。旧的仅含 specifier 的历史仍会保留，但 undo 不会猜测缺失的配置；此时应改为恢复完整快照。变更前的快照失败会阻止编辑。
+`tree_undo` 当前因没有可执行的准入签发器而以 `PEARL_QUALIFICATION_MISSING_OR_STALE` 拒绝；这不是 patch 资格过期。底层 `tree_patch` 和 `tree_undo` 串行执行变更，并完整保留此前的模块、配置和禁用状态，包括仅配置发生变化的情况。可选的 `expectedEpoch` 和 `expectedBallId` 在取得变更队列后检查。旧的仅含 specifier 的历史仍会保留，但 undo 不会猜测缺失的配置；此时应改为恢复完整快照。变更前的快照失败会阻止编辑。
 
 变更结果和 `body_map` 分别提供独立的 `prepared`、`activated`、`localSaved`、`remoteSaved` 和 `receiptSaved` 字段。本地保存会等待 IndexedDB 事务；失败时保留脏路径。远程保存仅表示具名 `remoteTarget` 端点确认了精确的 manifest，不表示 Cloudflare 备份或 GitHub 发布。每次已提交的 patch 和 undo 都会向现有回执链追加记录；只有本地持久化成功后，才会报告回执已保存。
 
@@ -197,3 +197,9 @@ host 可以通过独立的前进日志，显式选择一个保留运行时用于
 即使传输过滤后没有产生协议条目，清空云端镜像根目录或祖先目录仍需协调。其本地内容修订与协调标记一并提交，因此空发件箱不能将这些删除错误地报告为已同步。普通的仅私有内容写入仍不受此要求约束。
 
 T2 `promote_staged` 会将本地保留的晋升信封上传到 `/_head/stage`；试运行不会上传。只有得到确认的 `awaiting_owner` 响应才会报告 `stagedForOwner`，失败时会暴露 `stageError`，不会声称已晋升或已获所有者批准。`promotion_status` 区分成功的 T1 所有者会话（`t1-session`）和已消费的批准 token。新晋升回执要求完整的 64 位十六进制 ball 及父级标识符，以及 T1/T2 层级；匹配历史 epoch 时保持原有记录不可变，并抑制重复恢复。仓库 write/edit/commit 操作中，位于 `docs/**/*.md` 下或匹配根目录 `NORTH-STAR*.md` 的路径只绕过历史文件名启发式检查，仍保留其他所有授权和秘密检查。
+
+保留测试的准入判定只使用经过验证且完整匹配构建基准的用例行来计算覆盖和改进；目标必须与候选器官相同，夹具必须属于基准，规范化后的作者必须精确匹配构建内的 `dot` 允许名单。作者规范化使用 NFKC 并移除默认可忽略码点；大小写及首尾空白仍有意义。构建器要求目标器官标识符有效（不要求属于套件的器官列表），且作者字段如存在必须为字面值 `dot`。每个符合条件的用例在两个试验分支中分别使用全新 worker、基准夹具和时钟单独运行；候选器官必须通过所有这些用例，并至少改进一个。候选与现任器官分别独立运行，按固定顺序比较全部固定用例，不论作者；只有在线候选运行通过而固定用例运行失败时，才报告 `PEARL_SUITE_PINNED_ONLY_FAILED`；固定用例证据不完整时报告 `PEARL_SUITE_PINNED_ONLY_INCOMPLETE`。完整在线比较与仅固定用例比较都要求目标器官的每行通过，并禁止现任器官通过的任何行在候选运行中失败。非目标行在两个分支均失败且有界 `{phase, code, subject}` 记录多重集合完全相同时，视为未变化且不参与判定；归属目标的 `PEARL_ORGAN_NOT_MOUNTED` 记录不能使用此例外；通过总数不能决定胜者。`ok` 表示在线比较义务是否满足，`trialOk` 保留全部行通过的原始结果。候选在线运行的基础设施或行为失败报告 `PEARL_SUITE_LIVE_FAILED`；结果格式缺失报告 `PEARL_SUITE_LIVE_INCOMPLETE`。完整的隔离失败和平局分别报告 `PEARL_SUITE_ISOLATED_FAILED` 与 `PEARL_SUITE_NOT_IMPROVED`。目标候选基础设施失败拒绝准入。现任器官的导出、工厂或 setup 挂载失败仅在每条记录均指向目标且回答精确为 `{ok:false,error:'PEARL_ORGAN_NOT_MOUNTED'}` 时视为完整失败，其他器官调用目标时也适用。拒绝用例行自身的守卫失败仅在回答尚未匹配预期拒绝时计入。此守卫例外是试验准入策略，不证明在不受限制的生产环境中失败。其他目标基础设施失败、结果格式缺失和记录饱和仍视为不完整。被拒绝的比较不报告胜者。结果报告 `pinnedTargetedCases`、`pinnedOnlyPassed` 和独立保存、已验证的 `baselineDigest`。构建固定信息缺失、无效或仅包含旧版摘要时报告 `PEARL_SUITE_PIN_UNAVAILABLE`；在线套件缺失或改动已固定行时报告 `PEARL_SUITE_PIN_MISMATCH`。没有符合条件的独立目标行时报告 `PEARL_SUITE_NO_APPROVED_TARGET_CASE`。两种固定信息错误都拒绝准入，且不报告胜者或已完成的比较。
+
+保留测试运行器将器官工厂与私有测试框架分别编译，不强制器官源码进入严格模式。仅运行名称精确匹配的可调用 Seed 导出，同伴调用也遵循此规则；仅插件导出不算可调用器官。框架拥有的逐用例基础设施记录保留导入、守卫、依赖、工厂、导出、setup 和超时失败，即使候选代码捕获或重写错误也不会清除记录。记录包含负责的器官；归属不明和饱和仍视为不完整。候选返回的记录不能替代它们。缺失的上下文服务、嵌套 tools/organs/snapshots/文件系统成员和 process 能力记录依赖失败；未提供的 `organs.list` 在调用时也记录，而 `process.getBuiltinModule` 使用受守卫保护的导入。用例声明的拒绝仅在基础设施记录为空时匹配目标 run 的错误，且错误必须等于预期代码或以该代码加 `:` 开头。工厂与 setup 在相同守卫下执行；无效导出与初始化失败使用固定的基础设施代码。每行使用全新的无网络、无 origin 文件系统夹具和固定时钟，而非生产服务。夹具代理隐藏直接的 `location` 与 `globalThis.location`，其余全局读写正常转发，并保留原生 crypto 接收者。原生全局身份与别名仍然可用：这是 origin 夹具，不是隔离边界。这些检查不证明完整的 Cordis 激活或待处理依赖已就绪。`tree_patch` 挂载已准入候选后，挂载 SHA 必须与准入 SHA 相同才会推进 HEAD，否则抛出 `PEARL_ADMITTED_MOUNT_SHA_MISMATCH`。挂载副作用可能已经发生；此失败不会自动回滚。
+
+只有当前已挂载、处于 ACTIVE 状态且与 HEAD 精确匹配的 `seed-pearl` 私有上下文才能记录准入资格。全局调用和其他器官的比较仍仅用于诊断。签发前会在全部试验完成后重新检查唯一挂载记录和 fiber，因此销毁、卸载中以及相同字节的重启都会撤销旧上下文。Seed 包装器捕获 run/setup 回调，并以冻结的浅层导出快照作为接收者；回调不能依赖修改 `this`。冻结内建函数在加载器官前捕获。此边界假设宿主内建函数与经过验证的 Pearl 实现可信，不隔离同一 JavaScript 执行域中的任意代码，也不声称能认证调用栈。

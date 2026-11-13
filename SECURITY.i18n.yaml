@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write SECURITY.md
 /security:
-  en: 4544204a98dc47cc
-  zh: 0ece33ced590b8bb
+  en: a6ec1ad072693f3b
+  zh: 0f74319a70948c0d
 /security/how-to-report:
   en: c8467bf393edc4c3
   zh: 8fad22107b01d586
@@ -12,8 +12,8 @@
   en: 4ab0ec1cd4608696
   zh: ec4e10826d7564cd
 /security/security-claims-this-project-does-not-make:
-  en: 9318cdf03cb17411
-  zh: b7333a67bec0cfca
+  en: e3fcaf6cc2e4677b
+  zh: 3f063268da26d5f9
 /security/open-questions:
-  en: 3b6b1dfe65d38e34
-  zh: 540871a2c6c2864e
+  en: bc69599326e1fc74
+  zh: fec25e5ab912a90d

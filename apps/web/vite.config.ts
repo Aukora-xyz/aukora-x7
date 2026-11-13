@@ -20,6 +20,7 @@ const DEFAULT_CLIENT_TITLE = 'AUKORA'
 
 /**
  * Capture only executable retention inputs in the build, separately from mutable runtime files.
+ * Every pinned case must reference an own fixture in this baseline.
  * @param text - Build-time retention suite bytes decoded as UTF-8.
  * @returns The baseline and canonical six-field digest injected into the runtime bundle.
  */
@@ -35,6 +36,14 @@ export function retentionBuildIdentity(text: string): { retentionBaselineSuite: 
     || !Array.isArray(suite.cases) || !suite.cases.length || suite.cases.some(row => !row || typeof row !== 'object' || Array.isArray(row) || typeof row.id !== 'string' || !row.id)
     || new Set(suite.cases.map(row => row.id)).size !== suite.cases.length
     || !suite.fixtures || typeof suite.fixtures !== 'object' || Array.isArray(suite.fixtures)) throw new Error('PEARL_SUITE_INVALID')
+  for (const value of suite.cases) {
+    const row = value as Record<string, unknown>, args = row.args
+    if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('PEARL_SUITE_INVALID')
+    const { fixture, organ } = args as Record<string, unknown>
+    if (typeof organ !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(organ)
+      || (Object.hasOwn(row, 'author') && row.author !== 'dot')) throw new Error('PEARL_SUITE_INVALID')
+    if (typeof fixture !== 'string' || !Object.hasOwn(suite.fixtures, fixture)) throw new Error('PEARL_SUITE_INVALID')
+  }
   const canonical = (value: unknown): string => {
     if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
     if (value && typeof value === 'object') {

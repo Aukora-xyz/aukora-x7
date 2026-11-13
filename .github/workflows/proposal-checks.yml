@@ -1,0 +1,525 @@
+name: Proposal checks (tests on her branches; no secrets, no deploy)
+
+# Written by Auma on one of her proposal branches and installed here by a maintainer, because her branches may not
+# change .github/ (the repo broker refuses it). It holds NO secret, calls neither Cloudflare nor wrangler, and can never
+# write to main.
+#
+# It runs beside "Proposal gate" (proposal-gate.yml), which already runs the deploy gates on the same push: the deploy
+# gate's own tests, the source scrub, mirror integrity, the authority preflight, the web build, the shipped-asset scrub
+# and the Worker bundle. Those steps were in her draft too; they are left out here so one push does not run them
+# twice and give two answers to one question. What this file adds is what she cannot run from inside: every edge test
+# file, the UI suite and the boot test on a large store's shape.
+#
+# The shape (MUST 4): no proposal file can reach the protected suites, and
+# a pass is counted by name, never by an exit code.
+#   fence      main's frozen-paths.mjs judges the proposal's paths (open, plain, frozen) before anything runs
+#   baseline   main's own tree, fresh checkout: the three suites must be green there, and their passed names are kept
+#   edge, ui, boot   fresh checkouts of the proposal; main's copy of every test, helper, setup and configuration file
+#              of the suite is put back and every test the proposal ADDED is removed; main's retention.mjs fails the job
+#              when any name that passed on main did not pass here. The edge job also runs the Messages approval cases
+#              that live outside its folder (MUST 1): worker.spec.ts's two by name and preflight-ordering.
+#              Each job judges in ONE step: main's retention.mjs, protected-run, is the parent
+#              of the suite's runs, holds main's names before they run, takes their results on its own pipe or file and
+#              hashes itself again before answering, so nothing the suite's code could rewrite is read by a later step.
+#              It also holds the hash of every file the job put back (SUITE_PATHS and CONFIG_PATHS,
+#              MUST 1) before the first run, and checks them again before each later run and before answering: the edge
+#              run cannot prepare the Messages run (it fails closed, naming the file).
+#   new-node-tests, new-vitest-tests   the test files the proposal adds, one job per runner, each in its own fresh
+#              checkout with main's configuration, setup and helpers put back, so one added test cannot rewrite what the
+#              other runs (MUST 2); main's retention.mjs, one process that is the parent of the tests, reads the
+#              inventory from git and holds it before they run (MUST 2), and passes a file only when the runner
+#              loaded it, a test of it passed and none failed or was skipped, todo or cancelled (MUST 3); a file's
+#              own result is told from a test by a field the reporter emits, never by its name, and the added vitest files
+#              are selected by exact path through vitest's API, never by its substring filter (MUST 5-6)
+#   Protected jobs also remove every file the proposal ADDED under deploy/cloudflare/src/auma/ (MUST 1).
+#   checks     needs all of them and succeeds only when every one succeeded (the edge's merge rule reads this name)
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   push:
+# [disabled in aukora-x7]     branches:
+# [disabled in aukora-x7]       - "auma/proposal/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: proposal-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Main's copies of what each protected suite runs inside (git paths; a folder is replaced whole).
+  CONFIG_PATHS: >-
+    package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts vitest.shared.ts scripts
+    packages/shell/pwsh-local/src/resolve.ts packages/util/http-proxy/src/policy.ts deploy/ci
+    deploy/package.json deploy/cloudflare/package.json deploy/cloudflare/src/package.json
+    packages/client/ui-layout/package.json packages/client/ui-layout/tsconfig.json
+    packages/experimental/webworker-runtime/package.json packages/experimental/webworker-runtime/tsconfig.json
+  # The Messages approval cases outside the edge folder, run in the protected edge job and its
+  # baseline: every Round26 test of preflight-ordering.test.mjs, and worker.spec.ts's two send-approval cases by
+  # exact name (the rest of worker.spec.ts is not on this list: six of its cases are red on main today).
+  MESSAGES_FILES: deploy/cloudflare/src/__tests__/worker.spec.ts server/preflight-ordering.test.mjs
+
+jobs:
+  fence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      main: ${{ steps.main.outputs.sha }}
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          # Full history: origin/main for the fence, and any check that compares against an earlier commit.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The fence (MUST 1-3): judged by MAIN's list, never the proposal's. The checkout above
+      # fetched every branch (fetch-depth: 0), so origin/main is here with no credential. Main's deploy/ci/frozen-paths.mjs
+      # is copied outside the checkout and judges both sides of every change in main...HEAD (renames off: a rename is a
+      # delete of the old path and an add of the new one), and both trees for case twins. Nothing from the proposal's tree
+      # runs in this step, and it runs before anything is installed.
+      - name: Frozen paths (main's list judges the proposal)
+        run: |
+          set -euo pipefail
+          git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' >/dev/null || { echo "::error::origin/main is not in the checkout"; exit 1; }
+          judge="$RUNNER_TEMP/frozen-paths-main.mjs"
+          git show 'refs/remotes/origin/main:deploy/ci/frozen-paths.mjs' > "$judge"
+          git diff --no-renames --no-ext-diff --name-status -z 'refs/remotes/origin/main...HEAD' > "$RUNNER_TEMP/proposal-diff.z"
+          git ls-tree -r -t -z --name-only 'refs/remotes/origin/main' > "$RUNNER_TEMP/base-tree.z"
+          git ls-tree -r -t -z --name-only HEAD > "$RUNNER_TEMP/head-tree.z"
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff, base, head] = process.argv.slice(1)
+            const { frozenDiffRefusals } = await import(pathToFileURL(judge).href)
+            const refusals = frozenDiffRefusals(readFileSync(diff, "utf8"), { base: readFileSync(base, "utf8"), head: readFileSync(head, "utf8") })
+            for (const line of refusals) console.log("::error::" + JSON.stringify(line))
+            console.log("frozen paths: " + refusals.length + " refused (judged by origin/main deploy/ci/frozen-paths.mjs)")
+            process.exit(refusals.length ? 1 : 0)
+          ' "$judge" "$RUNNER_TEMP/proposal-diff.z" "$RUNNER_TEMP/base-tree.z" "$RUNNER_TEMP/head-tree.z"
+
+      - name: Main's commit for the other jobs
+        id: main
+        run: echo "sha=$(git rev-parse 'refs/remotes/origin/main^{commit}')" >> "$GITHUB_OUTPUT"
+
+  baseline:
+    needs: fence
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      edge: ${{ steps.verdict.outputs.edge }}
+      messages: ${{ steps.verdict.outputs.messages }}
+      ui: ${{ steps.verdict.outputs.ui }}
+      boot: ${{ steps.verdict.outputs.boot }}
+      red: ${{ steps.verdict.outputs.red }}
+    steps:
+      - name: Checkout main (the commit the fence judged against)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.fence.outputs.main }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Main's retention judge, outside the checkout
+        run: mkdir -p "$RUNNER_TEMP/ci" && cp deploy/ci/retention.mjs "$RUNNER_TEMP/ci/retention.mjs"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Main's three suites
+        run: |
+          set +e
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter="$RUNNER_TEMP/ci/retention.mjs" --test-reporter-destination="$RUNNER_TEMP/edge.jsonl" deploy/cloudflare/src/__tests__/*.test.mjs
+          echo "$?" > "$RUNNER_TEMP/edge.exit"
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter="$RUNNER_TEMP/ci/retention.mjs" --test-reporter-destination="$RUNNER_TEMP/messages.jsonl" \
+            --test-name-pattern='^Round26 ' --test-name-pattern='^Round 22 Class 3 refuses same-origin flags, cross-action tokens and token replay$' \
+            --test-name-pattern='^real Worker and HeadDO persist honest local channels and idempotent unsigned turns$' $MESSAGES_FILES
+          echo "$?" > "$RUNNER_TEMP/messages.exit"
+          pnpm exec vitest run packages/client/ui-layout/tests --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/ui.json"
+          echo "$?" > "$RUNNER_TEMP/ui.exit"
+          pnpm exec vitest run packages/experimental/webworker-runtime/tests/x6/large-store-boot.spec.ts --reporter=default --reporter=json --outputFile.json="$RUNNER_TEMP/boot.json"
+          echo "$?" > "$RUNNER_TEMP/boot.exit"
+          exit 0
+
+      # Green on main or nothing: a red baseline would hide its own red names, so it fails `checks` for every proposal.
+      - name: Baseline verdict (main's own suites must be green)
+        id: verdict
+        if: ${{ !cancelled() }}
+        run: |
+          # The runner's shell is bash -e: without +e the first red suite would end the step at `out=$(...)`, before its
+          # names are printed or written.
+          set +e
+          set -uo pipefail
+          judge="$RUNNER_TEMP/ci/retention.mjs" status=0 red=""
+          for suite in edge messages ui boot; do
+            if [ "$suite" = edge ] || [ "$suite" = messages ]; then input=(--node "$RUNNER_TEMP/$suite.jsonl"); else input=(--vitest "$RUNNER_TEMP/$suite.json"); fi
+            out="$(node "$judge" baseline --suite "$suite" "${input[@]}" --root "$PWD" --exit "$(cat "$RUNNER_TEMP/$suite.exit" 2>/dev/null || echo 99)")"
+            code=$?
+            if [ "$code" -eq 0 ]; then echo "$suite=$out" >> "$GITHUB_OUTPUT"; else echo "$out"; status=1; red="$red $(printf '%s' "$out" | head -c 2000 | tr '\n' ' ')"; fi
+          done
+          if [ "$status" -ne 0 ]; then echo "red=$red" >> "$GITHUB_OUTPUT"; fi
+          exit "$status"
+
+  edge:
+    needs: [fence, baseline]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Before anything of the proposal runs: main's retention judge outside the checkout, and main's copy of every
+      # edge test file and helper (the whole folder, so a test the proposal added is gone) and of the configuration.
+      - name: Main's tests and configuration put back
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+          SUITE_PATHS: deploy/cloudflare/src/__tests__ server/preflight-ordering.test.mjs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci" && git show "$MAIN_SHA:deploy/ci/retention.mjs" > "$RUNNER_TEMP/ci/retention.mjs"
+          for path in $SUITE_PATHS $CONFIG_PATHS; do
+            rm -rf -- "$path"
+            if git cat-file -e "$MAIN_SHA:$path" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$path"; fi
+          done
+          # Every test file the proposal ADDED, wherever it is (main's judge lists them): vitest matches its folder filter as
+          # a substring, so an added spec in another package whose path holds the filter would run here.
+          # And every path it ADDED under deploy/cloudflare/src/auma/ (MUST 1): her new edge modules do not exist in
+          # a protected job, so an open file that reaches into the folder by any spelling fails to load and the job is red.
+          git show "$MAIN_SHA:deploy/ci/frozen-paths.mjs" > "$RUNNER_TEMP/ci/frozen-paths-main.mjs"
+          git diff --no-renames --no-ext-diff --name-status -z "$MAIN_SHA...HEAD" > "$RUNNER_TEMP/proposal-diff.z"
+          node --input-type=module -e '
+            import { readFileSync, rmSync } from "node:fs"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff] = process.argv.slice(1)
+            const { protectedJobRemovals } = await import(pathToFileURL(judge).href)
+            const { tests, auma } = protectedJobRemovals(readFileSync(diff, "utf8"))
+            for (const path of [...tests, ...auma]) rmSync(path, { force: true })
+            console.log("added test files removed from this job: " + tests.length)
+            console.log("added files of deploy/cloudflare/src/auma/ removed from this job: " + auma.length)
+          ' "$RUNNER_TEMP/ci/frozen-paths-main.mjs" "$RUNNER_TEMP/proposal-diff.z"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Review, MUST 1: ONE step judges both runs of this job. Main's retention.mjs, written from git before
+      # anything of the proposal ran, is the parent of the edge tests and of the Messages approval cases: it holds main's
+      # passed names (from the environment) and its own bytes before it spawns either, loads its reporter from those bytes,
+      # takes the results on its own pipe, and hashes itself again before it answers. No results file, exit file or judge
+      # is left in RUNNER_TEMP for a later step to read.
+      # Review, MUST 1: --hold names what the put-back step restored (the same SUITE_PATHS and CONFIG_PATHS);
+      # the judge hashes it before the edge run and checks it before the Messages run and before answering.
+      - name: Retention by name (main's judge, the parent of the edge and Messages runs)
+        env:
+          SUITE_PATHS: deploy/cloudflare/src/__tests__ server/preflight-ordering.test.mjs
+          BASELINE_EDGE: ${{ needs.baseline.outputs.edge }}
+          BASELINE_MESSAGES: ${{ needs.baseline.outputs.messages }}
+        run: |
+          set -euo pipefail
+          node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" \
+            --suite edge --runner node --baseline-env BASELINE_EDGE -- deploy/cloudflare/src/__tests__/*.test.mjs \
+            --and --suite messages --runner node --baseline-env BASELINE_MESSAGES -- \
+            --test-name-pattern='^Round26 ' --test-name-pattern='^Round 22 Class 3 refuses same-origin flags, cross-action tokens and token replay$' \
+            --test-name-pattern='^real Worker and HeadDO persist honest local channels and idempotent unsigned turns$' $MESSAGES_FILES
+
+  ui:
+    needs: [fence, baseline]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Main's tests and configuration put back
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+          SUITE_PATHS: packages/client/ui-layout/tests
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci" && git show "$MAIN_SHA:deploy/ci/retention.mjs" > "$RUNNER_TEMP/ci/retention.mjs"
+          for path in $SUITE_PATHS $CONFIG_PATHS; do
+            rm -rf -- "$path"
+            if git cat-file -e "$MAIN_SHA:$path" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$path"; fi
+          done
+          # Every test file the proposal ADDED, wherever it is (main's judge lists them): vitest matches its folder filter as
+          # a substring, so an added spec in another package whose path holds the filter would run here.
+          # And every path it ADDED under deploy/cloudflare/src/auma/ (MUST 1): her new edge modules do not exist in
+          # a protected job, so an open file that reaches into the folder by any spelling fails to load and the job is red.
+          git show "$MAIN_SHA:deploy/ci/frozen-paths.mjs" > "$RUNNER_TEMP/ci/frozen-paths-main.mjs"
+          git diff --no-renames --no-ext-diff --name-status -z "$MAIN_SHA...HEAD" > "$RUNNER_TEMP/proposal-diff.z"
+          node --input-type=module -e '
+            import { readFileSync, rmSync } from "node:fs"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff] = process.argv.slice(1)
+            const { protectedJobRemovals } = await import(pathToFileURL(judge).href)
+            const { tests, auma } = protectedJobRemovals(readFileSync(diff, "utf8"))
+            for (const path of [...tests, ...auma]) rmSync(path, { force: true })
+            console.log("added test files removed from this job: " + tests.length)
+            console.log("added files of deploy/cloudflare/src/auma/ removed from this job: " + auma.length)
+          ' "$RUNNER_TEMP/ci/frozen-paths-main.mjs" "$RUNNER_TEMP/proposal-diff.z"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Review, MUST 1: one step, main's retention.mjs the parent of the run (the UI suite, ui-layout), its
+      # results in a file it names at random in a folder of its own, read once; nothing is left for a later step to read.
+      - name: Retention by name (main's judge, the parent of the UI run)
+        env:
+          SUITE_PATHS: packages/client/ui-layout/tests
+          BASELINE: ${{ needs.baseline.outputs.ui }}
+        run: node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" --suite ui --runner vitest --baseline-env BASELINE -- packages/client/ui-layout/tests
+
+  boot:
+    needs: [fence, baseline]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Main's tests and configuration put back
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+          SUITE_PATHS: packages/experimental/webworker-runtime/tests
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci" && git show "$MAIN_SHA:deploy/ci/retention.mjs" > "$RUNNER_TEMP/ci/retention.mjs"
+          for path in $SUITE_PATHS $CONFIG_PATHS; do
+            rm -rf -- "$path"
+            if git cat-file -e "$MAIN_SHA:$path" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$path"; fi
+          done
+          # Every test file the proposal ADDED, wherever it is (main's judge lists them): vitest matches its folder filter as
+          # a substring, so an added spec in another package whose path holds the filter would run here.
+          # And every path it ADDED under deploy/cloudflare/src/auma/ (MUST 1): her new edge modules do not exist in
+          # a protected job, so an open file that reaches into the folder by any spelling fails to load and the job is red.
+          git show "$MAIN_SHA:deploy/ci/frozen-paths.mjs" > "$RUNNER_TEMP/ci/frozen-paths-main.mjs"
+          git diff --no-renames --no-ext-diff --name-status -z "$MAIN_SHA...HEAD" > "$RUNNER_TEMP/proposal-diff.z"
+          node --input-type=module -e '
+            import { readFileSync, rmSync } from "node:fs"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff] = process.argv.slice(1)
+            const { protectedJobRemovals } = await import(pathToFileURL(judge).href)
+            const { tests, auma } = protectedJobRemovals(readFileSync(diff, "utf8"))
+            for (const path of [...tests, ...auma]) rmSync(path, { force: true })
+            console.log("added test files removed from this job: " + tests.length)
+            console.log("added files of deploy/cloudflare/src/auma/ removed from this job: " + auma.length)
+          ' "$RUNNER_TEMP/ci/frozen-paths-main.mjs" "$RUNNER_TEMP/proposal-diff.z"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # Review, MUST 1: one step, main's retention.mjs the parent of the run (large-store boot).
+      - name: Retention by name (main's judge, the parent of the boot run)
+        env:
+          SUITE_PATHS: packages/experimental/webworker-runtime/tests
+          BASELINE: ${{ needs.baseline.outputs.boot }}
+        run: node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" --suite boot --runner vitest --baseline-env BASELINE -- packages/experimental/webworker-runtime/tests/x6/large-store-boot.spec.ts
+
+  new-node-tests:
+    needs: fence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A fresh checkout of its own: no added vitest file ever runs in this job, and none of these runs in the vitest job
+      #. Main's judge picks the added node test files; main's configuration, setup and the helpers
+      # beside each added file are put back before anything of the proposal runs.
+      - name: Main's configuration, setup and helpers put back; the judge outside the checkout
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+          RUNNER_KIND: node
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci"
+          git show "$MAIN_SHA:deploy/ci/frozen-paths.mjs" > "$RUNNER_TEMP/ci/frozen-paths-main.mjs"
+          git show "$MAIN_SHA:deploy/ci/retention.mjs" > "$RUNNER_TEMP/ci/retention.mjs"
+          git diff --no-renames --no-ext-diff --name-status -z "$MAIN_SHA...HEAD" > "$RUNNER_TEMP/proposal-diff.z"
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs"
+            import { dirname } from "node:path"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff, out, kind] = process.argv.slice(1)
+            const { addedTestFiles } = await import(pathToFileURL(judge).href)
+            const files = addedTestFiles(readFileSync(diff, "utf8"))[kind]
+            // Only the folders, to put the helpers of main back: the judge reads the added files from git itself (MUST 2).
+            writeFileSync(out, [...new Set(files.map(file => dirname(file)))].join("\u0000"))
+            console.log("added " + kind + " test files: " + files.length)
+          ' "$RUNNER_TEMP/ci/frozen-paths-main.mjs" "$RUNNER_TEMP/proposal-diff.z" "$RUNNER_TEMP/added.dirs" "$RUNNER_KIND"
+          for path in $CONFIG_PATHS; do
+            rm -rf -- "$path"
+            if git cat-file -e "$MAIN_SHA:$path" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$path"; fi
+          done
+          # Main's copy of every file beside the added tests (helpers, setup); the added files themselves are not on main.
+          while IFS= read -r -d '' folder || [ -n "$folder" ]; do
+            if git cat-file -e "$MAIN_SHA:$folder" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$folder"; fi
+          done < "$RUNNER_TEMP/added.dirs"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # MUST 2 and 3: ONE trusted process, main's retention.mjs read from git outside the checkout, is the judge and
+      # the parent of the tests. It reads the inventory itself from git, holds every added file's bytes and hash before
+      # anything runs, answers an empty inventory before the run, runs the tests with their results on its own pipe or file,
+      # and hashes everything again before answering. The rule (also in the job summary when red): an added test file passes
+      # only when the runner loaded it, at least one of its tests passed, none failed, none was skipped, todo or cancelled,
+      # and the runner exited 0.
+      - name: Her new node tests, judged in one process by main's retention.mjs
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+        run: node "$RUNNER_TEMP/ci/retention.mjs" added-run --suite new-node-tests --runner node --fence "$RUNNER_TEMP/ci/frozen-paths-main.mjs" --main "$MAIN_SHA" --head HEAD --root "$PWD"
+
+  new-vitest-tests:
+    needs: fence
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the pushed proposal commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Main's configuration, setup and helpers put back; the judge outside the checkout
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+          RUNNER_KIND: vitest
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/ci"
+          git show "$MAIN_SHA:deploy/ci/frozen-paths.mjs" > "$RUNNER_TEMP/ci/frozen-paths-main.mjs"
+          git show "$MAIN_SHA:deploy/ci/retention.mjs" > "$RUNNER_TEMP/ci/retention.mjs"
+          git diff --no-renames --no-ext-diff --name-status -z "$MAIN_SHA...HEAD" > "$RUNNER_TEMP/proposal-diff.z"
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs"
+            import { dirname } from "node:path"
+            import { pathToFileURL } from "node:url"
+            const [judge, diff, out, kind] = process.argv.slice(1)
+            const { addedTestFiles } = await import(pathToFileURL(judge).href)
+            const files = addedTestFiles(readFileSync(diff, "utf8"))[kind]
+            // Only the folders, to put the helpers of main back: the judge reads the added files from git itself (MUST 2).
+            writeFileSync(out, [...new Set(files.map(file => dirname(file)))].join("\u0000"))
+            console.log("added " + kind + " test files: " + files.length)
+          ' "$RUNNER_TEMP/ci/frozen-paths-main.mjs" "$RUNNER_TEMP/proposal-diff.z" "$RUNNER_TEMP/added.dirs" "$RUNNER_KIND"
+          for path in $CONFIG_PATHS; do
+            rm -rf -- "$path"
+            if git cat-file -e "$MAIN_SHA:$path" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$path"; fi
+          done
+          # Main's copy of every file beside the added tests (helpers, setup); the added files themselves are not on main.
+          while IFS= read -r -d '' folder || [ -n "$folder" ]; do
+            if git cat-file -e "$MAIN_SHA:$folder" 2>/dev/null; then git checkout "$MAIN_SHA" -- "$folder"; fi
+          done < "$RUNNER_TEMP/added.dirs"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies without lifecycle scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      # MUST 2 and 3: ONE trusted process, main's retention.mjs read from git outside the checkout, is the judge and
+      # the parent of the tests. It reads the inventory itself from git, holds every added file's bytes and hash before
+      # anything runs, answers an empty inventory before the run, runs the tests with their results on its own pipe or file,
+      # and hashes everything again before answering. The rule (also in the job summary when red): an added test file passes
+      # only when the runner loaded it, at least one of its tests passed, none failed, none was skipped, todo or cancelled,
+      # and the runner exited 0.
+      - name: Her new vitest tests, judged in one process by main's retention.mjs
+        env:
+          MAIN_SHA: ${{ needs.fence.outputs.main }}
+        run: node "$RUNNER_TEMP/ci/retention.mjs" added-run --suite new-vitest-tests --runner vitest --fence "$RUNNER_TEMP/ci/frozen-paths-main.mjs" --main "$MAIN_SHA" --head HEAD --root "$PWD"
+
+  checks:
+    needs: [fence, baseline, edge, ui, boot, new-node-tests, new-vitest-tests]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Each job's result only, never toJSON(needs): the baseline's packed names would ride along, and Linux refuses to
+      # start a process with one environment string over 128 KiB.
+      - name: Every job green
+        env:
+          FENCE: ${{ needs.fence.result }}
+          BASELINE: ${{ needs.baseline.result }}
+          EDGE: ${{ needs.edge.result }}
+          UI: ${{ needs.ui.result }}
+          BOOT: ${{ needs.boot.result }}
+          NEW_NODE_TESTS: ${{ needs['new-node-tests'].result }}
+          NEW_VITEST_TESTS: ${{ needs['new-vitest-tests'].result }}
+          RED: ${{ needs.baseline.outputs.red }}
+        run: |
+          node --input-type=module -e '
+            const required = { fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" }
+            const red = process.env.RED ?? ""
+            let failed = 0
+            for (const [name, variable] of Object.entries(required)) {
+              const result = process.env[variable] || "missing"
+              console.log(name + ": " + result)
+              if (result !== "success") failed++
+            }
+            if (process.env.BASELINE !== "success" && process.env.FENCE === "success") console.log("::error::main\u0027s own baseline is red: " + (red.trim() || "see the baseline job"))
+            process.exit(failed ? 1 : 0)
+          '

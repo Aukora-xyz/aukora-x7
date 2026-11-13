@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/RUN-RECORD.md
 /run-record:
-  en: ad7a61ba4c81aaf4
-  zh: f2a8b921484138f0
+  en: 63de56367548ddec
+  zh: 75e611b7bb070fb8
 /run-record/tools-and-steps:
   en: dad163d4f1782350
   zh: 4b69710a14035121

@@ -15,6 +15,7 @@
  *     and barge-in cancels by `turnId` so no tool call or stale clause is orphaned.
  */
 
+import { ELEVEN_SPEECH_ACTIONS, handleElevenSpeech, herVoiceField } from './eleven-speech.mjs' // VOICE hook
 export const VOICE_DIRECTOR_PROTOCOL = 'aukora.voice-director.v1'
 export const VOICE_CLAUSE_SCHEMA = 'aukora.voice-clause.v1'
 export const VOICE_STATE_SLOT_SCHEMA = 'aukora.voice-state-slot.v1'
@@ -436,6 +437,7 @@ export async function handleEdgeVoiceRequest({ request, url, env, seedId, access
     return json({ ok: false, code: 'VOICE_ACTION_INVALID' }, 400)
   }
 
+  if (ELEVEN_SPEECH_ACTIONS.includes(input.action)) return await handleElevenSpeech({ request, url, env, seedId, access, networkFetch, now, input }) // VOICE hook
   if (input.action === 'speech_pass') {
     const at = now()
     if (access?.type !== 'owner' || typeof access.email !== 'string' || access.email.length > 254
@@ -453,7 +455,7 @@ export async function handleEdgeVoiceRequest({ request, url, env, seedId, access
       return json({ ok: false, code: 'SPEECH_PROVIDER_UNAVAILABLE' }, 503)
     }
     try {
-      return json(await mintSpeechPass(request, apiKey, networkFetch, env, seedId, access))
+      return json({ ...await mintSpeechPass(request, apiKey, networkFetch, env, seedId, access), ...herVoiceField(env) }) // VOICE hook
     } catch (error) {
       if (error?.code === 'SPEECH_PASS_RATE_LIMITED') {
         const response = json({ ok: false, code: error.code }, 429)

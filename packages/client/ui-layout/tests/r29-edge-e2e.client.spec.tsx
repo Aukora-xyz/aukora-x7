@@ -960,7 +960,7 @@ describe('Wave 4: a staged repo proposal is approved for exactly the page\'s own
       treeSha: 'c'.repeat(40) }
     const proposal = { schema: 'aukora.staged-repo-proposal.v1', branch: mergeBody.branch, title: 'Enforce the checkpoint signer policy', summary: null,
       baseSha: mergeBody.baseSha, headSha: mergeBody.headSha, treeSha: mergeBody.treeSha,
-      changedFiles: [{ path: 'mirror/home/auma/seed/organs/seed-receipts.js', status: 'modified', additions: 10, deletions: 2, t2Protected: true }],
+      changedFiles: [{ path: 'mirror/home/auma/seed/organs/seed-echo.js', status: 'modified', additions: 10, deletions: 2, t2Protected: true }],
       ciStatus: 'passed', stagedAt: Date.now(), mergeBody,
       binding: await class3Action({ audience: EDGE, method: 'POST', pathname: '/_host/repo', body: mergeBody }) }
     // HEAD's record, as the Wave 4 contract serves it (the edge side lands in another lane): added to the real answer.

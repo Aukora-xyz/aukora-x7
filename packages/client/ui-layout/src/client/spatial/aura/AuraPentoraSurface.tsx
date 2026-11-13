@@ -36,7 +36,7 @@ import { isEditableTarget } from './escape.ts'
 import { LiveHead } from './LiveHead.tsx'
 import { NewBuildButton, sessionOf, type WorkReader } from '../work/WorkSurface.tsx'
 import { useNewBuild } from '../work/autonomy.ts'
-import { useReloadNotice } from '../portal/build-notice.ts'
+import { useReloadNoticeFeed } from '../portal/notices.ts'
 import { AuraStrip, useAura, usePentoraAxesRef, useReadoutAura } from '../../spatial-components.tsx'
 
 /** What the registration injects: the shared worker-file reader. */
@@ -217,8 +217,9 @@ export function AuraPentoraSurface({
   const [howOpen, setHowOpen] = useState(false)
   /** A newer runtime release the host selected (Round 13): one inline Reload button, never a popup. */
   const newBuild = useNewBuild(active)
-  /** The edge's own build and her published head: the same Reload button, when the host selects nothing. */
-  const reloadNotice = useReloadNotice(active)
+  /** The edge's own build and her published head: the same Reload button, when the host selects nothing.
+   *  The same read also feeds the Notices launcher (portal/notices.ts): gold on the boot screen too. */
+  const reloadNotice = useReloadNoticeFeed(active)
   const sessionId: SessionId | undefined = useSessions(sessionOf)
   // THE PERIPHERY (Round 14): the readout's recomputed aura.v1 (when it carries one) with her own files; only a
   // recomputed vector moves the figure.

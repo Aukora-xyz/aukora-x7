@@ -34,6 +34,7 @@ const mod = await import(pathToFileURL(modulePath ?? 'apps/web/public/app/deepgr
   SPEAK_PIECE_CHARS: number
   DISCARD_MS: number
   FLUX_KEEPALIVE_MS: number
+  END_OF_SPEECH_MS: number
 }
 
 /** A socket as the adapter opens them; the test plays Deepgram (or the old sidecar) on the other end. */
@@ -136,6 +137,14 @@ describe('Auma Live voice over Deepgram: the sidecar protocol, answered in the p
     expect(h.received[0]).toEqual({ t: 'ready', voices: mod.DEEPGRAM_VOICES, default_voice: mod.DEEPGRAM_DEFAULT_VOICE, cloud: 'Deepgram' })
     // The picker's shape, and no entry posing as one of the local sidecar's engines.
     expect(mod.DEEPGRAM_VOICES.every(voice => voice.engine === 'deepgram' && voice.hint.includes('Deepgram'))).toBe(true)
+  })
+
+  it('the end-of-speech wait is one named constant, still 800 ms, and the listening stream is opened byte for byte as before', async () => {
+    await live()
+    expect(mod.END_OF_SPEECH_MS).toBe(800)
+    expect(listening()?.url).toBe('wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000&channels=1&interim_results=true'
+      + '&endpointing=800&utterance_end_ms=1000&vad_events=true&smart_format=true'
+      + '&keyterm=Auma&keyterm=Aukora&keyterm=Pentora&keyterm=AUMLOK&keyterm=Sienna&mip_opt_out=true')
   })
 
   it('microphone frames go to Deepgram as they are; one `final` per utterance, joined from the stretches it is sure of', async () => {

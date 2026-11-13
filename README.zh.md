@@ -15,7 +15,7 @@ Aukora 正在构建一个由个人拥有的 AI：它能修改自己的软件，�
 - **今天什么是真的。** 这条规则的代码和测试都在本仓库中。作者在一台机器上做过一次测试运行，已有记录：5,502 个测试用例，5,399 个通过，90 个失败，这 90 个中有 89 个早已在项目的已知失败清单上。
 - **缺少什么。** 除作者外没有人运行过它。没有任何一次由所有者从头到尾批准的完整自我修改被记录为在本仓库上运行过。从本仓库部署到全新账户的云部署是 UNVERIFIED：没有人记录过。有些部分只以编译后的文件提供，不带源码，而且底层的大部分代码继承自另一个项目。完整清单见[没有什么](#what-is-not)。
 - **如何参与。** 不需要写代码：阅读[没有什么](#what-is-not)和 [docs/DIRECTION.zh.md](docs/DIRECTION.zh.md)，然后提一个 issue，写下问题，或写下不清楚或不对的地方；发现弱点则通过 [SECURITY.zh.md](SECURITY.zh.md) 报告。如果写代码：运行[自己验证](#verify-it-yourself)下的那一条命令，然后看[如何帮忙](#how-to-help)。读这个仓库的 AI 从 [docs/AI-START-HERE.zh.md](docs/AI-START-HERE.zh.md) 开始。
-- **五个标签**说明这些首页上的一项说法被证明到了什么程度：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)）、INDEPENDENTLY VERIFIED（目前没有任何东西有这个标签）、UNVERIFIED（已声称或已写出，但这里没有测试支持，或没有运行结果显示）、DIRECTION（尚未构建）。较早的页面用别的词；[docs/AI-START-HERE.zh.md](docs/AI-START-HERE.zh.md) 第 5 节给出了对应关系。
+- **五个标签**说明这些首页上的一项说法被证明到了什么程度：IMPLEMENTED（代码和测试在这棵树里）、RECORDED RUN（见 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)，一次属于较早的一棵树的运行）、INDEPENDENTLY VERIFIED（目前没有任何东西有这个标签）、UNVERIFIED（已声称或已写出，但这里没有测试支持，或没有运行结果显示）、DIRECTION（尚未构建）。较早的页面用别的词；[docs/AI-START-HERE.zh.md](docs/AI-START-HERE.zh.md) 第 5 节给出了对应关系。
 
 ## 最初的五分钟
 
@@ -34,7 +34,7 @@ Aukora 正在构建一个由个人拥有的 AI：它能修改自己的软件，�
 - **她的评分是她自己的。** 候选部件所依据的测试套件是自我声明的，而已部署的边缘端不读取它的结果（[`head-do.mjs`](deploy/cloudflare/src/head-do.mjs) 在生产环境中没有为它提供校验器）。
 - **边缘端用 JavaScript 做决定。** 五个属于 Wasm 单元的受保护名称不参与这个决定：边缘端不调用其中任何一个。
 
-**它由哪些文件支撑。** IMPLEMENTED 的意思是代码和它的测试在这棵树里，不是说测试通过。除非某一行另有说明，记录的运行没有列出下列测试文件中的任何失败用例。这只是一个样本；更完整的清单是 [docs/WHAT-IS-BUILT.zh.md](docs/WHAT-IS-BUILT.zh.md)。
+**它由哪些文件支撑。** IMPLEMENTED 的意思是代码和它的测试在这棵树里，不是说测试通过。除非某一行另有说明，记录的运行（属于较早的一棵树）没有列出下列测试文件中的任何失败用例。这只是一个样本；更完整的清单是 [docs/WHAT-IS-BUILT.zh.md](docs/WHAT-IS-BUILT.zh.md)。
 
 | 说法 | 位置 | 由什么支撑 | 标签 |
 | --- | --- | --- | --- |
@@ -47,7 +47,7 @@ Aukora 正在构建一个由个人拥有的 AI：它能修改自己的软件，�
 | 批准页面根据候选字节重建它的条款，并显示代码差异 | [`head-promotion.ts`](packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts)、[`organ-code-diff.ts`](packages/client/ui-layout/src/client/spatial/portal/organ-code-diff.ts) | [`organ-code-diff.client.spec.ts`](packages/client/ui-layout/tests/organ-code-diff.client.spec.ts)，在模拟页面中；没有记录浏览器会话 | IMPLEMENTED |
 | **尚未修复。** 有测试复现的缺口：整个存储回滚之后，一次已用掉的批准重新生效，发布会重复；只恢复身份状态同样会让一次已用掉的批准复活 | [`aumlok.mjs`](deploy/cloudflare/src/aumlok.mjs)、[`head-do.mjs`](deploy/cloudflare/src/head-do.mjs) | [`aumlok-restore-rehearsal.test.mjs`](deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs)；它只保存复现，树里没有修复 | IMPLEMENTED |
 | 她在一个单独的 worker 里编译候选部件；她的自我构建步骤安装它、运行它的用例，然后保留或撤销它 | [`scion.ts`](packages/experimental/webworker-runtime/src/x6/scion.ts)、[`seed-cycle.js`](mirror/home/auma/seed/organs/seed-cycle.js) | 没有测试调用这两者 | UNVERIFIED |
-| 本地宿主启动并用第一个版本应答；它的 `/_head/runtime` 应答是错误 `PEARL_QUALIFICATION_UNVERIFIABLE` | [`local-host.mjs`](server/local-host.mjs) | [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md) | RECORDED RUN |
+| 本地宿主启动并用第一个版本应答；它的 `/_head/runtime` 应答是错误 `PEARL_QUALIFICATION_UNVERIFIABLE` | [`local-host.mjs`](server/local-host.mjs) | [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md) | RECORDED RUN（属于较早的一棵树） |
 
 **项目的名称，先说朴素的话。** 她的每一个可替换部件是一个 **organ**。她的一个版本，是每个 organ 连同其代码 SHA-256 哈希的一份清单，称为 **ball**，它的版本号是 **epoch**。边缘端对哪个 ball 正在运行的记录是 **HEAD**，它对她的主目录文件的副本是 **MIRROR**。身份与批准的代码是 **AUMLOK**。构建候选 organ 的编译器是 **scion**。候选所依据的用例套件是 **Pearl**，它由之生长出来的已记录失败是 **scars**。关于 ball、organ 和 epoch，[docs/GLOSSARY.zh.md](docs/GLOSSARY.zh.md) 说得更多；其他名称见 [docs/WHAT-IS-BUILT.zh.md](docs/WHAT-IS-BUILT.zh.md)。
 
@@ -85,7 +85,7 @@ Aukora 正在构建一个由个人拥有的 AI：它能修改自己的软件，�
 3. 她在一个一次性的 worker 里试用它，由父版本对输出重新评分，再用 Pearl 运行它，构建一个高一个 epoch 的候选 ball，并把它暂存到边缘端。受保护的 organ 只暂存，不挂载。IMPLEMENTED。Pearl 的结果是自我声明的，边缘端不读取它。
 4. 所有者看到根据字节重建的条款和精确的代码差异（在模拟页面中为 IMPLEMENTED；没有记录浏览器会话）。在所有者的 passkey 批准该候选的 ball id、epoch、organ id 和代码哈希之前，HEAD 不会变。这次批准在移动 HEAD 的事务里被用掉。IMPLEMENTED；测试使用手工构造的 passkey 数据，没有记录真实的认证器。
 5. 如果候选未通过它的用例，自我构建步骤会撤销或停用它并记录这次拒绝：UNVERIFIED，没有测试调用它。如果批准缺失、已过期、已被用掉或针对别的字节，边缘端拒绝，HEAD 留在原处：IMPLEMENTED。
-6. 这些步骤都没有作为一次真实自我修改的一部分而有 RECORDED RUN。记录的运行没有调用模型，没有打开浏览器，也没有使用 passkey。
+6. 这些步骤都没有作为一次真实自我修改的一部分而有 RECORDED RUN（属于较早的一棵树）。记录的运行（属于较早的一棵树）没有调用模型，没有打开浏览器，也没有使用 passkey。
 
 <a id="verify-it-yourself"></a>
 ### 自己验证
@@ -98,9 +98,9 @@ node scripts/verify-lite.mjs
 # verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list
 ```
 
-- **这是什么。** 一次冒烟检查：22 个测试文件，只需要 Node 24.9 或更新版本，不需要别的东西，覆盖 vault、救援包、三个部署门禁、模型门、Pearl 的规则和 Aura 焦点影子。其中三个（memory、predict、receipts policy）带有那 12 个失败。这 12 个全在已知红色清单上，所以命令以 0 退出。UNVERIFIED：它不属于记录的运行。它是另一次小得多的运行，所以不要把 564 和 12 当作项目的状态。
-- **它不测试批准规则。** 权限测试要导入 npm 包。在 `pnpm install --frozen-lockfile` 之后（在线安装是 UNVERIFIED：记录的安装是从本地存储离线进行的），运行 `node scripts/verify-lite.mjs --with-packages`（UNVERIFIED 级别，另有 16 个文件），或者对 `deploy/cloudflare/src/__tests__/` 中的 `aumlok-restore-rehearsal.test.mjs`、`convergence-approval-fencing.test.mjs`、`convergence-policy.test.mjs` 和 `proof-failure-rule.test.mjs` 运行 `node --test`。记录的运行没有列出这四个文件中的任何失败用例。
-- **完整的记录运行。** [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)：一次运行，一台机器，由作者完成。5,502 个测试用例，5,399 个通过，90 个失败；其余 13 个是 1 个跳过和 12 个标记为 todo。它的日志不随树提供。[docs/KNOWN-RED-TESTS.zh.md](docs/KNOWN-RED-TESTS.zh.md)：90 个失败中有 89 个在运行之前就已列出，每个文件附有它的数量。第 90 个是这次运行发现的，现已列出，仍然是红的。
+- **这是什么。** 一次冒烟检查：22 个测试文件，只需要 Node 24.9 或更新版本，不需要别的东西，覆盖 vault、救援包、三个部署门禁、模型门、Pearl 的规则和 Aura 焦点影子。其中三个（memory、predict、receipts policy）带有那 12 个失败。这 12 个全在已知红色清单上，所以命令以 0 退出。UNVERIFIED：它不属于记录的运行（属于较早的一棵树）。它是另一次小得多的运行，所以不要把 564 和 12 当作项目的状态。
+- **它不测试批准规则。** 权限测试要导入 npm 包。在 `pnpm install --frozen-lockfile` 之后（在线安装是 UNVERIFIED：记录的安装（属于较早的一棵树）是从本地存储离线进行的），运行 `node scripts/verify-lite.mjs --with-packages`（UNVERIFIED 级别，另有 16 个文件），或者对 `deploy/cloudflare/src/__tests__/` 中的 `aumlok-restore-rehearsal.test.mjs`、`convergence-approval-fencing.test.mjs`、`convergence-policy.test.mjs` 和 `proof-failure-rule.test.mjs` 运行 `node --test`。记录的运行（属于较早的一棵树）没有列出这四个文件中的任何失败用例。
+- **完整的记录运行（属于较早的一棵树）。** [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)：一次运行，一台机器，由作者完成（这份记录属于较早的一棵树）。5,502 个测试用例，5,399 个通过，90 个失败；其余 13 个是 1 个跳过和 12 个标记为 todo。它的日志不随树提供。[docs/KNOWN-RED-TESTS.zh.md](docs/KNOWN-RED-TESTS.zh.md)：90 个失败中有 89 个在运行之前就已列出，每个文件附有它的数量。第 90 个是这次运行发现的，现已列出，仍然是红的。
 
 <a id="what-is-not"></a>
 ### 没有什么
@@ -109,7 +109,7 @@ node scripts/verify-lite.mjs
 - **有一个文件没有许可证。** `pentora36.wasm` 以尚未授予任何许可证的状态提供。[`LICENSE.binaries`](apps/web/public/seed-library/pentora/LICENSE.binaries)
 - **回滚缺口。** 恢复一份完整的存储快照，可能让一次已用掉的批准重新生效。树里有一个测试复现了这一点，旁边有十个 todo 用例，写明修复必须证明什么。树里没有修复。
 - **没有运行过。** 没有任何端到端、由所有者批准的自我修改被记录为在这棵树上运行过。从这棵树部署到全新账户的云部署是 UNVERIFIED：部署值是占位符，其中一些写在代码里。
-- **这棵树的大部分是继承来的。** `packages/` 的大部分是继承来的 DeepSeek Harness 运行时，organ 所建立在其上的插件框架是 Cordis，位于 `vendor/`。按项目自己的一次统计，取自它并不公开的历史，文本行的 10.5% 和代码行的 12.9% 是 Aukora 自己的。UNVERIFIED。[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)
+- **这棵树的大部分是继承来的。** `packages/` 的大部分是继承来的 DeepSeek Harness 运行时，organ 所建立在其上的插件框架是 Cordis，位于 `vendor/`。按项目自己的一次统计，取自它并不公开的历史，文本行的 11.6% 和代码行的 14.3% 是 Aukora 自己的。UNVERIFIED。[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)
 
 没有做过安全审计（[SAFETY.zh.md](SAFETY.zh.md)）。这里没有任何东西是 INDEPENDENTLY VERIFIED。更多缺口，按分量排序：[docs/OPEN-SOURCE-READINESS.zh.md](docs/OPEN-SOURCE-READINESS.zh.md)。项目不作的安全声明：[SECURITY.zh.md](SECURITY.zh.md)。
 
@@ -148,7 +148,7 @@ INHERITED  vendor/ (Cordis); DeepSeek Harness: most of packages/ and docs/
 
 1. 不写代码：阅读、提问，并指出哪一页不清楚或不对。问题和决定发生在本仓库的 issue 和 pull request 中；不存在其他渠道（[docs/COMMUNITY.zh.md](docs/COMMUNITY.zh.md)）。
 2. 安装，运行[自己验证](#verify-it-yourself)下点名的权限测试，并报告你的数量。
-3. 在另一台机器上重复记录的运行并发回结果。它会是第一个 INDEPENDENTLY VERIFIED 的项目。再之后的里程碑，是在已部署节点上由所有者批准的一次自我修改，使用真实的 passkey，由作者之外的人记录。
+3. 在另一台机器上重复记录的运行（属于较早的一棵树）并发回结果。它会是第一个 INDEPENDENTLY VERIFIED 的项目。再之后的里程碑，是在已部署节点上由所有者批准的一次自我修改，使用真实的 passkey，由作者之外的人记录。
 4. 从 [docs/GOOD-FIRST-CONTRIBUTIONS.zh.md](docs/GOOD-FIRST-CONTRIBUTIONS.zh.md) 中选一个红色测试或一个已说明的缺口。规则见 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)。
 
 许可证：[AGPL-3.0-or-later](LICENSE)。上游 DeepSeek Harness 为 MIT（[声明](LICENSES/MIT-DeepSeek-Harness.txt)）；第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。Aukora 与 DeepSeek 没有隶属关系，也未获其认可。

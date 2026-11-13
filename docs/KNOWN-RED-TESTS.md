@@ -2,13 +2,13 @@
 
 English | [中文](KNOWN-RED-TESTS.zh.md)
 
-Some tests in this repository fail, and they are expected to fail. None of them was deleted, skipped or weakened to look green. This page lists each one so a new reader is not surprised, with the count and the reason. Counts come from running each file on its own when this list was written. One run of this tree by its authors is recorded in [RUN-RECORD.md](RUN-RECORD.md); the last column says what that run found for each row. Its logs do not ship, so run the tests to check.
+Some tests in this repository fail, and they are expected to fail. None of them was deleted, skipped or weakened to look green. This page lists each one so a new reader is not surprised, with the count and the reason. Counts come from running each file on its own when this list was written. One run of an earlier tree of this repository by its authors is recorded in [RUN-RECORD.md](RUN-RECORD.md); the last column says what that run found for each row. Its logs do not ship, so run the tests to check.
 
 ## They cannot pass in this repository
 
 This repository starts from a genesis seed, and its workflows start with their automatic triggers switched off. These tests assert the state of a long-running node, which this repository does not have.
 
-| File | Failing | Reason | In the recorded run |
+| File | Failing | Reason | In the recorded run (of an earlier tree) |
 | --- | --- | --- | --- |
 | `scripts/ci-workflow.spec.ts` | 6 of 68 | They assert the automatic workflow triggers. Those are commented out until this repository has its own runners and secrets. | Not run |
 | `deploy/cloudflare/src/__tests__/deploy-workflow.test.mjs` | 4 | Same reason: they read the deploy workflow's automatic triggers. | 4 failed |
@@ -16,6 +16,8 @@ This repository starts from a genesis seed, and its workflows start with their a
 | `packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts` | 1 ("her real head") | It asserts the head of a long-running node (its epoch and entries). This repository ships the genesis head, epoch 1. | 1 failed |
 | `apps/web/src/spatial/superagent/superagent.test.ts` | 3 of 12 | Some cases read a node's own world under `mirror/home/auma/` (receipts, corpus, memory DAG). Only the genesis seed is committed here. | Not run |
 | `apps/web/src/spatial/superagent/read.spec.ts` | 8 of 50 (a 9th, "exactly 256 referenced nodes fit the file and concurrency budgets", is timing-sensitive and can fail on a busy machine) | Same reason. | Not run |
+| `deploy/cloudflare/src/__tests__/world-holder.test.mjs` | 6 of 59 | Needs the private history; the public tree ships one snapshot. The six cases compare against two earlier commits with `git show`, and those commits are not in this repository. | Added after the recorded run (of an earlier tree) |
+| `deploy/ci/frozen-paths.test.mjs` | 2 of 17 | One case asserts that every file on the frozen list is in the tree; the list names her receipts file under `mirror/home/auma/seed/`, which this repository does not ship (only the genesis seed is committed). One case asserts the automatic trigger of `proposal-checks.yml`, which is commented out here like the other workflows. Run it from a git checkout: four more cases call `git ls-files`. | Added after the recorded run (of an earlier tree) |
 
 To make them pass: rewrite them against the genesis seed or a synthetic home, and switch the triggers on when the repository has its own runners.
 
@@ -23,7 +25,7 @@ To make them pass: rewrite them against the genesis seed or a synthetic home, an
 
 These fail the same way, test by test, at the commit this repository starts from. Their causes have not been investigated yet.
 
-| File | Failing | In the recorded run |
+| File | Failing | In the recorded run (of an earlier tree) |
 | --- | --- | --- |
 | `server/absence.test.mjs` | 9 | 9 failed |
 | `server/memory.test.mjs` | 3 | 3 failed |
@@ -37,7 +39,7 @@ These fail the same way, test by test, at the commit this repository starts from
 
 ## Found red by the recorded run
 
-The recorded run failed one case that was not on this list and is still red. It is added here and is not fixed yet.
+The recorded run (of an earlier tree) failed one case that was not on this list and is still red. It is added here and is not fixed yet.
 
 | File | Failing | Reason |
 | --- | --- | --- |

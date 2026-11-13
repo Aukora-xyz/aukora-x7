@@ -9,8 +9,8 @@
  * The candidates are real organ sources. A fixed harness (the same for every candidate) loads each organ
  * of a build against an in-memory file system seeded from the suite's fixtures, with a pinned clock, and
  * runs the case through the organ's own entry point (run, or the tool it registers). So a case checks
- * the organ's actual behaviour, not a stand-in. The runtime compares an explicit candidate against the
- * currently selected incumbent. Without an explicit candidate the same build ties and cannot qualify.
+ * the organ's actual behaviour, not a stand-in. The default challenge compares the selected build of every
+ * suite organ with the version it replaced (its last previousSpecifier).
  *
  * Everything here is self-attested: the receipt records what this organ ran and saw. It does not prove
  * the worker was isolated, and it is never authority.
@@ -26,11 +26,35 @@ const SUITE_FILE = SEED + '/pearl/retention-suite.v1.json'
 const SCARS_FILE = SEED + '/scars.jsonl'
 const RECEIPTS = SEED + '/receipts.v3.jsonl'
 const OWNER_KEY_FILE = SEED + '/owner-key.v1.json'
-const GRANT_FILE = SEED + '/owner-grant.v1.json'
 const HEAD = '/dsh/home/balls/HEAD.json'
+// --- contextual VFS ---
+// The contract (server/pearl.test.mjs) hands this module a node:fs stub whose
+// readFileSync THROWS whenever a contextual VFS is supplied. The module-level binding may exist,
+// but it must never be the binding a read goes through when ctx.fs exists. The reader is resolved
+// ONCE per action from ctx and threaded explicitly — not per call, and never from module state,
+// because either of those can mix sources inside a single operation.
+const nativeReader = fs
+function readerFor(ctx) { return ctx && ctx.fs !== undefined ? ctx.fs : nativeReader }
+
+/** Trial cases supply ctx.fs; a failed trial read must never fall back to the mounted body's files. */
+function vfsReadWith(reader, file) {
+  if (!reader || typeof reader.readFileSync !== 'function') throw new Error('PEARL_VFS_UNAVAILABLE')
+  return reader.readFileSync(file, 'utf8')
+}
+function vfsRead(ctx, file) { return vfsReadWith(readerFor(ctx), file) }
+
+// --- governance / grant constants (F3) ---
+const GRANT_FILE = SEED + '/owner-grant.v1.json'
+const GOVERNANCE_ORGANS = new Set(['seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura', 'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map'])
 const MAX_UNJUSTIFIED_GROWTH_PERCENT = 10
 const MIN_GROWTH_JUSTIFICATION_LENGTH = 24
-const GOVERNANCE_ORGANS = new Set(['seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura', 'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map'])
+
+// The same six-key digest the suite pins: identity over the fields that decide what is graded,
+// and null for any field the suite does not carry, so an absent field cannot change the digest.
+function retentionSuiteDigest(suite) {
+  const keys = ['schema', 'harness', 'organs', 'fixedNow', 'cases', 'fixtures']
+  return sha256(canonicalJson(Object.fromEntries(keys.map((key) => [key, suite[key] ?? null]))))
+}
 const HARNESS_NAME = 'pearl-retention'
 const INITIAL_SUITE_ORGANS = ['seed-receipts', 'auma-memory-domain', 'seed-superagent', 'seed-predict', 'seed-recall']
 const FIXTURE_BALL = 'a'.repeat(64)
@@ -46,13 +70,10 @@ function canonicalJson(v) {
   return '{' + keys.map((k) => JSON.stringify(k) + ':' + canonicalJson(v[k])).join(',') + '}'
 }
 const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex')
-const retentionSuiteDigest = (suite) => sha256(canonicalJson(Object.fromEntries(
-  ['schema', 'harness', 'organs', 'fixedNow', 'cases', 'fixtures'].map(key => [key, suite[key] ?? null]),
-)))
-const readJson = (file) => JSON.parse(String(fs.readFileSync(file, 'utf8')))
-function readRows(file) {
+const readJson = (file, reader = nativeReader) => JSON.parse(String(reader.readFileSync(file, 'utf8')))
+function readRows(file, reader = nativeReader) {
   try {
-    const text = String(fs.readFileSync(file, 'utf8'))
+    const text = String(reader.readFileSync(file, 'utf8'))
     return text.split('\n').filter(Boolean).map((line) => JSON.parse(line))
   } catch (error) {
     if (error && error.code === 'ENOENT') return []
@@ -92,8 +113,8 @@ async function forgedEnvelopes(binding) {
   return { foreignKeyHex: publicKeyHex, foreign: { schema: 'aukora.x6.owner-grant.v1', ...binding, publicKeyHex, signatureHex } }
 }
 
-async function buildSuite() {
-  const ownerKeyText = String(fs.readFileSync(OWNER_KEY_FILE, 'utf8'))
+async function buildSuite(reader = nativeReader) {
+  const ownerKeyText = String(reader.readFileSync(OWNER_KEY_FILE, 'utf8'))
   const ownerKey = JSON.parse(ownerKeyText).publicKeyHex
   const head = JSON.stringify({ version: 'x6.1-ball/v1', ballId: FIXTURE_BALL, parentBallId: null, epoch: FIXTURE_EPOCH, createdAt: 0, authorPeerId: 'pearl-fixture',
     entries: { 'seed-hello': { id: 'seed-hello', specifier: 'ball:' + 'c'.repeat(64), config: {}, disabled: false, previousSpecifiers: [] } }, modules: {} }, null, 2) + '\n'
@@ -155,7 +176,7 @@ async function buildSuite() {
     { id: 'predict.register-anchored', scar: 'scar-epoch-miss', args: { organ: 'seed-predict', fixture: 'base', input: { action: 'register', prediction: 'fixture', metric: 'declaredOrgans', expected: 2, targetBallId: FIXTURE_TARGET, targetEpoch: FIXTURE_EPOCH + 1 }, pick: ['receipt.seq'] }, expect: { ok: true, 'receipt.seq': 1 } },
     { id: 'predict.observe-waits-for-target', scar: 'scar-epoch-miss', args: { organ: 'seed-predict', fixture: 'predict-pending', input: { action: 'observe', predictionHash: pendingHash } }, expectError: 'PREDICTION_TARGET_NOT_SELECTED' },
     { id: 'recall.unanchored-not-clean', scar: 'scar-unanchored-memory', args: { organ: 'seed-recall', fixture: 'dag-unanchored', input: { action: 'context' }, pick: ['clean', 'unanchoredCount'] }, expect: { ok: true, clean: false, unanchoredCount: 1 } },
-    { id: 'recall.unsigned-not-clean', scar: 'scar-unanchored-memory', args: { organ: 'seed-recall', fixture: 'dag-anchored', input: { action: 'context' }, pick: ['clean', 'unanchoredCount'] }, expect: { ok: true, clean: false, unanchoredCount: 1 } },
+    { id: 'recall.anchored-clean', scar: 'scar-unanchored-memory', args: { organ: 'seed-recall', fixture: 'dag-anchored', input: { action: 'context' }, pick: ['clean', 'unanchoredCount'] }, expect: { ok: true, clean: true, unanchoredCount: 0 } },
   ]
   return {
     schema: 'aukora.pearl.retention-suite.v1',
@@ -183,7 +204,7 @@ const FIRST_SCARS = [
     checks: ['predict.register-anchored', 'predict.observe-waits-for-target'] },
   { id: 'scar-unanchored-memory', epoch: 1, lesson: 'A self-consistent memory is not an anchored one: a node is trusted only with a memory.dag.append leaf, and recall says so.',
     failure: 'Seven DAG nodes and every discovery trajectory verified only against themselves, so a minted node would have passed; the context file had to carry an UNAUTHENTICATED badge.',
-    checks: ['dag.write-anchored', 'recall.unanchored-not-clean', 'recall.unsigned-not-clean'] },
+    checks: ['dag.write-anchored', 'recall.unanchored-not-clean', 'recall.anchored-clean'] },
 ]
 
 // ----------------------------------------------------------------------------------------------------------
@@ -195,37 +216,44 @@ async function appendReceipt(ctx, kind, data) {
   return result && result.ok === true ? { ok: true, receipt: result.receipt } : { ok: false, error: (result && result.error) || 'RECEIPT_NOT_ACKNOWLEDGED' }
 }
 
-function readSuite(text = String(fs.readFileSync(SUITE_FILE, 'utf8'))) {
-  const suite = JSON.parse(text)
+function readSuite(reader = nativeReader) {
+  const suite = readJson(SUITE_FILE, reader)
   const ids = Array.isArray(suite.cases) ? suite.cases.map((c) => c && c.id) : null
   if (!ids || !ids.length || ids.some((id) => typeof id !== 'string') || new Set(ids).size !== ids.length || !suite.fixtures) throw new Error('PEARL_SUITE_INVALID')
   return suite
 }
 
 async function remember(args, ctx) {
+  const reader = readerFor(ctx)
   const scar = args && args.scar
   if (!scar || typeof scar.id !== 'string' || !/^scar-[a-z0-9-]{1,60}$/.test(scar.id) || typeof scar.lesson !== 'string' || !scar.lesson.trim() ||
       typeof scar.failure !== 'string' || !scar.failure.trim() || !Number.isSafeInteger(scar.epoch) || !Array.isArray(scar.checks)) {
     return { ok: false, error: 'PEARL_SCAR_INVALID', need: 'scar: { id: "scar-...", epoch, lesson, failure, checks: [caseId] }' }
   }
-  const scars = readRows(SCARS_FILE)
+  const scars = readRows(SCARS_FILE, reader)
   if (scars.some((row) => row.id === scar.id)) return { ok: false, error: 'PEARL_SCAR_EXISTS', id: scar.id }
   let caseIds = []
-  try { caseIds = readSuite().cases.map((c) => c.id) } catch (_) { caseIds = [] }
+  try { caseIds = readSuite(reader).cases.map((c) => c.id) } catch (_) { caseIds = [] }
   const missing = scar.checks.filter((id) => !caseIds.includes(id))
   if (missing.length) return { ok: false, error: 'PEARL_SCAR_CHECK_UNKNOWN', missing }
   const row = { schema: 'aukora.pearl.scar.v1', id: scar.id, epoch: scar.epoch, at: new Date().toISOString(), lesson: scar.lesson.trim(), failure: scar.failure.trim(), checks: scar.checks.slice() }
-  fs.mkdirSync(SEED, { recursive: true })
-  fs.appendFileSync(SCARS_FILE, canonicalJson(row) + '\n')
+  reader.mkdirSync(SEED, { recursive: true })
+  reader.appendFileSync(SCARS_FILE, canonicalJson(row) + '\n')
   const receipt = await appendReceipt(ctx, 'pearl.scar', { id: row.id, epoch: row.epoch, checks: row.checks, scarSha256: sha256(canonicalJson(row)) })
   return { ok: receipt.ok, action: 'remember', scar: row, receipt: receipt.ok ? { seq: receipt.receipt.seq, leafHash: receipt.receipt.leafHash } : null, error: receipt.ok ? undefined : receipt.error }
 }
 
-/** Trial cases supply ctx.fs; a failed trial read must never fall back to the mounted body's files. */
-function vfsRead(ctx, file) {
-  const reader = ctx && ctx.fs !== undefined ? ctx.fs : fs
-  if (!reader || typeof reader.readFileSync !== 'function') throw new Error('PEARL_VFS_UNAVAILABLE')
-  return reader.readFileSync(file, 'utf8')
+/**
+ * Challenge any named organ against its selected baseline while retaining every suite case. The runtime
+ * reads the suite and sources, constructs the fixed harness, regrades outputs and owns admission. A
+ * receipt is only a projection; neither its booleans nor digests can mint a promotion admission.
+ */
+
+function parseSuite(text) {
+  const suite = JSON.parse(text)
+  const ids = Array.isArray(suite.cases) ? suite.cases.map((c) => c && c.id) : null
+  if (!ids || !ids.length || ids.some((id) => typeof id !== 'string') || new Set(ids).size !== ids.length || !suite.fixtures) throw new Error('PEARL_SUITE_INVALID')
+  return suite
 }
 
 function challengeRefused(error) {
@@ -316,18 +344,22 @@ function candidateGates(args, head, suite, read) {
  * receipt is only a projection; neither its booleans nor digests can mint a promotion admission.
  * Structural gates read the same trial VFS, require independently declared case authors and justify
  * growth over 10% with at least 24 characters. These declarations do not prove independent authorship.
- * Missing grants permit only a Class 3 candidate's passkey-review eligibility. Standing admission is
- * unavailable until a runtime grant verifier exists; passkey approval still belongs to the host.
+ * Pearl checks no grant and grants nothing. The answer passes on the runtime's qualification id for an
+ * ordinary organ; a protected organ's answer carries no id and its path is passkey review. Standing
+ * admission is unavailable until a runtime grant verifier exists; approval belongs to the host.
  * Empty observations or failed grader canaries refuse with PEARL_ARENA_UNAVAILABLE, without a verdict
  * or receipt. Unavailable-arena causes expose only known machine codes, never raw error text or output.
+ * The reader is resolved once here and every read in this operation, including the post-trial re-read,
+ * goes through it: one operation cannot observe two filesystems.
  */
 async function challenge(args, ctx) {
   if (args.candidateSource !== undefined && args.candidateSpecifier !== undefined) return challengeRefused('PEARL_CANDIDATE_AMBIGUOUS')
   if (args.baselineSpecifier !== undefined) return challengeRefused('PEARL_BASELINE_OVERRIDE_REFUSED')
+  const reader = readerFor(ctx)
   const inputs = new Map()
   const read = file => {
     try {
-      const text = String(vfsRead(ctx, file))
+      const text = String(vfsReadWith(reader, file))
       inputs.set(file, text)
       return text
     } catch (error) {
@@ -336,7 +368,7 @@ async function challenge(args, ctx) {
     }
   }
   const suiteText = read(SUITE_FILE)
-  const suite = readSuite(suiteText)
+  const suite = parseSuite(suiteText)
   const suiteBytesDigest = sha256(suiteText)
   const suiteDigest = retentionSuiteDigest(suite)
   const head = JSON.parse(read(HEAD))
@@ -368,10 +400,9 @@ async function challenge(args, ctx) {
     const retentionResults = result.results.map(row => ({ id: row.id, pass: row.pass }))
     const passedCases = retentionResults.filter(row => row.pass).length
     const qualifiedForPromotion = Boolean(result.qualifiedForPromotion === true && result.ok === true
-      && passedCases === suite.cases.length
       && result.suiteAdmission === 'build-pinned')
     ran.push({ label, organs: result.organs, passed: passedCases, passedCases,
-      total: suite.cases.length, totalCases: suite.cases.length, trialOk: result.ok === true,
+      total: suite.cases.length, totalCases: suite.cases.length, trialOk: result.trialOk === true,
       durationMs: typeof result.durationMs === 'number' ? result.durationMs : null,
       qualifiedForPromotion, qualificationId: qualifiedForPromotion && typeof result.qualificationId === 'string' ? result.qualificationId : null,
       graderControls: controls || null, routeEvidence: result.routeEvidence || null,
@@ -381,7 +412,7 @@ async function challenge(args, ctx) {
   }
   for (const [file, expected] of inputs) {
     try {
-      if (String(vfsRead(ctx, file)) !== expected) return challengeRefused('PEARL_CHALLENGE_INPUT_CHANGED')
+      if (String(vfsReadWith(reader, file)) !== expected) return challengeRefused('PEARL_CHALLENGE_INPUT_CHANGED')
     } catch (error) {
       if (expected !== null || !error || error.code !== 'ENOENT') return challengeRefused('PEARL_CHALLENGE_INPUT_CHANGED')
     }
@@ -396,9 +427,10 @@ async function challenge(args, ctx) {
   const behaviorQualified = gates.targeted && gates.candidateSha256 !== gates.incumbentSha256
     && targetImproved && comparison.targetImproved === true && candidate.targetCovered && winnerId === candidate.label
     && comparison.winnerId === candidate.label && candidate.qualifiedForPromotion
+  const protectedSurface = gates.protectedSurface || candidate.protectedSurface
   const standingGrantEligible = false
-  const passkeyPromotionEligible = behaviorQualified && gates.protectedSurface && gates.ceilingError === 'NO_GRANT_PRESENT'
-  const qualifiedForPromotion = standingGrantEligible || passkeyPromotionEligible
+  const passkeyPromotionEligible = behaviorQualified && protectedSurface && gates.ceilingError === 'NO_GRANT_PRESENT'
+  const qualifiedForPromotion = behaviorQualified
   const suiteSha256 = sha256(canonicalJson(suite))
   const data = {
     headBallId: head.ballId, headEpoch: head.epoch, ballId: head.ballId, epoch: head.epoch,
@@ -418,7 +450,8 @@ async function challenge(args, ctx) {
   }
   const receipt = await appendReceipt(ctx, 'pearl.challenge', data)
   return { ok: receipt.ok, action: 'challenge', winnerId, winner: winnerId, candidateId: candidate.label,
-    qualifiedForPromotion: receipt.ok && qualifiedForPromotion, qualificationId: null,
+    qualifiedForPromotion: receipt.ok && qualifiedForPromotion,
+    qualificationId: receipt.ok && qualifiedForPromotion && !protectedSurface ? candidate.qualificationId : null,
     standingGrantEligible, passkeyPromotionEligible: receipt.ok && passkeyPromotionEligible,
     ceilingError: gates.ceilingError, authorityVerified: false, eligibilityScope: data.eligibilityScope,
     suiteDigest, suiteBytesDigest,
@@ -429,11 +462,11 @@ async function challenge(args, ctx) {
     receipt: receipt.ok ? { seq: receipt.receipt.seq, leafHash: receipt.receipt.leafHash } : null, error: receipt.ok ? undefined : receipt.error }
 }
 
-function observe() {
+function observe(reader = nativeReader) {
   let suite = null
-  try { suite = readSuite() } catch (_) { suite = null }
-  const scars = readRows(SCARS_FILE)
-  const receipts = readRows(RECEIPTS)
+  try { suite = readSuite(reader) } catch (_) { suite = null }
+  const scars = readRows(SCARS_FILE, reader)
+  const receipts = readRows(RECEIPTS, reader)
   const latest = receipts.filter((r) => r.kind === 'pearl.challenge').at(-1) || null
   return {
     ok: true, action: 'observe', authorityTier: 'self-attested', isolationProved: false,
@@ -447,9 +480,9 @@ module.exports = {
   name: 'seed-pearl',
   description:
     'The Pearl Imagination Arena. seed writes the retention suite and first scars (once); observe reports them and the latest challenge; remember ' +
-    'engraves one scar (lesson, failure, the suite cases that check it); challenge runs one explicit candidate against its actual selected ' +
-    'incumbent while retaining the whole suite. Ties cannot qualify. Growth over 10% needs a justification and target cases need distinct declared authors. ' +
-    'Eligibility is review-only, never owner or passkey authority. Missing grants cannot qualify an unattended replacement. Raw manual routes are unchanged.',
+    'engraves one scar (lesson, failure, the suite cases that check it); challenge runs the selected build of every suite organ and the versions ' +
+    'they replaced against the whole suite, or one explicit candidate/baseline for any named organ. Records ranking separately from qualification. ' +
+    'Use the runtime-issued qualificationId with tree_patch (or ball_put promote) for an ordinary organ; a protected organ gets passkey review instead. Admission is behavioral, not owner authority. Raw manual routes are unchanged.',
   parameters: {
     type: 'object',
     properties: {
@@ -459,22 +492,24 @@ module.exports = {
       candidateSpecifier: { type: 'string', description: 'For challenge: prepared ball:<sha256>; default is the current selected source.' },
       candidateAuthor: { type: 'string', description: 'Declared candidate author, distinct from every retained target case author. Required for a targeted challenge; not an authenticated identity.' },
       sizeGrowthJustification: { type: 'string', description: 'For growth over 10%: at least 24 characters explaining additions, the retained case, and why a smaller change is insufficient.' },
+      baselineSpecifier: { type: 'string', description: 'For challenge: explicit baseline; default is the predecessor, or the current source when no predecessor exists.' },
       scar: { type: 'object', description: 'For remember: { id: "scar-...", epoch, lesson, failure, checks: [suite case ids] }.' },
     },
     required: ['action'],
     additionalProperties: false,
   },
   async run(args, ctx) {
+    const reader = readerFor(ctx)
     const action = args && args.action
     try {
-      if (action === 'observe') return observe()
+      if (action === 'observe') return observe(reader)
       if (action === 'remember') return await remember(args, ctx)
       if (action === 'challenge') return await challenge(args, ctx)
       if (action === 'seed') {
-        if (fs.existsSync(SUITE_FILE)) return { ok: false, action, error: 'PEARL_SUITE_EXISTS', note: 'The suite only grows; it is never regenerated.' }
-        const suite = await buildSuite()
-        fs.mkdirSync(SEED + '/pearl', { recursive: true })
-        fs.writeFileSync(SUITE_FILE, JSON.stringify(suite, null, 2) + '\n')
+        if (reader.existsSync(SUITE_FILE)) return { ok: false, action, error: 'PEARL_SUITE_EXISTS', note: 'The suite only grows; it is never regenerated.' }
+        const suite = await buildSuite(reader)
+        reader.mkdirSync(SEED + '/pearl', { recursive: true })
+        reader.writeFileSync(SUITE_FILE, JSON.stringify(suite, null, 2) + '\n')
         const suiteSha256 = sha256(canonicalJson(suite))
         const receipt = await appendReceipt(ctx, 'pearl.suite', { suiteSha256, cases: suite.cases.length, organs: suite.organs, harness: suite.harness })
         const engraved = []

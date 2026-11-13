@@ -32,7 +32,7 @@ Where the trust model is incomplete (each is how the code works today; none is f
 3. The **genesis head** is where every node starts: epoch 1, no parent, 26 entries (`mirror/home/balls/HEAD.json`).
 4. **HEAD** is the edge store that selects the current ball; a new ball must name it as parent and be exactly one epoch higher (`REBASE_REQUIRED` otherwise). **MIRROR** is the edge store that holds a copy of her home.
 5. The **scion** is the compiler for an organ she proposes: a pinned offline compiler in a separate worker (`packages/experimental/webworker-runtime/src/x6/scion.ts`). No test calls `compile` directly: UNVERIFIED.
-6. **Pearl** is the retention suite candidates are graded against (17 cases, `mirror/home/auma/seed/pearl/retention-suite.v1.json`, organ `seed-pearl.js`). Its receipts say `authorityVerified: false`; it is self-attested.
+6. **Pearl** is the retention suite candidates are graded against (23 cases, `mirror/home/auma/seed/pearl/retention-suite.v1.json`, organ `seed-pearl.js`). Its receipts say `authorityVerified: false`; it is self-attested.
 7. **Scars** are six founding failures with their lessons and guarding checks (`mirror/home/auma/seed/scars.jsonl`).
 8. **Receipts** are a hash-chained log with Ed25519-signed checkpoints (`seed-receipts.js`). A receipt is evidence, not an approval.
 9. **Memory**: her home is saved to IndexedDB and synced to MIRROR (`packages/experimental/webworker-runtime/src/storage/idb-persist.ts`). The recall and memory organs have red tests (section 10).
@@ -40,7 +40,7 @@ Where the trust model is incomplete (each is how the code works today; none is f
 
 Identity is not the model. Auma's identity is her head, her home, her receipt chain and the node key that AUMLOK releases to the owner. The intelligence is whichever hosted model answers through a same-origin door, `/door/<provider>/`: seven doors for six providers (`packages/experimental/webworker-runtime/src/model-doors.ts`). Change the model and the organism, its rules and its owner stay the same. No model call is recorded from this tree.
 
-The real runtime: the agent runs in a browser WebWorker on the inherited DeepSeek Harness runtime (`packages/experimental/webworker-runtime/`), with organs loaded by `ball-loader.ts`. The edge is one Cloudflare Worker (`deploy/cloudflare/src/worker.mjs`) with two Durable Objects and an R2 bucket (`deploy/cloudflare/wrangler.toml`). A local Node host emulates the edge on one machine (`server/local-host.mjs`). Node 24.9 or newer and pnpm 11.28.5; the recorded install linked 1,458 packages offline (RECORDED RUN), and the authority tests need `@simplewebauthn/server`, `@noble/curves`, `@noble/post-quantum`, `@scure/base` and `typescript`. The app screens follow **Spatial**, the one workspace layout (`packages/client/ui-layout/src/client/spatial/`).
+The real runtime: the agent runs in a browser WebWorker on the inherited DeepSeek Harness runtime (`packages/experimental/webworker-runtime/`), with organs loaded by `ball-loader.ts`. The edge is one Cloudflare Worker (`deploy/cloudflare/src/worker.mjs`) with two Durable Objects and an R2 bucket (`deploy/cloudflare/wrangler.toml`). A local Node host emulates the edge on one machine (`server/local-host.mjs`). Node 24.9 or newer and pnpm 11.28.5; the recorded install (of an earlier tree) linked 1,458 packages offline (RECORDED RUN), and the authority tests need `@simplewebauthn/server`, `@noble/curves`, `@noble/post-quantum`, `@scure/base` and `typescript`. The app screens follow **Spatial**, the one workspace layout (`packages/client/ui-layout/src/client/spatial/`).
 
 ## 3. The trust architecture, and the limit of each part
 
@@ -50,18 +50,18 @@ The real runtime: the agent runs in a browser WebWorker on the inherited DeepSee
 | Passkeys | WebAuthn, user verification required | `webauthn-screen.mjs`, `proof-failure-rule.mjs` | Signs a random challenge, not the bytes (section 1). |
 | Exact-byte approvals | Bound to one request, 5 minutes, spent once | `aumlok.mjs`, `head-do.mjs` | Whole-store restore can re-enable a spent one (below). |
 | Owner-only ids | 15 protected names | `server/ball-transition.mjs` | List is code; a deploy changes it. |
-| The edge | Worker, HEAD, MIRROR | `worker.mjs`, `head-do.mjs`, `mirror-do.mjs` | HEAD does not read Pearl: in production no qualification verifier is passed in (`head-do.mjs`), and the local host answered `PEARL_QUALIFICATION_UNVERIFIABLE` in the RECORDED RUN. No run on the real Cloudflare runtime is recorded from this tree. |
+| The edge | Worker, HEAD, MIRROR | `worker.mjs`, `head-do.mjs`, `mirror-do.mjs` | HEAD does not read Pearl: in production no qualification verifier is passed in (`head-do.mjs`), and the local host answered `PEARL_QUALIFICATION_UNVERIFIABLE` in the RECORDED RUN (of an earlier tree). No run on the real Cloudflare runtime is recorded from this tree. |
 | Wasm cells | 25 modules pinned by size and SHA-256, zero imports, fuel, 5-second worker | `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`, `apps/web/public/cells/` | 24 of 25 ship without source. Auma calls them through `x6_cell`. The Worker calls none; the local host runs one, `aura-focus`, in shadow beside the JavaScript result, with no authority. |
 | Persistence | IndexedDB in the browser, ordered updates to MIRROR | `idb-persist.ts`, `mirror-do.mjs` | MIRROR keeps current state, not file history (`MEMORY_HISTORY_NOT_IMPLEMENTED`). |
 | Recovery | Rescue page, vault, bounded archive, restore into an empty edge only | `rescue-kit.mjs`, `vault.mjs`, `cold-archive.mjs`, `recovery-restore.mjs` | The snapshot omits the AUMLOK binding, so identity starts again. Restore against a real edge: UNVERIFIED. |
 
 ## 4. Reading order, with a reading budget in lines
 
-**About 230 lines.** This page (134), then `docs/RUN-RECORD.md` (54) and `docs/KNOWN-RED-TESTS.md` (44). You now know the rule, the evidence and the failures.
+**About 240 lines.** This page (134), then the record of an earlier tree, `docs/RUN-RECORD.md` (56) and `docs/KNOWN-RED-TESTS.md` (46). You now know the rule, the evidence and the failures.
 
-**About 1,470 lines.** Add `README.md` (150, the front page), `docs/WHAT-IS-BUILT.md` (233: claim, file, test, label), `docs/ARCHITECTURE-MAP.md` (133), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
+**About 1,470 lines.** Add `README.md` (150, the front page), `docs/WHAT-IS-BUILT.md` (237: claim, file, test, label), `docs/ARCHITECTURE-MAP.md` (133), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
 
-**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (2,808), `owner-grant-policy.mjs` (353), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (167), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (523), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (915), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,060), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/DIRECTION.md` and `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (7,214) by symbol, not whole.
+**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (3,000), `owner-grant-policy.mjs` (353), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (167), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (525), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (915), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,060), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/DIRECTION.md` and `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (7,465) by symbol, not whole.
 
 **The argument.** `docs/WHITEPAPER.md` (885, English only) is the project's argument in full. Its Book V and Book VI are checked against this tree, by reading the code and not by running it.
 
@@ -72,12 +72,12 @@ Do not start from `AGENTS.md`: apart from a pointer at its top, it holds the inh
 | Label | Means |
 |---|---|
 | IMPLEMENTED | Code and tests are in this tree. Says nothing about whether the tests pass. |
-| RECORDED RUN | Shown in `docs/RUN-RECORD.md`: one run, one machine, by the authors. |
+| RECORDED RUN (of an earlier tree) | Shown in `docs/RUN-RECORD.md`: one run, one machine, by the authors. |
 | INDEPENDENTLY VERIFIED | Run or checked by someone other than its authors. Nothing has this label yet. |
 | UNVERIFIED | Claimed or written, but no test here holds it or no run shows it. |
 | DIRECTION | An aim. Not built. |
 
-When you summarise this project, keep these labels on every claim, and never move a claim to a stronger label than the tree supports. A goal is not a feature. Older pages (`docs/START-HERE.md`, `docs/ARCHITECTURE-ACTUAL.md`, `docs/RUN-RECORD.md`, `docs/GLOSSARY.md`) use SOURCE, RAN, PROPOSED, UNPERFORMED and REPORTED RUN; read RAN and REPORTED RUN as RECORDED RUN, PROPOSED as DIRECTION, UNPERFORMED as UNVERIFIED, and SOURCE as IMPLEMENTED only where a test exists, otherwise UNVERIFIED. Where an older page says no run is recorded "here", it means on that page; `docs/RUN-RECORD.md` is the record.
+When you summarise this project, keep these labels on every claim, and never move a claim to a stronger label than the tree supports. A goal is not a feature. Older pages (`docs/START-HERE.md`, `docs/ARCHITECTURE-ACTUAL.md`, `docs/RUN-RECORD.md`, `docs/GLOSSARY.md`) use SOURCE, RAN, PROPOSED, UNPERFORMED and REPORTED RUN; read RAN and REPORTED RUN as RECORDED RUN (of an earlier tree), PROPOSED as DIRECTION, UNPERFORMED as UNVERIFIED, and SOURCE as IMPLEMENTED only where a test exists, otherwise UNVERIFIED. Where an older page says no run is recorded "here", it means on that page; `docs/RUN-RECORD.md` is the record, of an earlier tree.
 
 ## 6. What must never be confused
 
@@ -94,7 +94,7 @@ When you summarise this project, keep these labels on every claim, and never mov
 
 ## 7. Where each part of the code comes from
 
-By the project's one count, made from its own history, which is not public (UNVERIFIED): 10.5% of the tree's non-vendored text lines, and 12.9% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
+By the project's one count, made from its own history, which is not public (UNVERIFIED): 11.6% of the tree's non-vendored text lines, and 14.3% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
 
 - **Aukora's layer:** `deploy/` (the edge and deploy gates), `server/` (local host, ball rules), `mirror/` (genesis head and organs), `packages/experimental/webworker-runtime/src/x6/` (loader, scion, cells), `packages/client/ui-layout/src/client/spatial/` (the app), and parts of `apps/web/public/`.
 - **Inherited DeepSeek Harness:** most of `packages/`, plus `python/`, `native/`, `benchmarks/`, `snapshots/`, `.agents/` and most of `.github/workflows/`. MIT notice in `LICENSES/MIT-DeepSeek-Harness.txt`. Aukora is not affiliated with DeepSeek.
@@ -120,12 +120,12 @@ Never weaken, skip or delete a test to get green. A red test is recorded in `doc
 
 Repeat this, or something no stronger:
 
-> Aukora is a prototype of a personally owned AI, Auma, that can stage changes to her own modules while a separate Cloudflare edge checks the owner's passkey, and binds that approval to the exact bytes of one change, before a change to her protected parts takes effect. The passkey signs a random challenge, not the bytes; the edge holds the binding. The code and tests for that are in the tree, except that the compiler and the self-build step have no test, but the only run evidence is one recorded run by its authors on one machine: 5,502 test cases, 5,399 passed and 90 failed, 89 of them already on docs/KNOWN-RED-TESTS.md, with no browser, no deployment, no model call and no passkey ceremony. No end-to-end owner-approved self-change is recorded from this tree, a cloud deployment into a fresh account is UNVERIFIED, and nothing is INDEPENDENTLY VERIFIED. 24 of the 25 Wasm cells and the Dakini Code bundle ship without source, pentora36.wasm has no licence granted yet, and restoring a whole stored snapshot can re-enable a spent approval, which a test in the tree reproduces. Most of packages/ is the inherited DeepSeek Harness runtime and the plugin framework is Cordis in vendor/, so by one unverified count Aukora's own layer is roughly a tenth of the text.
+> Aukora is a prototype of a personally owned AI, Auma, that can stage changes to her own modules while a separate Cloudflare edge checks the owner's passkey, and binds that approval to the exact bytes of one change, before a change to her protected parts takes effect. The passkey signs a random challenge, not the bytes; the edge holds the binding. The code and tests for that are in the tree, except that the compiler and the self-build step have no test, but the only run evidence is one recorded run (of an earlier tree) by its authors on one machine: 5,502 test cases, 5,399 passed and 90 failed, 89 of them already on docs/KNOWN-RED-TESTS.md, with no browser, no deployment, no model call and no passkey ceremony. No end-to-end owner-approved self-change is recorded from this tree, a cloud deployment into a fresh account is UNVERIFIED, and nothing is INDEPENDENTLY VERIFIED. 24 of the 25 Wasm cells and the Dakini Code bundle ship without source, pentora36.wasm has no licence granted yet, and restoring a whole stored snapshot can re-enable a spent approval, which a test in the tree reproduces. Most of packages/ is the inherited DeepSeek Harness runtime and the plugin framework is Cordis in vendor/, so by one unverified count Aukora's own layer is roughly a tenth of the text.
 
 ## 10. Known failures and open security questions
 
 - Failing tests, with counts and reasons: `docs/KNOWN-RED-TESTS.md`. The receipt, recall, memory and prediction organs are among them.
-- The run and what it did not cover: `docs/RUN-RECORD.md`.
+- The run and what it did not cover: `docs/RUN-RECORD.md` (a record of an earlier tree).
 - Whole-store restore gaps, reproduced, with ten todo cases beside them (nine named gaps and one positive recovery case): `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`.
 - A check that needs no install: `node scripts/verify-lite.mjs`, 22 test files. Its last line, as seen on one machine (UNVERIFIED): `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`. It does not run the authority tests.
 - The edge's own stated limits: `deploy/cloudflare/README.md`.

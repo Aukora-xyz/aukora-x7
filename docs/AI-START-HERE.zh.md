@@ -32,7 +32,7 @@
 3. **创世 head** 是每个节点的起点：epoch 1、没有父版本、26 个条目（`mirror/home/balls/HEAD.json`）。
 4. **HEAD** 是选出当前 ball 的边缘端存储；新的 ball 必须把它指为父版本，并且正好高一个 epoch（否则返回 `REBASE_REQUIRED`）。**MIRROR** 是存放她的 home 副本的边缘端存储。
 5. **scion** 是编译她所提议 organ 的编译器：一个固定版本的离线编译器，位于一个独立的 worker 中（`packages/experimental/webworker-runtime/src/x6/scion.ts`）。没有测试直接调用 `compile`：UNVERIFIED。
-6. **Pearl** 是用来给候选版本打分的保留套件（17 个用例，`mirror/home/auma/seed/pearl/retention-suite.v1.json`，organ 为 `seed-pearl.js`）。它的 receipt 写着 `authorityVerified: false`；它是自我证明的。
+6. **Pearl** 是用来给候选版本打分的保留套件（23 个用例，`mirror/home/auma/seed/pearl/retention-suite.v1.json`，organ 为 `seed-pearl.js`）。它的 receipt 写着 `authorityVerified: false`；它是自我证明的。
 7. **scars** 是六次奠基性的失败，附有教训和把守它们的检查（`mirror/home/auma/seed/scars.jsonl`）。
 8. **receipt** 是一条哈希链日志，带有 Ed25519 签名的检查点（`seed-receipts.js`）。receipt 是证据，不是批准。
 9. **记忆**：她的 home 保存到 IndexedDB，并同步到 MIRROR（`packages/experimental/webworker-runtime/src/storage/idb-persist.ts`）。回忆和记忆 organ 有红色测试（第 10 节）。
@@ -40,7 +40,7 @@
 
 身份不是模型。Auma 的身份是她的 head、她的 home、她的 receipt 链，以及 AUMLOK 释放给所有者的节点密钥。智能是哪个托管模型通过同源的门 `/door/<provider>/` 作答：六家供应商共七扇门（`packages/experimental/webworker-runtime/src/model-doors.ts`）。换了模型，有机体、它的规则和它的所有者都不变。这棵树中没有记录任何一次模型调用。
 
-真实的运行时：智能体在浏览器的 WebWorker 中运行，建立在继承来的 DeepSeek Harness 运行时之上（`packages/experimental/webworker-runtime/`），organ 由 `ball-loader.ts` 加载。边缘端是一个 Cloudflare Worker（`deploy/cloudflare/src/worker.mjs`），带两个 Durable Object 和一个 R2 存储桶（`deploy/cloudflare/wrangler.toml`）。一个本地 Node 宿主在一台机器上模拟边缘端（`server/local-host.mjs`）。需要 Node 24.9 或更新版本，以及 pnpm 11.28.5；记录的那次安装离线链接了 1,458 个包（RECORDED RUN），而权限测试需要 `@simplewebauthn/server`、`@noble/curves`、`@noble/post-quantum`、`@scure/base` 和 `typescript`。应用界面遵循 **Spatial**，唯一的工作区布局（`packages/client/ui-layout/src/client/spatial/`）。
+真实的运行时：智能体在浏览器的 WebWorker 中运行，建立在继承来的 DeepSeek Harness 运行时之上（`packages/experimental/webworker-runtime/`），organ 由 `ball-loader.ts` 加载。边缘端是一个 Cloudflare Worker（`deploy/cloudflare/src/worker.mjs`），带两个 Durable Object 和一个 R2 存储桶（`deploy/cloudflare/wrangler.toml`）。一个本地 Node 宿主在一台机器上模拟边缘端（`server/local-host.mjs`）。需要 Node 24.9 或更新版本，以及 pnpm 11.28.5；记录的那次安装（属于较早的一棵树）离线链接了 1,458 个包（RECORDED RUN），而权限测试需要 `@simplewebauthn/server`、`@noble/curves`、`@noble/post-quantum`、`@scure/base` 和 `typescript`。应用界面遵循 **Spatial**，唯一的工作区布局（`packages/client/ui-layout/src/client/spatial/`）。
 
 ## 3. 信任架构，以及每一部分的限度
 
@@ -50,18 +50,18 @@
 | Passkey | WebAuthn，要求用户验证 | `webauthn-screen.mjs`、`proof-failure-rule.mjs` | 签名的是一个随机挑战，不是这些字节（第 1 节）。 |
 | 精确字节批准 | 绑定到一个请求，5 分钟，只能用一次 | `aumlok.mjs`、`head-do.mjs` | 整个存储的恢复可以让一次已被消耗的批准重新生效（见下）。 |
 | 只有所有者的 id | 15 个受保护的名称 | `server/ball-transition.mjs` | 列表是代码；一次部署就能改它。 |
-| 边缘端 | Worker、HEAD、MIRROR | `worker.mjs`、`head-do.mjs`、`mirror-do.mjs` | HEAD 不读取 Pearl：在生产中没有传入资格验证器（`head-do.mjs`），而本地宿主在 RECORDED RUN 中回应了 `PEARL_QUALIFICATION_UNVERIFIABLE`。这棵树没有记录在真实 Cloudflare 运行时上的任何运行。 |
+| 边缘端 | Worker、HEAD、MIRROR | `worker.mjs`、`head-do.mjs`、`mirror-do.mjs` | HEAD 不读取 Pearl：在生产中没有传入资格验证器（`head-do.mjs`），而本地宿主在 RECORDED RUN（属于较早的一棵树） 中回应了 `PEARL_QUALIFICATION_UNVERIFIABLE`。这棵树没有记录在真实 Cloudflare 运行时上的任何运行。 |
 | Wasm 单元 | 25 个模块，按大小和 SHA-256 固定，零导入，燃料配额，5 秒 worker | `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`、`apps/web/public/cells/` | 25 个中有 24 个没有源码随附。Auma 通过 `x6_cell` 调用它们。Worker 一个也不调用；本地宿主运行其中一个，`aura-focus`，在 JavaScript 结果旁以影子方式运行，没有任何权威。 |
 | 持久化 | 浏览器中的 IndexedDB，向 MIRROR 有序更新 | `idb-persist.ts`、`mirror-do.mjs` | MIRROR 保存当前状态，不保存文件历史（`MEMORY_HISTORY_NOT_IMPLEMENTED`）。 |
 | 恢复 | 救援页面、vault、有界归档，只能恢复到空的边缘端 | `rescue-kit.mjs`、`vault.mjs`、`cold-archive.mjs`、`recovery-restore.mjs` | 快照省略了 AUMLOK 绑定，所以身份要重新开始。对真实边缘端的恢复：UNVERIFIED。 |
 
 ## 4. 阅读顺序，附以行数计的阅读预算
 
-**约 230 行。** 本页（134），然后是 `docs/RUN-RECORD.md`（54）和 `docs/KNOWN-RED-TESTS.md`（44）。你现在知道了规则、证据和失败之处。
+**约 240 行。** 本页（134），然后是属于较早的一棵树的记录 `docs/RUN-RECORD.md`（56）和 `docs/KNOWN-RED-TESTS.md`（46）。你现在知道了规则、证据和失败之处。
 
-**约 1,470 行。** 加上 `README.md`（150，前页）、`docs/WHAT-IS-BUILT.md`（233：声明、文件、测试、标签）、`docs/ARCHITECTURE-MAP.md`（133）、`docs/GLOSSARY.md`（23）、`server/ball-transition.mjs`（125）、`deploy/cloudflare/src/proof-failure-rule.mjs`（250）、`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`（232）和 `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`（88）。
+**约 1,470 行。** 加上 `README.md`（150，前页）、`docs/WHAT-IS-BUILT.md`（237：声明、文件、测试、标签）、`docs/ARCHITECTURE-MAP.md`（133）、`docs/GLOSSARY.md`（23）、`server/ball-transition.mjs`（125）、`deploy/cloudflare/src/proof-failure-rule.mjs`（250）、`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`（232）和 `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`（88）。
 
-**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（2,808）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（167）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（523）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（915）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/DIRECTION.md` 和 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（7,214）按符号读，不要整个读。
+**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（3,000）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（167）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（915）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/DIRECTION.md` 和 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（7,465）按符号读，不要整个读。
 
 **论证。** `docs/WHITEPAPER.md`（885，只有英文）是本项目的完整论证。它的 Book V 和 Book VI 已对照这棵树核对过：读了代码，没有运行。
 
@@ -72,12 +72,12 @@
 | 标签 | 含义 |
 |---|---|
 | IMPLEMENTED | 代码和测试在这棵树中。不说明这些测试是否通过。 |
-| RECORDED RUN | 在 `docs/RUN-RECORD.md` 中展示：一次运行，一台机器，由作者完成。 |
+| RECORDED RUN（属于较早的一棵树） | 在 `docs/RUN-RECORD.md` 中展示：一次运行，一台机器，由作者完成。 |
 | INDEPENDENTLY VERIFIED | 由作者以外的人运行或检查过。目前没有任何东西带有这个标签。 |
 | UNVERIFIED | 已被声称或写出，但这里没有测试守住它，或没有运行展示它。 |
 | DIRECTION | 一个目标。尚未建成。 |
 
-当你概括这个项目时，每一条声明都要保留这些标签，并且绝不要把一条声明移到比这棵树所支持的更强的标签上。目标不是功能。较旧的页面（`docs/START-HERE.md`、`docs/ARCHITECTURE-ACTUAL.md`、`docs/RUN-RECORD.md`、`docs/GLOSSARY.md`）使用 SOURCE、RAN、PROPOSED、UNPERFORMED 和 REPORTED RUN；请把 RAN 和 REPORTED RUN 读作 RECORDED RUN，把 PROPOSED 读作 DIRECTION，把 UNPERFORMED 读作 UNVERIFIED，并且只在存在测试的地方把 SOURCE 读作 IMPLEMENTED，否则读作 UNVERIFIED。较旧的页面说“这里”没有记录运行时，指的是在那个页面上；记录在 `docs/RUN-RECORD.md` 中。
+当你概括这个项目时，每一条声明都要保留这些标签，并且绝不要把一条声明移到比这棵树所支持的更强的标签上。目标不是功能。较旧的页面（`docs/START-HERE.md`、`docs/ARCHITECTURE-ACTUAL.md`、`docs/RUN-RECORD.md`、`docs/GLOSSARY.md`）使用 SOURCE、RAN、PROPOSED、UNPERFORMED 和 REPORTED RUN；请把 RAN 和 REPORTED RUN 读作 RECORDED RUN（属于较早的一棵树），把 PROPOSED 读作 DIRECTION，把 UNPERFORMED 读作 UNVERIFIED，并且只在存在测试的地方把 SOURCE 读作 IMPLEMENTED，否则读作 UNVERIFIED。较旧的页面说“这里”没有记录运行时，指的是在那个页面上；记录在 `docs/RUN-RECORD.md` 中，属于较早的一棵树。
 
 ## 6. 绝不能混淆的事
 
@@ -94,7 +94,7 @@
 
 ## 7. 代码的每一部分来自哪里
 
-按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 10.5%，以及代码行的 12.9%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
+按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 11.6%，以及代码行的 14.3%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
 
 - **Aukora 的一层：** `deploy/`（边缘端和部署门禁）、`server/`（本地宿主、ball 规则）、`mirror/`（创世 head 和 organ）、`packages/experimental/webworker-runtime/src/x6/`（loader、scion、单元）、`packages/client/ui-layout/src/client/spatial/`（应用），以及 `apps/web/public/` 的一部分。
 - **继承来的 DeepSeek Harness：** `packages/` 的大部分，外加 `python/`、`native/`、`benchmarks/`、`snapshots/`、`.agents/` 和 `.github/workflows/` 的大部分。MIT 声明在 `LICENSES/MIT-DeepSeek-Harness.txt`。Aukora 与 DeepSeek 没有隶属关系。
@@ -120,12 +120,12 @@
 
 重复下面这段，或比它更弱的话：
 
-> Aukora 是一个由个人拥有的 AI（Auma）的原型，她可以暂存对自己模块的修改，而一个独立的 Cloudflare 边缘端会检查所有者的 passkey，并在对她受保护部分的修改生效之前，把这次批准绑定到一次修改的精确字节。passkey 签名的是一个随机挑战，不是这些字节；绑定由边缘端持有。相关的代码和测试都在这棵树中，只是编译器和自建步骤没有测试，但唯一的运行证据是其作者在一台机器上的一次记录的运行：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个已列在 docs/KNOWN-RED-TESTS.md 中，没有浏览器、没有部署、没有模型调用，也没有 passkey 仪式。这棵树没有记录任何端到端的、经所有者批准的自我修改，部署到全新账户的云端部署是 UNVERIFIED，也没有任何东西是 INDEPENDENTLY VERIFIED。25 个 Wasm 单元中的 24 个和 Dakini Code 包没有源码随附，pentora36.wasm 尚未授予许可，而且恢复整个已存储的快照可能让一次已被消耗的批准重新生效，树中有一个测试复现了这一点。packages/ 的大部分是继承来的 DeepSeek Harness 运行时，插件框架是 vendor/ 中的 Cordis，所以按一个未经验证的统计，Aukora 自己的一层大约占文本的十分之一。
+> Aukora 是一个由个人拥有的 AI（Auma）的原型，她可以暂存对自己模块的修改，而一个独立的 Cloudflare 边缘端会检查所有者的 passkey，并在对她受保护部分的修改生效之前，把这次批准绑定到一次修改的精确字节。passkey 签名的是一个随机挑战，不是这些字节；绑定由边缘端持有。相关的代码和测试都在这棵树中，只是编译器和自建步骤没有测试，但唯一的运行证据是其作者在一台机器上的一次记录的运行（属于较早的一棵树）：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个已列在 docs/KNOWN-RED-TESTS.md 中，没有浏览器、没有部署、没有模型调用，也没有 passkey 仪式。这棵树没有记录任何端到端的、经所有者批准的自我修改，部署到全新账户的云端部署是 UNVERIFIED，也没有任何东西是 INDEPENDENTLY VERIFIED。25 个 Wasm 单元中的 24 个和 Dakini Code 包没有源码随附，pentora36.wasm 尚未授予许可，而且恢复整个已存储的快照可能让一次已被消耗的批准重新生效，树中有一个测试复现了这一点。packages/ 的大部分是继承来的 DeepSeek Harness 运行时，插件框架是 vendor/ 中的 Cordis，所以按一个未经验证的统计，Aukora 自己的一层大约占文本的十分之一。
 
 ## 10. 已知失败与未决的安全问题
 
 - 失败的测试，附数量和原因：`docs/KNOWN-RED-TESTS.md`。receipt、回忆、记忆和预测 organ 都在其中。
-- 那次运行及其没有覆盖的内容：`docs/RUN-RECORD.md`。
+- 那次运行及其没有覆盖的内容：`docs/RUN-RECORD.md`（这份记录属于较早的一棵树）。
 - 整个存储恢复的缺口，已复现，旁边有十个 todo 用例（九个已点名的缺口和一个正向恢复用例）：`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`。
 - 一个无需安装的检查：`node scripts/verify-lite.mjs`，22 个测试文件。它的最后一行，在一台机器上所见（UNVERIFIED）：`verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`。它不运行权限测试。
 - 边缘端自己声明的限度：`deploy/cloudflare/README.md`。

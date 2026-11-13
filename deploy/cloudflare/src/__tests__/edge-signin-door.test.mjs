@@ -24,7 +24,20 @@ const keyHex = key => key.publicKey.export({ type: 'spki', format: 'der' }).suba
 const sha = value => createHash('sha256').update(value).digest()
 const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url')
 const arrayBuffer = buffer => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-const settle = async predicate => { for (let index = 0; index < 500 && !predicate(); index++) await new Promise(resolve => setImmediate(resolve)) }
+/** Waits until `predicate()` holds. What it waits for crosses the libuv thread pool many times (every WebCrypto call of
+ * the Worker, HEAD and the passkey check), and a busy machine (a CI runner running test files in parallel) can hold one
+ * such job longer than hundreds of quick event-loop turns. So the wait is bounded by elapsed time, not by a count of
+ * turns: quick turns first, then 1 ms sleeps that leave the CPU to the pool, and past the limit it fails loudly, naming
+ * the condition, instead of returning as if it held. */
+const SETTLE_LIMIT_MS = 30000
+const settle = async predicate => {
+  const started = performance.now()
+  for (let turn = 0; !predicate(); turn++) {
+    const waited = performance.now() - started
+    if (waited > SETTLE_LIMIT_MS) throw new Error(`settle: still waiting after ${String(Math.round(waited))} ms (${String(turn)} turns) for ${String(predicate)}`)
+    await new Promise(resolve => (turn < 500 ? setImmediate(resolve) : setTimeout(resolve, 1)))
+  }
+}
 
 function memoryStorage() {
   let rows = new Map(), tail = Promise.resolve()
@@ -407,6 +420,8 @@ test('B3: an older challenge request that fails or answers late never clears or 
     assert.equal(page.issued.length, 2)
     // Now the old request finishes: it must change nothing.
     finish()
+    // The old request (ordinal 0) has reached the page before the check, however slow the machine.
+    await settle(() => page.settled.includes(0))
     for (let index = 0; index < 50; index++) await new Promise(resolve => setImmediate(resolve))
     page.click()
     assert.equal(page.gets.length, 1, `${outcome}: the newer challenge is still held`)
@@ -566,6 +581,8 @@ test('B10: the reopen does not depend on passkey support: without WebAuthn a liv
   // No session: the one request is made and nothing is reopened.
   const none = await signinPage(t, fx, { webauthn: false, referrer: elsewhere })
   await settle(() => none.requests.length === 1)
+  // The Worker's answer (HEAD and WebCrypto behind it) has reached the page before the check, however slow the machine.
+  await settle(() => none.settled.length === 1)
   for (let index = 0; index < 20; index++) await new Promise(resolve => setImmediate(resolve))
   assert.deepEqual(none.replacements, [])
   // A direct or same-site arrival already carried the Strict cookie, so it has nothing to reopen: no request at all.

@@ -155,7 +155,7 @@
     },
     "seed-pearl": {
       "id": "seed-pearl",
-      "specifier": "ball:be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
+      "specifier": "ball:5b578cbc5c20a430211f444b2803a530792c8437f4ce6ae00e44d49e1dceeadd",
       "config": {
         "governance": true
       },
@@ -365,12 +365,12 @@
       "size": 12897,
       "createdAt": 0
     },
-    "be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447": {
-      "sha256": "be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
-      "specifier": "ball:be45af87713fecd8341d51ad940509ffa18b9444cc72e09095d96fa21ef72447",
+    "5b578cbc5c20a430211f444b2803a530792c8437f4ce6ae00e44d49e1dceeadd": {
+      "sha256": "5b578cbc5c20a430211f444b2803a530792c8437f4ce6ae00e44d49e1dceeadd",
+      "specifier": "ball:5b578cbc5c20a430211f444b2803a530792c8437f4ce6ae00e44d49e1dceeadd",
       "name": "seed-pearl",
       "description": "Genesis seed organ seed-pearl",
-      "size": 39262,
+      "size": 39527,
       "createdAt": 0
     },
     "04df042179a9c678d1284cb070df1db0d7d430fef3649621b567fc927381f175": {
@@ -430,5 +430,5 @@
       "createdAt": 0
     }
   },
-  "ballId": "a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624"
+  "ballId": "e70d86bd8972997f283291ab5c69d589ec20283ef12045b4eedea8832d772cfd"
 }

@@ -6,14 +6,14 @@
 
 **这些任务没有作为 issue 开出。** 它们只存在于本页。开始其中一个之前，请先开一个 issue 或草稿 pull request，并写明它在本页的编号，这样两个人就不会重复做同一件事。某个任务完成后，关闭它的 pull request 也要把它从本页删除。
 
-适用于每个任务的规则（[CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)）：不削弱任何测试、上限或关卡；[KNOWN-RED-TESTS.zh.md](KNOWN-RED-TESTS.zh.md) 上的红色条目，只有在写明原因后才能改动；每一条声明都带有这些标签之一：IMPLEMENTED、RECORDED RUN、INDEPENDENTLY VERIFIED（目前没有任何内容带此标签）、UNVERIFIED 或 DIRECTION。
+适用于每个任务的规则（[CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)）：不削弱任何测试、上限或关卡；[KNOWN-RED-TESTS.zh.md](KNOWN-RED-TESTS.zh.md) 上的红色条目，只有在写明原因后才能改动；每一条声明都带有这些标签之一：IMPLEMENTED、RECORDED RUN（属于较早的一棵树）、INDEPENDENTLY VERIFIED（目前没有任何内容带此标签）、UNVERIFIED 或 DIRECTION。
 
 下文用到三个词：organ 是 Auma（本仓库中的 AI）的一个可替换模块；ball 是按哈希列出每个 organ 的清单；genesis head 是第一个 ball，处于 epoch（版本号）1，每个节点都从它出发。
 
 ## 1. 在第二台机器上运行测试套件
 
-- **缺口：** 唯一的一次运行由作者在一台 macOS 机器上完成（[RUN-RECORD.zh.md](RUN-RECORD.zh.md)）。没有任何内容是 INDEPENDENTLY VERIFIED。有两个运行时规格只在 Linux 上运行（`vitest.config.ts`，第 69 至 76 行）。
-- **完成标准：** 提交一个 pull request，其中的记录与 RUN-RECORD.md 格式相同：工具版本、各套件的计数、与 KNOWN-RED-TESTS.md 对照过的每个失败用例名，以及 dry-run 的 ball id。Linux 最有用。RUN-RECORD.md 没有给出耗时，所以请记下安装和各套件各花了多长时间。
+- **缺口：** 唯一的一次运行由作者在一台 macOS 机器上完成（[RUN-RECORD.zh.md](RUN-RECORD.zh.md)）（这份记录属于较早的一棵树）。没有任何内容是 INDEPENDENTLY VERIFIED。有两个运行时规格只在 Linux 上运行（`vitest.config.ts`，第 69 至 76 行）。
+- **完成标准：** 提交一个 pull request，其中的记录与 RUN-RECORD.md（一份属于较早的一棵树的记录）格式相同：工具版本、各套件的计数、与 KNOWN-RED-TESTS.md 对照过的每个失败用例名，以及 dry-run 的 ball id。Linux 最有用。RUN-RECORD.md（属于较早的一棵树）没有给出耗时，所以请记下安装和各套件各花了多长时间。
 - **检查：** 一位维护者重复运行其中一个套件，得到相同的计数。这将是第一个 INDEPENDENTLY VERIFIED 的项目。
 
 ## 2. 让 `server/read-limits.test.mjs` 能够加载
@@ -24,7 +24,7 @@
 
 ## 3. 查明 `node-stubs.spec.ts` 为什么失败
 
-- **红色：** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`，“execa refuses 1 called symbol(s)”（第 96 行构建的用例），由已记录的那次运行发现。
+- **红色：** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`，“execa refuses 1 called symbol(s)”（第 96 行构建的用例），由已记录的那次运行（属于较早的一棵树）发现。
 - **完成标准：** 写明被调用的符号和原因；修复桩或测试，并在提交说明中写明原因，或者由该条目说明为什么不修。
 - **检查：** `pnpm exec vitest run packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`。
 
@@ -48,9 +48,9 @@
 
 ## 7. 给 superagent 测试一个合成的 home
 
-- **红色：** `apps/web/src/spatial/superagent/superagent.test.ts`（12 个中的 3 个）和 `read.spec.ts`（50 个中的 8 个）读取的是 `mirror/home/auma/` 下某个节点的 world，而它并未随附。`read.spec.ts` 中的第九个用例（“exactly 256 referenced nodes fit the file and concurrency budgets”，第 1551 行）取决于机器负载。这两个文件都不在已记录的那次运行中。
+- **红色：** `apps/web/src/spatial/superagent/superagent.test.ts`（12 个中的 3 个）和 `read.spec.ts`（50 个中的 8 个）读取的是 `mirror/home/auma/` 下某个节点的 world，而它并未随附。`read.spec.ts` 中的第九个用例（“exactly 256 referenced nodes fit the file and concurrency budgets”，第 1551 行）取决于机器负载。这两个文件都不在已记录的那次运行（属于较早的一棵树）中。
 - **完成标准：** 两个文件都针对由测试自己创建的合成 home 运行；计时用例不再取决于负载。
-- **检查：** 运行这两个文件，并报告你用的命令；它还不在 RUN-RECORD.md 中。
+- **检查：** 运行这两个文件，并报告你用的命令；它还不在 RUN-RECORD.md 中（这份记录属于较早的一棵树）。
 
 ## 8. 让 workflow 触发器测试适应触发器已关闭的仓库
 
@@ -68,7 +68,7 @@
 
 - **缺口：** `server/build-preview.mjs`（第 43 至 55 行）在构建前后向 `http://127.0.0.1` 的 `PORT`（默认 4610）发送 POST 请求。正在那里监听的程序会被改动。
 - **完成标准：** `PORT` 未设置时它不发出任何请求；一个带监听桩的测试显示调用次数为零；文档中的警告变得更短。
-- **检查：** 新测试通过，并且在按 RUN-RECORD.md 所述设置 `PORT` 时，构建仍能完成。
+- **检查：** 新测试通过，并且在按 RUN-RECORD.md 所述设置 `PORT` 时，构建仍能完成（这份记录属于较早的一棵树）。
 
 ## 上面未计入的更多候选项
 

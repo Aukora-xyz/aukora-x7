@@ -12,7 +12,7 @@ Three kinds of reader are welcome here, and every page tries to serve all three:
 - **An engineer or security researcher** who wants the real mechanisms, what is unproven, and where help is needed.
 - **An AI reading the repository**, which should start at [AI-START-HERE.md](AI-START-HERE.md) so that what it recommends or contributes moves with the project's rule and not against it.
 
-Labels on this page: IMPLEMENTED (code and tests in this tree), RECORDED RUN (shown in [RUN-RECORD.md](RUN-RECORD.md)), INDEPENDENTLY VERIFIED (nothing has this label yet), UNVERIFIED (claimed or written, but no test here holds it or no run shows it), DIRECTION (not built).
+Labels on this page: IMPLEMENTED (code and tests in this tree), RECORDED RUN (shown in [RUN-RECORD.md](RUN-RECORD.md), a run of an earlier tree), INDEPENDENTLY VERIFIED (nothing has this label yet), UNVERIFIED (claimed or written, but no test here holds it or no run shows it), DIRECTION (not built).
 
 ## How the work is governed today
 
@@ -55,7 +55,7 @@ Every area below has real code in the tree and a real gap. Each line names where
 
 ### Documentation and translation
 
-- Older pages use other maturity words than the five above ([START-HERE.md](START-HERE.md), [ARCHITECTURE-ACTUAL.md](ARCHITECTURE-ACTUAL.md), [RUN-RECORD.md](RUN-RECORD.md), [GLOSSARY.md](GLOSSARY.md)). Bringing them to one set is useful work.
+- Older pages use other maturity words than the five above ([START-HERE.md](START-HERE.md), [ARCHITECTURE-ACTUAL.md](ARCHITECTURE-ACTUAL.md), [RUN-RECORD.md](RUN-RECORD.md), a record of an earlier tree, [GLOSSARY.md](GLOSSARY.md)). Bringing them to one set is useful work.
 - The issue and pull request templates in `.github/` are inherited and in Chinese.
 - Most pages under `docs/` have a Chinese twin, checked by `scripts/verify-translation-pairing.ts`. The new front pages have twins too; where a twin differs from its English page, the English page applies. Reading a Chinese page against its English page and reporting where they differ is useful work.
 

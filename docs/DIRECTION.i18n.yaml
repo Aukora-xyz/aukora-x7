@@ -3,8 +3,8 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/DIRECTION.md
 /direction:
-  en: 95032bb24e1124a9
-  zh: fff70fd515302aaf
+  en: b2fe46d8dbc71082
+  zh: 384f87edd1f837fe
 /direction/why-this-needs-to-exist:
   en: df86fdde6573bcfa
   zh: fd2ee572fb77f94f
@@ -12,17 +12,17 @@
   en: 7bc4b3b3fd41e218
   zh: 5bd5cf934e45d581
 /direction/where-it-stands-today:
-  en: 477a4255b69af0c2
-  zh: 7bc38da71e6f0b87
+  en: a1c075bfd3cea332
+  zh: abe8b8bc25e7439f
 /direction/the-stages:
   en: 49792ad0a0edcd94
   zh: 671bff5e2b9bb559
 /direction/the-stages/1-foundation-an-understandable-reproducible-owner-controlled-personal-node:
-  en: 12f8d69fbc0bdcd9
-  zh: 7782c0ed0f2ba022
+  en: 27de37d92ad13463
+  zh: fa329eb1ffe8211c
 /direction/the-stages/2-continuity-identity-memory-receipts-and-recovery-that-survive-change:
-  en: cc2f4e49f4cf0429
-  zh: 3b4db3de36f106b7
+  en: 47043fade3960b7a
+  zh: 1103319d33837649
 /direction/the-stages/3-extensibility-other-people-s-organs-other-implementations-other-models:
   en: e17e602def708796
   zh: af47c976f9ab86ca

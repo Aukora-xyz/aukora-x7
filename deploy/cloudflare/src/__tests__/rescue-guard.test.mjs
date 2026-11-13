@@ -10,6 +10,7 @@ import { rescueKit } from '../rescue-kit.mjs'
 import { RESCUE_PAGE } from '../rescue-page.mjs'
 import { composeLocalConsoleScript, composeMemoryConsoleScript, composeRescuePageScript } from '../rescue-page.generate.mjs'
 import { FakeIndexedDb, FakeLocalStorage, createFakeVault, dirEntry, fileEntry } from './rescue-fakes.mjs'
+import { waitFor } from './wait-for.mjs'
 
 const DB = 'aukora-x6-vfs'
 const MAIN = '/dsh/home/sessions/agent/main/session.v3.jsonl'
@@ -236,14 +237,16 @@ function pageIn(globals) {
     get firstChild() { return this.children[0] ?? null }, addEventListener(type, listener) { this.listeners[type] = listener },
     appendChild(child) { this.children.push(child) }, removeChild(child) { this.children.splice(this.children.indexOf(child), 1) },
     click() { this.clicked = (this.clicked || 0) + 1 }, remove() {} })
-  for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin']) elements.set(id, element(id))
+  for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin',
+    'rescue-join', 'rescue-state', 'rescue-threads']) elements.set(id, element(id))
   runInNewContext(composeRescuePageScript(), { crypto, TextEncoder, TextDecoder, Blob, AbortController, localStorage: null, location: { assign() {} },
     setTimeout: (fn, ms) => setTimeout(fn, ms / 100), clearTimeout, URL: { createObjectURL: () => 'blob:x', revokeObjectURL() {} },
     document: { getElementById: id => elements.get(id), createElement: tag => element(tag), body: element('body') }, ...globals })
   const press = async id => {
     elements.get(id).listeners.click()
     await later(0)
-    for (let spins = 0; spins < 5000 && elements.get('rescue-cloud').disabled; spins++) await later(1)
+    // Inside the test's own limit (LIMIT), so a run that never ends fails here, naming what it waited for.
+    await waitFor(() => !elements.get('rescue-cloud').disabled, 'the run to end (rescue-cloud enabled again)', { limitMs: LIMIT.timeout - 3000 })
   }
   return { elements, press, status: () => elements.get('rescue-status').textContent, detail: () => elements.get('rescue-detail').children.map(child => child.textContent) }
 }
@@ -316,7 +319,7 @@ test('a version change during a read ABORTS that read at once, closes the connec
     let held = null
     w.idb.hooks.hold = (method, key, tx) => { if (method === 'get' && key === MAIN && !held) { held = tx; return true } return false }
     const done = w.kit()[run]()
-    while (!held) await later(1)
+    await waitFor(() => held, run + ': the held read', { limitMs: LIMIT.timeout - 3000 })
     const db = w.idb.dbs.get(DB)
     db.fireVersionChange()
     // Synchronously, inside her app's versionchange: the read is aborted and the connection is gone.

@@ -46,7 +46,7 @@ const mergeBody = { action: 'merge_proposal', baseSha: sha('a'), branch: 'auma/p
 const proposalValue = async () => ({
   schema: 'aukora.staged-repo-proposal.v1', branch: mergeBody.branch, title: 'Enforce the checkpoint signer policy', summary: 'Ports the fixture rule.',
   baseSha: sha('a'), headSha: sha('b'), treeSha: sha('c'),
-  changedFiles: [{ path: 'server/aura.test.mjs', status: 'modified', additions: 3, deletions: 0, t2Protected: false }],
+  changedFiles: [{ path: 'apps/web/src/spatial/aura.ts', status: 'modified', additions: 3, deletions: 0, t2Protected: false }],
   ciStatus: 'passed', stagedAt: Date.UTC(2026, 10, 11, 4), mergeBody,
   binding: await class3Action({ audience: ORIGIN, method: 'POST', pathname: '/_host/repo', body: mergeBody }),
 })
@@ -209,7 +209,7 @@ describe('Lane B5: the Fingerprint card is a Spatial Portal card', () => {
     await waitFor(() => { expect(done.kind()).toBe('merge') })
     fireEvent.click(done.part('approve') as HTMLButtonElement)
     await waitFor(() => { expect(outcomeOf(done)?.getAttribute('data-fingerprint-outcome')).toBe('done') })
-    expect(outcomeOf(done).textContent).toBe(`Merged: main is now ${mergeBody.headSha.slice(0, 12)} (${mergeBody.branch}).`)
+    expect(outcomeOf(done).textContent).toBe(`Merged: GitHub shows ${mergeBody.headSha.slice(0, 12)} in main (${mergeBody.branch}).`)
     expect(classes(outcomeOf(done))).toEqual(['ak-quote', 'ak-tone-mint', css.outcome])
     // Nothing waits now: the card is the outcome alone, with Inspect and no approval.
     await waitFor(() => { expect(done.kind()).toBe('outcome') })

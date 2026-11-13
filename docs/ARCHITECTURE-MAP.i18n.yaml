@@ -3,17 +3,17 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/ARCHITECTURE-MAP.md
 /architecture-map:
-  en: 0646f7cd843940c2
-  zh: b3c2b8e6b41eb43e
+  en: 4f37652f4233772e
+  zh: f2eb27e409c015df
 /architecture-map/the-picture:
   en: f0c49b3789360b60
   zh: edcfd8a28a2b3a3c
 /architecture-map/the-life-of-one-self-change:
-  en: 2c20426e7bafabdd
-  zh: 85a92c5268ddbc02
+  en: b32de86261e4b61d
+  zh: e5cd5a1a78f7d7c2
 /architecture-map/trust-boundaries:
-  en: d9a425120eac1be1
-  zh: a88c94980e5f889f
+  en: b69b579c242b8a10
+  zh: 97fc1f16ab7e474f
 /architecture-map/where-each-layer-comes-from:
-  en: 02d52acfaa2fcc73
-  zh: b591e1c9c06618b5
+  en: 738f0b7a9be7fedb
+  zh: d478941b4fb0f890

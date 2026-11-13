@@ -353,3 +353,61 @@ export function createFakeVault({ piece = 2097152, step = 2 } = {}) {
 export const fileEntry = (bytes, mtimeMs = 1700000000000, mode = 0o644) => ({ kind: 'file', bytes: typeof bytes === 'string' ? new TextEncoder().encode(bytes) : bytes, mode, mtimeMs })
 export const dirEntry = (mode = 0o755) => ({ kind: 'dir', mode })
 export const goneEntry = () => ({ kind: 'gone' })
+
+/**
+ * MIRROR's Durable Object storage in memory, for the lease row and the thread rows together (as one MirrorDO
+ * holds both): `get`, `put`, `delete`, `list({prefix, start, startAfter, limit})` in key order, and a `transaction` that
+ * works on a draft and replaces the data only when its closure returns (a throw rolls everything back). Values are
+ * cloned on the way in and out, as a real storage serialises them. `snapshot()` is the committed data.
+ */
+export function createMirrorStorage() {
+  let data = new Map()
+  const view = map => ({
+    get: async key => (map.has(key) ? structuredClone(map.get(key)) : undefined),
+    put: async (key, value) => { map.set(key, structuredClone(value)) },
+    delete: async key => map.delete(key),
+    list: async ({ prefix = '', start, startAfter, limit = Infinity } = {}) => {
+      const out = new Map()
+      for (const key of [...map.keys()].sort()) {
+        if (!key.startsWith(prefix) || (start !== undefined && key < start) || (startAfter !== undefined && key <= startAfter)) continue
+        if (out.size >= limit) break
+        out.set(key, structuredClone(map.get(key)))
+      }
+      return out
+    },
+  })
+  const storage = {
+    async transaction(fn) {
+      const draft = new Map([...data].map(([key, value]) => [key, structuredClone(value)]))
+      const result = await fn(view(draft))
+      data = draft
+      return result
+    },
+    get: key => view(data).get(key),
+    put: (key, value) => view(data).put(key, value),
+    list: options => view(data).list(options),
+    snapshot: () => new Map([...data].map(([key, value]) => [key, structuredClone(value)])),
+  }
+  return storage
+}
+
+/**
+ * R2's ranged `get` over a vault-fakes bucket (that fake answers whole objects and ignores `range`), so the thread
+ * log's part store (`createR2PartStore`) reads byte ranges of the SAME stored pieces the vault holds. `head` and `put`
+ * go to the bucket unchanged; nothing is copied in.
+ * @param {{ head: Function, put: Function, get: Function }} bucket
+ */
+export function rangedBucket(bucket) {
+  return {
+    head: key => bucket.head(key),
+    put: (key, value, options) => bucket.put(key, value, options),
+    async get(key, options = {}) {
+      const object = await bucket.get(key)
+      if (!object) return null
+      const whole = new Uint8Array(await object.arrayBuffer())
+      const range = options.range
+      const bytes = range ? whole.slice(range.offset ?? 0, (range.offset ?? 0) + (range.length ?? whole.length)) : whole
+      return { size: whole.length, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) }
+    },
+  }
+}

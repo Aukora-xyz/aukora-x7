@@ -16,6 +16,7 @@ import { runInNewContext } from 'node:vm'
 import { rescueKit } from '../rescue-kit.mjs'
 import { composeLocalConsoleScript, composeMemoryConsoleScript, composeRescuePageScript } from '../rescue-page.generate.mjs'
 import { FakeIndexedDb, dirEntry, fakeFsFromEntries, fileEntry } from './rescue-fakes.mjs'
+import { waitFor } from './wait-for.mjs'
 
 const DB = 'aukora-x6-vfs'
 const MiB = 1048576
@@ -79,7 +80,8 @@ function pageIn(globals) {
     get firstChild() { return this.children[0] ?? null }, addEventListener(type, listener) { this.listeners[type] = listener },
     appendChild(child) { this.children.push(child) }, removeChild(child) { this.children.splice(this.children.indexOf(child), 1) },
     click() { this.clicked = (this.clicked || 0) + 1 }, remove() {} })
-  for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin']) elements.set(id, element(id))
+  for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin',
+    'rescue-join', 'rescue-state', 'rescue-threads']) elements.set(id, element(id))
   const created = []
   runInNewContext(composeRescuePageScript(), { crypto, TextEncoder, TextDecoder, setTimeout, Blob, localStorage: null, location: { assign() {} },
     fetch: () => { throw new Error('no network') },
@@ -88,7 +90,7 @@ function pageIn(globals) {
   const press = async id => {
     elements.get(id).listeners.click()
     await later(0)
-    for (let spins = 0; spins < 4000 && elements.get('rescue-local').disabled; spins++) await later(1)
+    await waitFor(() => !elements.get('rescue-local').disabled, 'the run to end (rescue-local enabled again)')
   }
   return { elements, created, press, status: () => elements.get('rescue-status').textContent, downloads: () => created.filter(made => made.download) }
 }

@@ -61,6 +61,15 @@ export interface CandidateTrialInput {
   readonly cases: readonly unknown[]
   readonly timeoutMs?: number
 }
+interface RetentionTrialPayload {
+  readonly sources: Readonly<Record<string, string>>
+  readonly fixtures: Record<string, unknown>
+  readonly fixedNow: number
+  readonly harnessSource: string
+}
+interface InternalTrialInput extends CandidateTrialInput {
+  readonly retention?: RetentionTrialPayload | undefined
+}
 interface GrowthDependencies {
   readonly head: () => string
   readonly writable: () => boolean
@@ -72,6 +81,9 @@ interface GrowthDependencies {
 const object = (value: unknown): value is Record<string, unknown> => (
   value !== null && typeof value === 'object' && !Array.isArray(value)
 )
+// Capture the receiver-explicit intrinsic before an organ can change its prototype.
+// oxlint-disable-next-line typescript/unbound-method
+const trialStartsWith = Function.call.bind(String.prototype.startsWith) as (value: string, prefix: string) => boolean
 const ENTRY = '__scion_growth_entry__.ts'
 const DEFAULT_TRIAL_TIMEOUT_MS = 5_000
 const ALLOWLISTED_TRIAL_BUILTINS = [
@@ -80,6 +92,7 @@ const ALLOWLISTED_TRIAL_BUILTINS = [
 ] as const
 
 const TRIAL_RUNNER_SOURCE = `
+const runnerStartsWith = Function.call.bind(String.prototype.startsWith);
 function canonicalJson(val) {
   if (val === null || typeof val !== 'object') return JSON.stringify(val);
   if (Array.isArray(val)) {
@@ -102,9 +115,9 @@ const INTRINSIC_NAMES = [
 // After the candidate is compiled and before any of its code runs: no further code can be generated from
 // strings (so import() cannot be assembled at run time), and the intrinsics the verdict depends on are
 // frozen and their global names pinned, so a candidate cannot make the comparison below lie.
-function hardenTrialRealm() {
+function hardenTrialRealm(record) {
   const g = globalThis;
-  const refuse = op => function () { throw new Error('CANDIDATE_TRIAL_EVAL_FORBIDDEN: ' + op); };
+  const refuse = op => function () { record('guard', 'CANDIDATE_TRIAL_EVAL_FORBIDDEN'); throw new Error('CANDIDATE_TRIAL_EVAL_FORBIDDEN: ' + op); };
   const pin = (target, key, value) => {
     try { Object.defineProperty(target, key, { value, writable: false, configurable: false, enumerable: false }); } catch {}
   };
@@ -119,7 +132,7 @@ function hardenTrialRealm() {
     const original = g[name];
     if (typeof original === 'function') {
       pin(g, name, function (handler, ...rest) {
-        if (typeof handler !== 'function') throw new Error('CANDIDATE_TRIAL_EVAL_FORBIDDEN: ' + name + ' string');
+        if (typeof handler !== 'function') { record('guard', 'CANDIDATE_TRIAL_EVAL_FORBIDDEN'); throw new Error('CANDIDATE_TRIAL_EVAL_FORBIDDEN: ' + name + ' string'); }
         return original.call(g, handler, ...rest);
       });
     }
@@ -143,17 +156,59 @@ function hardenTrialRealm() {
   freeze(Object.getPrototypeOf(''[Symbol.iterator]()));
   pin(g, 'globalThis', g);
 }
-async function evaluateCandidate(input, safeRequire) {
+async function evaluateCandidate(input, safeRequire, installRecorder) {
+  const append = Function.call.bind(Array.prototype.push);
+  const copy = Function.call.bind(Array.prototype.slice);
+  const map = Function.call.bind(Array.prototype.map);
+  let infrastructure = [];
+  let currentScope = null;
+  let rowSubject = null;
+  let peerUsed = false;
+  const record = (phase, code, subject = currentScope ? currentScope.subject : null) => {
+    if (phase === 'guard' && peerUsed && subject === rowSubject) subject = null;
+    if (infrastructure.length < 63) append(infrastructure, { phase, code, subject });
+    else if (infrastructure.length === 63) append(infrastructure, { phase: 'overflow', code: 'PEARL_INFRASTRUCTURE_RECORD_LIMIT', subject: null });
+  };
+  const withSubject = async (subject, action) => {
+    if (subject !== rowSubject) peerUsed = true;
+    const previous = currentScope;
+    const scope = { subject };
+    currentScope = scope;
+    try { return await action(); }
+    finally {
+      if (currentScope !== scope) record('dependency', 'PEARL_SUBJECT_AMBIGUOUS', null);
+      currentScope = previous;
+    }
+  };
+  installRecorder(record);
+  const guardedRequire = id => {
+    try { return safeRequire(id); }
+    catch (error) { record('import', 'CANDIDATE_TRIAL_IMPORT_BLOCKED'); throw error; }
+  };
   const startedAt = Date.now();
   try {
     if (typeof input.code !== 'string' || DYNAMIC_IMPORT.test(input.code)) {
       return { ok: false, results: [], durationMs: Date.now() - startedAt, error: 'CANDIDATE_TRIAL_IMPORT_BLOCKED: dynamic import()' };
     }
     const moduleObj = { exports: {} };
-    const forbidden = op => () => { throw new Error('CANDIDATE_TRIAL_MUTATION_FORBIDDEN: ' + op); };
-    const fn = new Function('module', 'exports', 'require', input.code);
-    hardenTrialRealm();
-    fn(moduleObj, moduleObj.exports, safeRequire);
+    const forbidden = op => () => { record('guard', 'CANDIDATE_TRIAL_MUTATION_FORBIDDEN'); throw new Error('CANDIDATE_TRIAL_MUTATION_FORBIDDEN: ' + op); };
+    let boot;
+    if (input.retention) {
+      const payload = input.retention;
+      const factories = Object.create(null);
+      for (const [name, source] of Object.entries(payload.sources)) {
+        if (DYNAMIC_IMPORT.test(source)) throw new Error('CANDIDATE_TRIAL_IMPORT_BLOCKED: dynamic import()');
+        factories[name] = new Function('module', 'exports', 'require', 'Date', 'process', 'Buffer', 'location', 'globalThis', source);
+      }
+      const harness = new Function('ORGANS', 'FIXTURES', 'FIXED_NOW', 'safeRequire', 'record', 'withSubject',
+        '"use strict";\\n' + payload.harnessSource + '\\nreturn harnessMain(ORGANS, FIXTURES, FIXED_NOW, safeRequire, harnessMemfs, harnessProject, record, withSubject);');
+      boot = () => { moduleObj.exports = harness(factories, payload.fixtures, payload.fixedNow, guardedRequire, record, withSubject); };
+    } else {
+      const fn = new Function('module', 'exports', 'require', input.code);
+      boot = () => fn(moduleObj, moduleObj.exports, guardedRequire);
+    }
+    hardenTrialRealm(record);
+    boot();
     const rawOrgan = moduleObj.exports;
     const organ = isObj(rawOrgan) && typeof rawOrgan.run === 'function' && typeof rawOrgan.name === 'string'
       ? rawOrgan
@@ -181,10 +236,15 @@ async function evaluateCandidate(input, safeRequire) {
       }),
     });
     const results = [];
+    const bootInfrastructure = copy(infrastructure);
     for (const rawCase of input.cases) {
       const c = rawCase || {};
       const id = typeof c.id === 'string' ? c.id : 'case';
       const argsCopy = JSON.parse(JSON.stringify(c.args ?? {}));
+      infrastructure = copy(bootInfrastructure);
+      rowSubject = typeof argsCopy.organ === 'string' ? argsCopy.organ : input.name;
+      peerUsed = false;
+      currentScope = { subject: rowSubject };
       let got;
       try {
         got = await organ.run(argsCopy, trialCtx);
@@ -196,11 +256,11 @@ async function evaluateCandidate(input, safeRequire) {
         : '';
       const expErr = typeof c.expectError === 'string' ? c.expectError : '';
       const pass = c.expectError !== undefined
-        ? (isObj(got) && got.ok === false && gotErr.includes(expErr))
+        ? (isObj(got) && got.ok === false && (gotErr === expErr || runnerStartsWith(gotErr, expErr + ':')))
         : canonicalJson(got) === canonicalJson(c.expect);
       const output = JSON.stringify(got === undefined ? null : got);
       if (new TextEncoder().encode(output).byteLength > 128 * 1024) throw new Error('CANDIDATE_TRIAL_OUTPUT_LIMIT');
-      results.push({ id, pass, got: JSON.parse(output) });
+      results.push({ id, pass: pass && infrastructure.length === 0, got: JSON.parse(output), infrastructure: map(infrastructure, item => ({ ...item })) });
     }
     const allPassed = results.length > 0 && results.every(r => r.pass === true);
     const failedIds = results.filter(r => !r.pass).map(r => r.id).join(', ');
@@ -229,13 +289,14 @@ const NODE_TRIAL_WORKER_SCRIPT = `
 (function bootstrapTrialWorker(nodeRequire) {
 const { parentPort, workerData } = nodeRequire('node:worker_threads');
 const require = nodeRequire;
+let recordInfrastructure = () => {};
 const postToParent = parentPort.postMessage.bind(parentPort);
 for (const key of ['require', 'module', 'exports', '__filename', '__dirname']) {
   try {
     Object.defineProperty(globalThis, key, {
       configurable: false,
       enumerable: false,
-      get() { throw new Error('CANDIDATE_TRIAL_IMPORT_BLOCKED: ' + key); },
+      get() { recordInfrastructure('guard', 'CANDIDATE_TRIAL_IMPORT_BLOCKED'); throw new Error('CANDIDATE_TRIAL_IMPORT_BLOCKED: ' + key); },
     });
   } catch {}
 }
@@ -261,11 +322,11 @@ for (const key of [
     Object.defineProperty(globalThis, key, {
       configurable: false,
       enumerable: false,
-      get() { throw new Error('CANDIDATE_TRIAL_IO_FORBIDDEN: ' + key); },
+      get() { recordInfrastructure('guard', 'CANDIDATE_TRIAL_IO_FORBIDDEN'); throw new Error('CANDIDATE_TRIAL_IO_FORBIDDEN: ' + key); },
     });
   } catch {}
 }
-const denyProc = op => () => { throw new Error('CANDIDATE_TRIAL_PROCESS_FORBIDDEN: ' + op); };
+const denyProc = op => () => { recordInfrastructure('guard', 'CANDIDATE_TRIAL_PROCESS_FORBIDDEN'); throw new Error('CANDIDATE_TRIAL_PROCESS_FORBIDDEN: ' + op); };
 try {
   process.env = Object.freeze({});
   for (const fn of [
@@ -280,7 +341,7 @@ const safeRequire = id => {
   throw new Error('CANDIDATE_TRIAL_IMPORT_BLOCKED: ' + String(id));
 };
 ${TRIAL_RUNNER_SOURCE}
-evaluateCandidate(workerData, safeRequire).then(
+evaluateCandidate(workerData, safeRequire, record => { recordInfrastructure = record; }).then(
   res => postToParent(res),
   err => postToParent({
     ok: false,
@@ -300,12 +361,12 @@ const BROWSER_TRIAL_LOCKED_GLOBALS = [
 ] as const
 const CHANNEL_KEYS = new Set(['postMessage', 'close', 'addEventListener', 'removeEventListener', 'onmessage', 'onmessageerror'])
 
-function lockDownBrowserTrialGlobals(): void {
+function lockDownBrowserTrialGlobals(record: (phase: string, code: string) => void): void {
   const deny = (key: string): PropertyDescriptor => ({
     configurable: false,
     enumerable: false,
-    get() { throw new Error(`CANDIDATE_TRIAL_IO_FORBIDDEN: ${key}`) },
-    set() { throw new Error(`CANDIDATE_TRIAL_IO_FORBIDDEN: ${key}`) },
+    get() { record('guard', 'CANDIDATE_TRIAL_IO_FORBIDDEN'); throw new Error(`CANDIDATE_TRIAL_IO_FORBIDDEN: ${key}`) },
+    set() { record('guard', 'CANDIDATE_TRIAL_IO_FORBIDDEN'); throw new Error(`CANDIDATE_TRIAL_IO_FORBIDDEN: ${key}`) },
   })
   for (const key of BROWSER_TRIAL_LOCKED_GLOBALS) {
     try {
@@ -360,7 +421,8 @@ export async function runScionTrialWorker(
         if (mod !== undefined) allowed.set(modId, () => mod)
       }
     }
-    lockDownBrowserTrialGlobals()
+    let recorder = (_phase: string, _code: string): void => {}
+    lockDownBrowserTrialGlobals((phase, code) => { recorder(phase, code) })
     const safeRequire = (modId: string): unknown => {
       const factory = allowed.get(modId)
       if (factory) return factory()
@@ -369,12 +431,27 @@ export async function runScionTrialWorker(
     const runner = new Function(
       'input',
       'safeRequire',
-      `${TRIAL_RUNNER_SOURCE}\nreturn evaluateCandidate(input, safeRequire);`,
+      'installRecorder',
+      `"use strict";\n${TRIAL_RUNNER_SOURCE}\nreturn evaluateCandidate(input, safeRequire, installRecorder);`,
     ) as (
-      input: { name: string; code: string; cases: readonly unknown[] },
+      input: InternalTrialInput,
       safeRequire: (id: string) => unknown,
+      installRecorder: (record: (phase: string, code: string) => void) => void,
     ) => Promise<CandidateTrialResult>
-    const result = await runner({ name, code, cases: suite.cases }, safeRequire)
+    let retention: RetentionTrialPayload | undefined
+    if (rawInput.retention !== undefined) {
+      const payload = rawInput.retention
+      if (!object(payload) || !object(payload.sources) || !object(payload.fixtures)
+        || typeof payload.fixedNow !== 'number' || !Number.isFinite(payload.fixedNow)
+        || payload.harnessSource !== RETENTION_HARNESS_SOURCE) throw new Error('Invalid retention worker payload')
+      const sources: Record<string, string> = Object.create(null) as Record<string, string>
+      for (const [key, source] of Object.entries(payload.sources)) {
+        if (typeof source !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(key)) throw new Error('Invalid retention organ source')
+        sources[key] = source
+      }
+      retention = { sources, fixtures: payload.fixtures, fixedNow: payload.fixedNow, harnessSource: RETENTION_HARNESS_SOURCE }
+    }
+    const result = await runner({ name, code, cases: suite.cases, retention }, safeRequire, (record) => { recorder = record })
     postToParent({ t: 'scion-trial-result', id, result })
   } catch (error) {
     postToParent({
@@ -424,7 +501,7 @@ export function primeScionTrialScript(): Promise<string | null> {
  * Evaluate a compiled CJS organ candidate in an isolated disposable worker realm ("imagination cell")
  * with copied JSON inputs and wall-clock termination. Worker shims are not proof of containment.
  */
-async function executeTrial(input: CandidateTrialInput): Promise<CandidateTrialResult> {
+async function executeTrial(input: InternalTrialInput): Promise<CandidateTrialResult> {
   const startedAt = Date.now()
   try {
     if (!input || typeof input.name !== 'string' || !/^[a-z][a-z0-9-]{0,40}$/.test(input.name)) {
@@ -463,7 +540,8 @@ async function executeTrial(input: CandidateTrialInput): Promise<CandidateTrialR
         const timer = setTimeout(() => {
           finish({
             ok: false,
-            results: [],
+            results: suite.cases.map(value => ({ id: (value as Record<string, unknown>).id, pass: false, got: null,
+              infrastructure: [{ phase: 'timeout', code: 'CANDIDATE_TRIAL_TIMEOUT', subject: null }] })),
             durationMs: Date.now() - startedAt,
             error: 'CANDIDATE_TRIAL_TIMEOUT',
           })
@@ -498,7 +576,7 @@ async function executeTrial(input: CandidateTrialInput): Promise<CandidateTrialR
         worker.postMessage({
           t: 'scion-trial-start',
           id,
-          input: { name: input.name, code: input.code, cases: suite.cases },
+          input: { name: input.name, code: input.code, cases: suite.cases, retention: input.retention },
         })
       })
     }
@@ -519,7 +597,7 @@ async function executeTrial(input: CandidateTrialInput): Promise<CandidateTrialR
       return await new Promise<CandidateTrialResult>((resolve) => {
         const worker = new wt.Worker(NODE_TRIAL_WORKER_SCRIPT, {
           eval: true,
-          workerData: { name: input.name, code: input.code, cases: suite.cases },
+          workerData: { name: input.name, code: input.code, cases: suite.cases, retention: input.retention },
         })
         let settled = false
         const finish = (result: CandidateTrialResult): void => {
@@ -532,7 +610,8 @@ async function executeTrial(input: CandidateTrialInput): Promise<CandidateTrialR
         const timer = setTimeout(() => {
           finish({
             ok: false,
-            results: [],
+            results: suite.cases.map(value => ({ id: (value as Record<string, unknown>).id, pass: false, got: null,
+              infrastructure: [{ phase: 'timeout', code: 'CANDIDATE_TRIAL_TIMEOUT', subject: null }] })),
             durationMs: Date.now() - startedAt,
             error: 'CANDIDATE_TRIAL_TIMEOUT',
           })
@@ -690,7 +769,7 @@ function gradeTrialOutput(test: Record<string, unknown>, got: unknown): boolean 
   if (Object.hasOwn(test, 'expectError')) {
     const error = object(got) ? (typeof got.error === 'string' ? got.error : got.code) : null
     return object(got) && got.ok === false && typeof error === 'string'
-      && typeof test.expectError === 'string' && error.includes(test.expectError)
+      && typeof test.expectError === 'string' && (error === test.expectError || trialStartsWith(error, test.expectError + ':'))
   }
   return canonicalTrialJson(got) === canonicalTrialJson(test.expect)
 }
@@ -739,11 +818,18 @@ function graderControls(cases: readonly unknown[], caseSetDigest: string, runner
  * @returns Parent-computed verdict, control admission and bounded route observations.
  */
 export async function trialScionCandidate(input: CandidateTrialInput): Promise<CandidateTrialResult> {
+  // Do not forward extra caller properties into the private retention entry.
+  return trialCandidateInternal({ name: input.name, code: input.code, cases: input.cases,
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }) })
+}
+
+async function trialCandidateInternal(input: InternalTrialInput): Promise<CandidateTrialResult> {
   const startedAt = Date.now()
   const candidateDigest = sha256HexSync(typeof input?.code === 'string' ? input.code : '')
   const runnerDigest = sha256HexSync(TRIAL_RUNNER_SOURCE + NODE_TRIAL_WORKER_SCRIPT + runScionTrialWorker.toString()
     + lockDownBrowserTrialGlobals.toString() + executeTrial.toString() + trialScionCandidate.toString() + freezeCases.toString()
-    + RETENTION_HARNESS_SOURCE + trialScionRetention.toString() + canonicalTrialJson.toString() + object.toString()
+    + RETENTION_HARNESS_SOURCE + trialCandidateInternal.toString() + trialScionRetention.toString()
+    + canonicalTrialJson.toString() + object.toString()
     + JSON.stringify({
       allowed: ALLOWLISTED_TRIAL_BUILTINS, locked: BROWSER_TRIAL_LOCKED_GLOBALS,
       channel: [...CHANNEL_KEYS], timeout: DEFAULT_TRIAL_TIMEOUT_MS,
@@ -769,21 +855,26 @@ export async function trialScionCandidate(input: CandidateTrialInput): Promise<C
         routeEvidence: evidence('violated', ['source-dynamic-import-rejected'], ['source-dynamic-import-admission'], unsupportedProperties) }
     }
     const raw = await executeTrial({
-      name: input.name, code: input.code, cases, ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+      name: input.name, code: input.code, cases, retention: input.retention,
+      ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     })
     const serialized = JSON.stringify(raw.results)
     const bounded = new TextEncoder().encode(serialized).byteLength <= 128 * 1024
     const results = bounded ? raw.results : []
     const complete = results.length === cases.length && results.every((row, index) => {
       const test = cases[index]
-      return object(row) && object(test) && row.id === test.id && Object.hasOwn(row, 'got')
+      return object(row) && object(test) && row.id === test.id && Object.hasOwn(row, 'got') && Array.isArray(row.infrastructure)
+        && row.infrastructure.every(item => object(item) && typeof item.phase === 'string' && typeof item.code === 'string'
+          && (typeof item.subject === 'string' || item.subject === null))
     })
     const graded = complete ? results.map((row, index) => ({
-      id: row.id, pass: gradeTrialOutput(cases[index] as Record<string, unknown>, row.got), got: row.got,
+      id: row.id, pass: Array.isArray(row.infrastructure) && row.infrastructure.length === 0
+        && gradeTrialOutput(cases[index] as Record<string, unknown>, row.got), got: row.got, infrastructure: row.infrastructure,
     })) : []
-    const checkedProperties = ['source-dynamic-import-admission', ...(complete ? ['exact-case-result-framing', 'parent-output-comparison'] : [])]
+    const observedFrame = complete && raw.error !== 'CANDIDATE_TRIAL_TIMEOUT'
+    const checkedProperties = ['source-dynamic-import-admission', ...(observedFrame ? ['exact-case-result-framing', 'parent-output-comparison'] : [])]
     const status: RouteEvidence['status'] = raw.error === 'CANDIDATE_TRIAL_ISOLATION_UNAVAILABLE' ? 'unsupported'
-      : !complete ? 'inconclusive' : policies.some(policy => object(policy) && Object.keys(policy).some(key => key !== 'policyId')) ? 'unsupported' : 'checked'
+      : !observedFrame ? 'inconclusive' : policies.some(policy => object(policy) && Object.keys(policy).some(key => key !== 'policyId')) ? 'unsupported' : 'checked'
     const passed = complete && graded.every(row => row.pass)
     // No case ran because the worker never answered: say so, so 0 of N never reads as a score to tie.
     const emptyTrial = cases.length > 0 && raw.results.length === 0 && (!raw.error || raw.error.startsWith('CANDIDATE_TRIAL_WORKER_FAILED'))
@@ -797,7 +888,8 @@ export async function trialScionCandidate(input: CandidateTrialInput): Promise<C
       ...(failure === null ? {} : { error: failure }),
       graderControls: controls, negativeControlRejected: controls.knownBadRejected,
       routeEvidence: evidence(status, {
-        complete, results: graded.map(row => ({ id: row.id, pass: row.pass, outputDigest: sha256HexSync(canonicalTrialJson(row.got)) })),
+        complete, results: graded.map(row => ({ id: row.id, pass: row.pass, infrastructure: row.infrastructure,
+          outputDigest: sha256HexSync(canonicalTrialJson(row.got)) })),
       }, checkedProperties, unsupportedProperties) }
   } catch (error) {
     return { ok: false, results: [], durationMs: Date.now() - startedAt,
@@ -863,49 +955,168 @@ function harnessProject(result, pick, fs) {
   return out
 }
 
-function harnessMain(ORGANS, FIXTURES, FIXED_NOW, safeRequire, memfs, project) {
+function harnessMain(ORGANS, FIXTURES, FIXED_NOW, safeRequire, memfs, project, record, withSubject) {
   const Buffer = safeRequire('buffer').Buffer
+  // Fixture adapters are intentionally partial. Even feature tests and reflection must leave
+  // evidence when they observe a surface the real runtime provides but this harness does not.
+  const service = (name, target) => {
+    const unavailable = (key) => record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:' + (name ? name + '.' : '') + String(key))
+    return new Proxy(target, {
+      get(target, key) {
+        if (!Object.hasOwn(target, key)) unavailable(key)
+        return Reflect.get(target, key, target)
+      },
+      has(target, key) {
+        if (!Object.hasOwn(target, key)) unavailable(key)
+        return Reflect.has(target, key)
+      },
+      getOwnPropertyDescriptor(target, key) {
+        if (!Object.hasOwn(target, key)) unavailable(key)
+        return Reflect.getOwnPropertyDescriptor(target, key)
+      },
+      ownKeys(target) { unavailable('ownKeys'); return Reflect.ownKeys(target) },
+      getPrototypeOf(target) { unavailable('getPrototypeOf'); return Reflect.getPrototypeOf(target) },
+    })
+  }
+  const normalizeInput = (input) => input && typeof input === 'object' ? input : {}
   const RealDate = Date
+  // Hide only the page origin. Preserve Web API receivers and existing organ global caches.
+  const fixtureGlobal = new Proxy(globalThis, {
+    get(target, key) { return key === 'location' ? undefined : Reflect.get(target, key, target) },
+    set(target, key, value) { return Reflect.set(target, key, value, target) },
+  })
   class PinnedDate extends RealDate {
     constructor(...args) { if (args.length === 0) super(FIXED_NOW); else super(...args) }
     static now() { return FIXED_NOW }
   }
-  const load = (name, fs, cache) => {
-    if (cache[name]) return cache[name]
+  const load = (name, fs, cache, seeds) => {
+    if (Object.hasOwn(cache, name)) return cache[name]
     const factory = ORGANS[name]
-    if (typeof factory !== 'function') throw new Error('PEARL_ORGAN_NOT_IN_BUILD: ' + name)
+    if (typeof factory !== 'function') { record('dependency', 'PEARL_ORGAN_NOT_IN_BUILD', name); throw new Error('PEARL_ORGAN_NOT_IN_BUILD') }
     const module = { exports: {} }
     const organRequire = (id) => (id === 'fs' || id === 'node:fs' ? fs : safeRequire(id))
-    factory(module, module.exports, organRequire, PinnedDate, undefined, Buffer)
-    cache[name] = module.exports
-    return module.exports
+    const processStandIn = new Proxy(Object.create(null), {
+      get(_target, key) {
+        if (key === 'getBuiltinModule') return organRequire
+        record('dependency', 'PEARL_PROCESS_UNAVAILABLE', name)
+        return undefined
+      },
+      has(_target, key) {
+        if (key === 'getBuiltinModule') return true
+        record('dependency', 'PEARL_PROCESS_UNAVAILABLE', name)
+        return false
+      },
+      getOwnPropertyDescriptor(_target, key) {
+        if (key === 'getBuiltinModule') return { configurable: true, enumerable: true, value: organRequire }
+        record('dependency', 'PEARL_PROCESS_UNAVAILABLE', name)
+        return undefined
+      },
+      ownKeys() { record('dependency', 'PEARL_PROCESS_UNAVAILABLE', name); return [] },
+    })
+    const organGlobal = new Proxy(fixtureGlobal, {
+      get(target, key) { return key === 'process' ? processStandIn : Reflect.get(target, key, target) },
+    })
+    try { factory(module, module.exports, organRequire, PinnedDate, processStandIn, Buffer, undefined, organGlobal) }
+    catch (error) { record('factory', 'PEARL_ORGAN_NOT_MOUNTED', name); throw new Error('PEARL_ORGAN_NOT_MOUNTED') }
+    // Match the loader's export precedence. This validates exports, not Cordis activation or dependencies.
+    let organ, seedForm = false
+    try {
+      const raw = module.exports
+      organ = raw
+      if (raw && typeof raw === 'object' && typeof raw.apply !== 'function'
+        && !(typeof raw.run === 'function' && typeof raw.name === 'string') && raw.default !== undefined) {
+        organ = raw.default
+      }
+      if (organ && typeof organ === 'object') {
+        if (typeof organ.apply === 'function') organ = { ...organ }
+        else if (typeof organ.run === 'function' && typeof organ.name === 'string') {
+          const run = organ.run, setup = organ.setup
+          organ = { ...organ, name: organ.name, run, setup }
+          seedForm = organ.name === name
+        }
+      }
+      if (!(typeof organ === 'function' || (organ && typeof organ === 'object'
+        && (typeof organ.apply === 'function' || (typeof organ.run === 'function' && organ.name === name))))) {
+        throw new Error('PEARL_ORGAN_NOT_MOUNTED')
+      }
+    } catch (error) {
+      // Export accessors cannot turn admission failure into an organ's expected refusal.
+      record('export', 'PEARL_ORGAN_NOT_MOUNTED', name)
+      throw new Error('PEARL_ORGAN_NOT_MOUNTED')
+    }
+    cache[name] = organ
+    if (seedForm) seeds.add(name)
+    return organ
   }
   return {
     name: 'pearl-retention',
     description: 'Pearl retention harness: runs one suite case against one organ of this candidate build.',
     async run(args) {
       const fixture = FIXTURES[args.fixture]
-      if (!fixture) return { ok: false, error: 'PEARL_FIXTURE_UNKNOWN' }
-      const fs = memfs(fixture, Buffer)
-      const cache = {}
-      const tools = {}
-      const ctx = {
+      if (!fixture) { record('dependency', 'PEARL_FIXTURE_UNKNOWN'); return { ok: false, error: 'PEARL_FIXTURE_UNKNOWN' } }
+      const fs = service('fs', memfs(fixture, Buffer))
+      const cache = Object.create(null)
+      const tools = Object.create(null)
+      const initialized = new Set()
+      const seeds = new Set()
+      const initialize = async (name) => withSubject(name, async () => {
+        const organ = load(name, fs, cache, seeds)
+        if (!initialized.has(name)) {
+          initialized.add(name)
+          try {
+            if (typeof organ === 'function') await organ(ctx)
+            else if (typeof organ.apply === 'function') await organ.apply(ctx)
+            else if (typeof organ.setup === 'function') await organ.setup(ctx)
+          } catch (error) { record('setup', 'PEARL_ORGAN_NOT_MOUNTED', name); throw new Error('PEARL_ORGAN_NOT_MOUNTED') }
+        }
+        return organ
+      })
+      const withheldServices = new Set(['presence', 'web', 'systemPrompt', 'configEditor', 'agentPresets', 'scion', 'checkpointPolicy', 'wasm'])
+      const ctx = new Proxy({
         fs,
-        snapshots: { persistenceState: () => ({ writable: true }), flush: async () => ({ localSaved: true }) },
-        tools: { register(name, def) { tools[name] = def; return () => { delete tools[name] } } },
-        organs: { list: () => [], call: async (name, input) => load(name, fs, cache).run(input, ctx) },
-      }
-      const organ = load(args.organ, fs, cache)
+        snapshots: service('snapshots', { persistenceState: () => ({ writable: true }), flush: async () => ({ localSaved: true }) }),
+        tools: service('tools', { register(name, def) { tools[name] = def; return () => { delete tools[name] } } }),
+        organs: service('organs', {
+          list() { record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:organs.list'); return [] },
+          call: async (name, input) => withSubject(name, async () => {
+            const peer = await initialize(name)
+            if (!seeds.has(name)) { record('export', 'PEARL_ORGAN_NOT_MOUNTED', name); throw new Error('PEARL_ORGAN_NOT_MOUNTED') }
+            try { return await peer.run(normalizeInput(input), ctx) }
+            catch (error) { record('dependency', 'PEARL_PEER_RUN_FAILED', name); throw error }
+          }),
+        }),
+      }, {
+        get(target, key) {
+          if (Object.hasOwn(target, key)) return target[key]
+          if (withheldServices.has(key)) record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:' + String(key))
+          return Reflect.get(target, key, target)
+        },
+        has(target, key) {
+          if (Object.hasOwn(target, key)) return true
+          if (withheldServices.has(key)) record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:' + String(key))
+          return Reflect.has(target, key)
+        },
+        getOwnPropertyDescriptor(target, key) {
+          if (Object.hasOwn(target, key)) return Object.getOwnPropertyDescriptor(target, key)
+          if (withheldServices.has(key)) record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:' + String(key))
+          return Object.getOwnPropertyDescriptor(target, key)
+        },
+        ownKeys(target) { record('dependency', 'PEARL_CTX_SERVICE_UNAVAILABLE:ownKeys'); return Reflect.ownKeys(target) },
+      })
+      const organ = await initialize(args.organ)
       let result
       if (args.tool) {
-        if (typeof organ.apply === 'function') organ.apply(ctx)
-        else if (typeof organ.setup === 'function') organ.setup(ctx)
         const tool = tools[args.tool]
-        if (!tool) return { ok: false, error: 'PEARL_TOOL_NOT_REGISTERED' }
-        result = await tool.execute(args.input)
+        let execute
+        try {
+          execute = tool && tool.execute
+          if (typeof execute !== 'function') throw new Error('PEARL_TOOL_NOT_REGISTERED')
+        } catch (error) { record('setup', 'PEARL_TOOL_NOT_REGISTERED'); throw new Error('PEARL_TOOL_NOT_REGISTERED') }
+        result = await execute.call(tool, normalizeInput(args.input))
         if (result && typeof result.output === 'string') result = JSON.parse(result.output)
       } else {
-        result = await organ.run(args.input, ctx)
+        if (!seeds.has(args.organ) || typeof organ.run !== 'function') { record('export', 'PEARL_ORGAN_NOT_MOUNTED', args.organ); throw new Error('PEARL_ORGAN_NOT_MOUNTED') }
+        result = await organ.run(normalizeInput(args.input), ctx)
       }
       return project(result, Array.isArray(args.pick) ? args.pick : [], fs)
     },
@@ -928,25 +1139,24 @@ export interface RetentionSuite {
  * @returns Parent-graded result and locally bound evidence.
  */
 export async function trialScionRetention(build: Readonly<Record<string, string>>, suite: RetentionSuite): Promise<CandidateTrialResult> {
-  const factories = Object.entries(build).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([name, source]) => {
-    if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('PEARL_ORGAN_ID_INVALID')
-    let body = source
-    if (/^\s*export\s/m.test(body)) {
-      const exported: string[] = []
-      body = body.replace(/^export\s+((?:async\s+)?(?:const|let|function|class)\s+([A-Za-z_$][\w$]*))/gm,
-        (_match, declaration: string, id: string) => {
-          exported.push(id)
-          return declaration
-        })
-      if (/^\s*export\s/m.test(body)) throw new Error('PEARL_UNSUPPORTED_EXPORT: ' + name)
-      body += '\nmodule.exports = { ' + exported.join(', ') + ' };'
-    }
-    return JSON.stringify(name) + ': function (module, exports, require, Date, process, Buffer) {\n' + body + '\n}'
-  })
-  const code = 'const __ORGANS = {' + factories.join(',\n') + '};\n' + RETENTION_HARNESS_SOURCE
-    + '\nmodule.exports = harnessMain(__ORGANS, ' + JSON.stringify(suite.fixtures) + ', ' + JSON.stringify(suite.fixedNow)
-    + ', require, harnessMemfs, harnessProject);'
-  return trialScionCandidate({ name: 'pearl-retention', code, cases: suite.cases, timeoutMs: 15_000 })
+  const sources = Object.fromEntries(Object.entries(build).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([name, source]) => {
+      if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('PEARL_ORGAN_ID_INVALID')
+      let body = source
+      if (/^\s*export\s/m.test(body)) {
+        const exported: string[] = []
+        body = body.replace(/^export\s+((?:async\s+)?(?:const|let|function|class)\s+([A-Za-z_$][\w$]*))/gm,
+          (_match, declaration: string, id: string) => {
+            exported.push(id)
+            return declaration
+          })
+        if (/^\s*export\s/m.test(body)) throw new Error('PEARL_UNSUPPORTED_EXPORT: ' + name)
+        body += '\nmodule.exports = { ' + exported.join(', ') + ' };'
+      }
+      return [name, body]
+    }))
+  const retention = { sources, fixtures: suite.fixtures, fixedNow: suite.fixedNow, harnessSource: RETENTION_HARNESS_SOURCE }
+  return trialCandidateInternal({ name: 'pearl-retention', code: JSON.stringify(retention), cases: suite.cases, timeoutMs: 15_000, retention })
 }
 
 function cycleReport(value: Record<string, unknown>): { cycle: unknown; report: { nonJson: boolean; truncated: boolean } } {

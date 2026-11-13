@@ -444,6 +444,142 @@
         "clean": true,
         "unanchoredCount": 0
       }
+    },
+    {
+      "id": "dot.eyes.projection.no-origin",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-eyes",
+        "fixture": "base",
+        "input": {
+          "action": "projection"
+        }
+      },
+      "expectError": "EYES_ORIGIN_UNAVAILABLE"
+    },
+    {
+      "id": "dot.eyes.screenshot.no-origin",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-eyes",
+        "fixture": "base",
+        "input": {
+          "action": "screenshot"
+        }
+      },
+      "expectError": "EYES_ORIGIN_UNAVAILABLE"
+    },
+    {
+      "id": "dot.cortex.unknown-action.no-authority",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-cortex",
+        "fixture": "base",
+        "input": {
+          "action": "dot_unknown_action"
+        },
+        "pick": [
+          "voiceAuthority",
+          "mutating"
+        ]
+      },
+      "expect": {
+        "ok": false,
+        "voiceAuthority": "none",
+        "mutating": false
+      }
+    },
+    {
+      "id": "dot.continuity.unknown-action.refused",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "seed-continuity",
+        "fixture": "base",
+        "input": {
+          "action": "dot_unknown_action"
+        }
+      },
+      "expectError": "UNKNOWN_ACTION"
+    },
+    {
+      "id": "dot.cortex.known-registry.works",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "auma-cortex",
+        "fixture": "base",
+        "input": {
+          "action": "index",
+          "head": {
+            "epoch": 7,
+            "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "tools": [
+            {
+              "name": "fixture_read",
+              "readOnly": true,
+              "schemaKeys": [
+                "path"
+              ]
+            }
+          ],
+          "organs": [
+            {
+              "id": "fixture-hello",
+              "specifier": "ball:a5d1a3cb6290a0e41ee1e8ae31af3d117cb464f16d7c6526120f2b8aaf80232e",
+              "bytes": 75,
+              "authority": "none"
+            }
+          ],
+          "routes": []
+        },
+        "pick": [
+          "epoch",
+          "ballId",
+          "digest",
+          "voiceAuthority",
+          "mutating"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "epoch": 7,
+        "ballId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "digest": "8638945a3368b964",
+        "voiceAuthority": "none",
+        "mutating": false
+      }
+    },
+    {
+      "id": "dot.continuity.valid-synthetic-record.works",
+      "scar": null,
+      "author": "dot",
+      "args": {
+        "organ": "seed-continuity",
+        "fixture": "dot-continuity-valid",
+        "input": {
+          "action": "verify"
+        },
+        "pick": [
+          "verdict",
+          "sections.continuity.ok",
+          "sections.continuity.observed.ownerCredentialId",
+          "sections.closure.ok",
+          "unverifiedSections"
+        ]
+      },
+      "expect": {
+        "ok": true,
+        "verdict": "CONTINUOUS",
+        "sections.continuity.ok": true,
+        "sections.continuity.observed.ownerCredentialId": "dot-synthetic-credential",
+        "sections.closure.ok": true,
+        "unverifiedSections": []
+      }
     }
   ],
   "fixtures": {
@@ -502,6 +638,14 @@
       "/dsh/home/auma/seed/owner-key.v1.json": "{\n  \"schema\": \"aukora.owner-key.v1\",\n  \"keyId\": \"owner-ed25519-962cbbeae62a\",\n  \"algorithm\": \"Ed25519\",\n  \"publicKeyHex\": \"962cbbeae62a10e41036fb4c569b44f1f87e312134b6a59301c99cbc617c1e80\",\n  \"domain\": \"aukora.x6.owner-grant.v1\"\n}\n",
       "/dsh/home/balls/HEAD.json": "{\n  \"version\": \"x6.1-ball/v1\",\n  \"ballId\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"parentBallId\": null,\n  \"epoch\": 7,\n  \"createdAt\": 0,\n  \"authorPeerId\": \"pearl-fixture\",\n  \"entries\": {\n    \"seed-hello\": {\n      \"id\": \"seed-hello\",\n      \"specifier\": \"ball:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\n      \"config\": {},\n      \"disabled\": false,\n      \"previousSpecifiers\": []\n    }\n  },\n  \"modules\": {}\n}\n",
       "/dsh/home/auma/seed/predict/predictions.jsonl": "{\"at\":\"2026-11-09T04:53:19.000Z\",\"confidence\":0.5,\"expected\":2,\"expectedBallId\":null,\"expectedEntry\":null,\"expectedEpoch\":null,\"expectedOrganCount\":null,\"expectedPreviousCount\":null,\"headBallId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"headEpoch\":7,\"headOrganCount\":1,\"kind\":\"prediction.register\",\"metric\":\"declaredOrgans\",\"prediction\":\"fixture\",\"predictionHash\":\"dbbfa94e879ef15f130e62e77c56b93c8afb8cdd33cf4f8fd183c7681c240e7b\",\"targetBallId\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"targetEpoch\":8}\n"
+    },
+    "dot-continuity-valid": {
+      "/dsh/home/balls/HEAD.json": "{\"version\":\"x6.1-ball/v1\",\"ballId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"parentBallId\":null,\"epoch\":7,\"createdAt\":0,\"authorPeerId\":\"dot-synthetic-fixture\",\"entries\":{\"fixture-hello\":{\"id\":\"fixture-hello\",\"specifier\":\"ball:a5d1a3cb6290a0e41ee1e8ae31af3d117cb464f16d7c6526120f2b8aaf80232e\",\"config\":{},\"disabled\":false,\"previousSpecifiers\":[]}},\"modules\":{}}",
+      "/dsh/home/balls/a5d1a3cb6290a0e41ee1e8ae31af3d117cb464f16d7c6526120f2b8aaf80232e.js": "module.exports = { name: \"fixture-hello\", run() { return { ok: true } } };\n",
+      "/dsh/home/auma/seed/receipts.v3.jsonl": "{\"schema\":\"aukora.receipt.v3\",\"seq\":1,\"at\":\"2026-11-09T04:53:20.000Z\",\"kind\":\"fixture.observation\",\"data\":{\"value\":\"known\"},\"prevHash\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"leafHash\":\"696489d412806311a976259ca02fcccea7588490406b55a60919576db070bbde\"}\n",
+      "/dsh/home/auma/seed/checkpoints.v1.jsonl": "{\"body\":{\"schema\":\"aukora.edge-checkpoint.v1\",\"seq\":1,\"prevCheckpointHash\":null,\"receiptCount\":1,\"lastReceiptHash\":\"696489d412806311a976259ca02fcccea7588490406b55a60919576db070bbde\",\"merkleRoot\":\"696489d412806311a976259ca02fcccea7588490406b55a60919576db070bbde\"},\"signatureHex\":\"363aeb462911498a0f66885e7e2955c176f51b2cf1380a25720205c64ccaf7f6171ec0ea924538d2870574bbae344a0887357ba1d6cb0d62a784613ce00e6109\",\"publicKeyHex\":\"4d80529e53522a1153938395696110ad35130aabbee189cfda53cf379edec94f\",\"checkpointHash\":\"be603aebc7b53624a5967d404a0716ec024ac52b928ac38b3315b1ba3f4d4918\"}\n",
+      "/dsh/home/auma/seed/aumlok-credential.v1.json": "{\"credentialId\":\"dot-synthetic-credential\"}",
+      "/dsh/home/auma/seed/continuity-baseline.v1.json": "{\"schema\":\"aukora.continuity-baseline.v1\",\"ballId\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"epoch\":7,\"merkleRoot\":\"696489d412806311a976259ca02fcccea7588490406b55a60919576db070bbde\",\"ownerCredentialId\":\"dot-synthetic-credential\"}"
     }
   },
   "pendingCases": [

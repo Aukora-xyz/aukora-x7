@@ -2,7 +2,9 @@
 
 English | [中文](RUN-RECORD.zh.md)
 
-This is one run of this tree as shipped, on one machine, by its authors. It is a record, not a guarantee. Everything here is RAN unless tagged SOURCE. The install did not fall back to linked modules, but offline it needed a copy of the pnpm registry metadata cache (see Install). The run is named by the genesis head it booted, ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`, epoch 1. To repeat it, run the same commands in a fresh copy of this tree, with `HOME` set to an empty folder, and compare. The logs of the run do not ship.
+This record is of an earlier tree of this repository (genesis `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`). The tree it now ships with has genesis `e70d86bd8972997f283291ab5c69d589ec20283ef12045b4eedea8832d772cfd`; its authors have not repeated this full run on it. What was run on this tree is the one command on the front page, `node scripts/verify-lite.mjs`.
+
+This is one run of an earlier tree of this repository, as shipped then, on one machine, by its authors. It is a record, not a guarantee. Everything here is RAN unless tagged SOURCE. The install did not fall back to linked modules, but offline it needed a copy of the pnpm registry metadata cache (see Install). The run is named by the genesis head it booted, ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`, epoch 1. To repeat these steps on the tree this repository ships now, run the same commands in a fresh copy of it, with `HOME` set to an empty folder, and compare; the results may differ, since this record is of an earlier tree. The logs of the run do not ship.
 
 ## Tools and steps
 

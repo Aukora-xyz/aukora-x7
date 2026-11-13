@@ -16,6 +16,7 @@ import { createWorker } from '../worker.mjs'
 import { X61HeadDurableObject } from '../head-do.mjs'
 import { proofOutcome, relayWrong } from '../proof-failure-rule.mjs'
 import { OWNER_LOGIN_SLOTS, createLoginSlots } from '../owner-login-slots.mjs'
+import { waitFor } from './wait-for.mjs'
 
 const ORIGIN = 'https://owner-login-gate.example.invalid'
 const OWNER = 'owner@example.invalid'
@@ -214,10 +215,7 @@ function holdChecks(t, header) {
   })
   return { held, settle: answer => { for (const resolve of held.splice(0)) resolve(answer) }, restore: () => mock.mock.restore() }
 }
-const until = async (condition, what) => {
-  for (let index = 0; index < 2000 && !condition(); index++) await new Promise(resolve => setImmediate(resolve))
-  assert.ok(condition(), what)
-}
+const until = (condition, what) => waitFor(condition, what)
 
 test('100 overlapping wrongly signed owner passes start at most five signature checks; the other 95 are answered at once (429, a short wait); five failures lock the door', async t => {
   const f = await fixture()
@@ -293,8 +291,11 @@ test('100 held checks, leases expired again and again: exactly five signature ch
   // did after each expiry, the reviewer's "five become ten").
   for (const [index, batch] of [passes.slice(100, 150), passes.slice(150, 200)].entries()) {
     advance(t, clock, index === 0 ? OWNER_LOGIN_SLOTS.holdMs + 1 : OWNER_LOGIN_SLOTS.holdMs * 3)
-    const statuses = await Promise.race([Promise.all(batch.map(token => f.login(token).then(response => response.status))),
-      (async () => { for (let tick = 0; tick < 2000 && started() <= 5; tick++) await new Promise(resolve => setImmediate(resolve)); return 'more checks started' })()])
+    // The watcher ends when the fifty are answered (the race is then already theirs) or a sixth check starts; it waits on
+    // elapsed time, never a count of turns, so a slow machine cannot end it first with a false 'more checks started'.
+    let answered = false
+    const statuses = await Promise.race([Promise.all(batch.map(token => f.login(token).then(response => response.status))).then(all => { answered = true; return all }),
+      (async () => { await waitFor(() => answered || started() > 5, 'the fifty answers, or a sixth signature check'); return 'more checks started' })()])
     assert.equal(started(), 5, `after lease expiry ${String(index + 1)}: ${String(started())} signature checks started (the budget is five)`)
     assert.deepEqual(statuses, Array(50).fill(429))
   }

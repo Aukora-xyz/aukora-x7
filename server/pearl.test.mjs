@@ -47,7 +47,7 @@ function fixture({ organId = 'seed-pearl', source = SOURCE, contextualFs = true 
     const retained = JSON.parse(files.get(SUITE))
     const selected = JSON.parse(files.get(HEAD))
     const candidateSource = request.candidateSource ?? (request.candidateSpecifier ? files.get('/dsh/home/balls/' + request.candidateSpecifier.slice(5) + '.js') : incumbent)
-    const arm = baseline => ({ ok: f.trialOk, qualifiedForPromotion: !baseline, qualificationId: 'unchecked-runtime-token',
+    const arm = baseline => ({ ok: f.trialOk, trialOk: f.trialOk, qualifiedForPromotion: !baseline, qualificationId: 'unchecked-runtime-token',
       organs: { [organId]: hash(baseline ? incumbent : candidateSource) }, headBallId: selected.ballId,
       totalCases: retained.cases.length,
       suiteDigest: suiteDigest(retained), suiteBytesDigest: hash(files.get(SUITE)), suiteAdmission: 'build-pinned',
@@ -150,15 +150,15 @@ for (const scenario of [
   })
 }
 
-test('a named non-governance candidate cannot use absent grant as unattended or passkey admission', async () => {
+test('an ordinary judge-admitted repair returns the id without claiming passkey or standing approval', async () => {
   const f = fixture({ organId: 'seed-ordinary' })
   const result = await f.run({ passkeyPromotionEligible: true, standingGrantEligible: true, approved: true })
   assert.equal(result.ok, true)
   assert.equal(result.winnerId, 'candidate')
-  assert.equal(result.qualifiedForPromotion, false)
+  assert.equal(result.qualifiedForPromotion, true)
   assert.equal(result.passkeyPromotionEligible, false)
   assert.equal(result.standingGrantEligible, false)
-  assert.equal(result.qualificationId, null)
+  assert.equal(result.qualificationId, 'unchecked-runtime-token')
 })
 
 for (const declaration of [{ governance: true }, { config: { governance: true } }, { governance: 'malformed' }]) {

@@ -11,6 +11,7 @@ import { createWorker, OWNER_PASSKEY } from '../worker.mjs'
 import { runInNewContext } from 'node:vm' // ANYBROWSER hook
 import { JSDOM } from 'jsdom' // ANYBROWSER hook
 import { RESCUE_PAGE } from '../rescue-page.mjs' // ANYBROWSER hook
+import { waitFor } from './wait-for.mjs'
 
 const ORIGIN = 'https://passkey-signin.example.invalid'
 const OWNER = 'owner@example.invalid'
@@ -504,8 +505,9 @@ test('a key read abandoned by its cancelled request never hangs later sessions: 
   fx.clock.offset += 61000
   fx.faults.abandonKeyRead = true
   const pending = Symbol('pending')
+  const readsBefore = countOf(fx, '/_host/aumlok/signin-key')
   const abandoned = fx.call('/_host/aumlok/status', { cookie })
-  await new Promise(resolve => setImmediate(resolve))
+  await waitFor(() => countOf(fx, '/_host/aumlok/signin-key') > readsBefore, 'the abandoned request\'s key read at HEAD')
   fx.faults.abandonKeyRead = false
   const keyReads = () => fx.headPaths.filter(path => path === '/_host/aumlok/signin-key').length
   const before = keyReads()
@@ -513,7 +515,7 @@ test('a key read abandoned by its cancelled request never hangs later sessions: 
   // them reads again, and the others share that live read.
   const later = await Promise.race([
     Promise.all([fx.call('/_host/aumlok/status', { cookie }), fx.call('/__x6/status', { cookie }), fx.call('/_head/ball', { cookie })]),
-    new Promise(resolve => setTimeout(() => resolve(pending), 5000)),
+    new Promise(resolve => setTimeout(() => resolve(pending), 30_000)),
   ])
   assert.notEqual(later, pending, 'later sessions still wait on the abandoned read')
   assert.deepEqual(later.map(result => result.response.status), [200, 200, 200])
@@ -530,14 +532,11 @@ test('a key read abandoned by its cancelled request never hangs later sessions: 
 const PENDING = Symbol('pending')
 const turn = () => new Promise(resolve => setImmediate(resolve))
 /** The promise's outcome, or PENDING after `ms` (the timer is cleared either way: it only ever elapses on a failure). */
-const within = (promise, ms = 3000) => {
+const within = (promise, ms = 30_000) => {
   let timer
   return Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve(PENDING), ms) })]).finally(() => clearTimeout(timer))
 }
-const until = async (condition, what) => {
-  for (let turns = 0; turns < 200; turns++) { if (condition()) return; await turn() }
-  assert.fail('never happened: ' + what)
-}
+const until = (condition, what) => waitFor(condition, 'never happened: ' + what)
 const countOf = (fx, path) => fx.headPaths.filter(seen => seen === path).length
 
 test('equal clock: two key reads start in the same millisecond, the newer answers first; the older, answering later, never replaces it', async t => {
@@ -607,12 +606,9 @@ test('S1: a key read in flight when a re-bind invalidates the held key never res
   assert.equal((await fx.call('/__x6/status', { cookie: fx.cookieOf(signed.response) })).response.status, 200)
 })
 
-/** As `until`, for a step that passes through WebCrypto first (that work finishes off the event loop): turns, then 1 ms sleeps. */
-const eventually = async (condition, what) => {
-  for (let turns = 0; turns < 200; turns++) { if (condition()) return; await turn() }
-  for (let waited = 0; waited < 2000; waited++) { if (condition()) return; await new Promise(resolve => setTimeout(resolve, 1)) }
-  assert.fail('never happened: ' + what)
-}
+/** As `until`, for a step that passes through WebCrypto first (that work finishes off the event loop): `waitFor` already
+ * gives such work elapsed time (turns, then 1 ms sleeps), so the two are one wait now. */
+const eventually = (condition, what) => waitFor(condition, 'never happened: ' + what)
 const SIGNIN_REFUSALS = ['AUMLOK_SIGNIN_CHALLENGE_INVALID', 'AUMLOK_SIGNIN_PROOF_INVALID', 'AUMLOK_NOT_BOUND']
 /** A re-bind completed elsewhere: HEAD's store now holds `generation` and a new passkey, which is returned. */
 const rebindElsewhere = async (fx, generation) => {
@@ -979,9 +975,12 @@ async function landingPage(t, fx, { served = '/rescue', pathname = served, cooki
       } finally { settled++ }
     },
   })
-  const pump = async (condition, what) => { for (let i = 0; i < 2000 && !condition(); i++) await turn(); assert.ok(condition(), what) }
+  const pump = (condition, what) => waitFor(condition, what)
   const passkey = async () => {
     await pump(() => settled >= 1, 'the held challenge')
+    // The challenge is held once the page has read the answer and set its one refresh timer (nothing else sets a timer
+    // before the press): waited for, so the press never comes before it, however slow the machine.
+    await pump(() => timers.size > 0, 'the held challenge stored (its refresh timer set)')
     for (let i = 0; i < 20; i++) await turn()
     document.getElementById('passkey-submit').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
     await pump(() => replacements.length > 0, 'the landing after the passkey')

@@ -11,6 +11,8 @@ const BRANCH = 'auma/proposal/fixture-fix', ATTEMPT = 'aaaaaaaa-bbbb-cccc-dddd-e
 const owner = { type: 'owner', email: 'owner@fixture.example', expires: NOW / 1000 + 600 }
 const body = { action: 'merge_proposal', branch: BRANCH, baseSha: BASE, headSha: HEAD, treeSha: TREE }
 const binding = { schema: 'aukora.class3.action.v1', audience: ORIGIN, method: 'POST', pathname: '/_host/repo', bodySha256: createHash('sha256').update(canonicalJson(body)).digest('hex') }
+// HEAD's inspect_merge also says the attempt's state and age (head-do.mjs LOOP hook).
+const timing = { state: 'dispatched', startedAt: NOW - 1000, ageMs: 1000, reconcileAfterMs: 60000 }
 
 function fixture({ access = owner, main = HEAD, branch = HEAD, pending = {}, hook, storage } = {}) {
   const calls = [], messages = []
@@ -19,7 +21,7 @@ function fixture({ access = owner, main = HEAD, branch = HEAD, pending = {}, hoo
     assert.deepEqual(JSON.parse(request.headers.get('x-x6-verified-access')), owner)
     const input = await request.json(); messages.push(input)
     if (storage) return storage(input)
-    if (input.action === 'inspect_merge') return Response.json({ ok: true, attemptId: ATTEMPT, mergeBody: body, binding, ...pending })
+    if (input.action === 'inspect_merge') return Response.json({ ok: true, attemptId: ATTEMPT, mergeBody: body, binding, ...timing, ...pending })
     assert.equal(input.action, 'reconcile_merge')
     return Response.json({ ok: true, status: input.verification.mainSha === HEAD ? 'succeeded' : 'unknown', attemptId: ATTEMPT })
   } }) } }
@@ -60,15 +62,20 @@ test('reconcile_proposal reads exact durable attempt and submits correlated veri
   const broker = fixture(), result = await broker.request({ action: 'reconcile_proposal' })
   assert.equal(result.status, 200); assert.equal(result.value.status, 'succeeded'); assert.equal(result.value.action, 'reconcile_proposal')
   assert.equal(broker.calls.length, 3)
+  // Review, MUST 2: the releases HEAD keeps are read too while an attempt is held (none here, so nothing more).
   assert.deepEqual(broker.messages, [{ action: 'inspect_merge' }, { action: 'reconcile_merge', attemptId: ATTEMPT, mergeBody: body, binding,
-    verification: { mainSha: HEAD, branchSha: HEAD, treeSha: TREE, checkedAt: NOW } }])
+    verification: { mainSha: HEAD, branchSha: HEAD, treeSha: TREE, checkedAt: NOW, headInMain: true } }, { action: 'inspect_released' }])
 })
 
 test('base, divergence and deleted proposal refs remain observations for the durable owner', async () => {
-  for (const main of [BASE, 'd'.repeat(40)]) {
+  // SHOULD 1: main at the base needs no ancestry read (headInMain false); main elsewhere asks GitHub's compare
+  // endpoint once, and a compare that fails (this fixture answers none) leaves it unknown: headInMain null, never void.
+  for (const [main, headInMain, reads] of [[BASE, false, 3], ['d'.repeat(40), null, 4]]) {
     const broker = fixture({ main, branch: null }), result = await broker.request({ action: 'reconcile_proposal' })
     assert.equal(result.value.status, 'unknown'); assert.equal(broker.messages[1].verification.branchSha, null)
-    assert.equal(broker.messages[1].verification.mainSha, main); assert.equal(broker.calls.length, 3)
+    assert.equal(broker.messages[1].verification.mainSha, main); assert.equal(broker.messages[1].verification.headInMain, headInMain)
+    assert.equal(broker.calls.length, reads)
+    if (reads === 4) assert.equal(broker.calls[3].url.pathname, `/repos/your_org_x/your-node/compare/${HEAD}...${main}`)
   }
 })
 
@@ -84,7 +91,8 @@ test('reconciliation refuses non-owner and caller-supplied evidence before stora
 })
 
 test('invalid stored merge identity and binding fail closed before provider reads', async () => {
-  for (const pending of [{ attemptId: 'bad' }, { mergeBody: { ...body, branch: 'auma/sandbox/fixture-fix' } }, { binding: { ...binding, bodySha256: '0'.repeat(64) } }, { mergeBody: { ...body, unexpected: true } }]) {
+  for (const pending of [{ attemptId: 'bad' }, { mergeBody: { ...body, branch: 'auma/sandbox/fixture-fix' } }, { binding: { ...binding, bodySha256: '0'.repeat(64) } }, { mergeBody: { ...body, unexpected: true } },
+    { state: 'pending' }, { state: undefined }, { ageMs: 'old' }, { reconcileAfterMs: null }]) {
     const broker = fixture({ pending }), result = await broker.request({ action: 'reconcile_proposal' })
     assert.equal(result.value.code, 'REPO_PROPOSAL_STORAGE_FAILED'); assert.equal(broker.calls.length, 0); assert.equal(broker.messages.length, 1)
   }
@@ -103,7 +111,7 @@ test('malformed, redirected and oversized provider observations never reach dura
 })
 
 test('reconciliation propagates a durable attempt conflict without retrying provider reads', async () => {
-  const broker = fixture({ storage: input => input.action === 'inspect_merge' ? Response.json({ ok: true, attemptId: ATTEMPT, mergeBody: body, binding }) : Response.json({ ok: false, code: 'REPO_PROPOSAL_MISMATCH' }, { status: 409 }) })
+  const broker = fixture({ storage: input => input.action === 'inspect_merge' ? Response.json({ ok: true, attemptId: ATTEMPT, mergeBody: body, binding, ...timing }) : Response.json({ ok: false, code: 'REPO_PROPOSAL_MISMATCH' }, { status: 409 }) })
   const result = await broker.request({ action: 'reconcile_proposal' })
   assert.equal(result.status, 409); assert.equal(result.value.code, 'REPO_PROPOSAL_MISMATCH'); assert.equal(broker.calls.length, 3)
 })

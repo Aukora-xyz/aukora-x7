@@ -44,8 +44,8 @@ async function envelope(storage, clientId, seq, patch = {}) {
   return { v: 2, batch, digest: await mirrorDigest(batch) }
 }
 
-function seed(storage, clientId, seq, revision) {
-  const receipt = { ok: true, protocol: 'x61-cloud-mirror/v1', lineageId: LINEAGE, revision, id: `${clientId}:${seq}`, clientId, seq, digest: HASH, applied: 1, acknowledgedAt: 1 }
+function seed(storage, clientId, seq, revision, acknowledgedAt = 1) {
+  const receipt = { ok: true, protocol: 'x61-cloud-mirror/v1', lineageId: LINEAGE, revision, id: `${clientId}:${seq}`, clientId, seq, digest: HASH, applied: 1, acknowledgedAt }
   storage.data.set(RECEIPT + receipt.id, receipt)
   storage.data.set(HEAD + clientId, { seq, digest: HASH })
   storage.data.set(FENCE, { lineageId: LINEAGE, revision })
@@ -222,6 +222,27 @@ test('the 256-client bound remains while established clients continue publishing
   assert.deepEqual(storage.data, before)
   assert.equal((await publishMirror(storage, await envelope(storage, client(1), 2))).ok, true)
   assert.equal([...storage.data.keys()].filter(key => key.startsWith(HEAD)).length, 256)
+})
+
+test('only under MIRROR_SLOT_RETIRE=retire a full table retires its oldest slot idle past 30 days; established slots never', async () => {
+  const now = Date.now()
+  // Established = acknowledged within the 30-day idle window: none may be retired, so the bound holds.
+  const storage = new Storage()
+  for (let index = 1; index <= 256; index += 1) seed(storage, client(index), 1, index, now - 29 * 86400000)
+  const before = structuredClone(storage.data)
+  await assert.rejects(publishMirror(storage, await envelope(storage, client(257), 1), { retire: 'retire' }), { code: 'MIRROR_CLIENT_LIMIT', status: 507 })
+  assert.deepEqual(storage.data, before)
+  // Slots idle past 30 days are tombstoned, oldest first, one per new browser; the count stays 256.
+  const idle = new Storage()
+  for (let index = 1; index <= 256; index += 1) seed(idle, client(index), 1, index, now - (40 * 86400000) + index)
+  const idleBefore = structuredClone(idle.data)
+  // Without the setting the same table is main's 507 and nothing is retired.
+  await assert.rejects(publishMirror(idle, await envelope(idle, client(257), 1)), { code: 'MIRROR_CLIENT_LIMIT', status: 507 })
+  assert.deepEqual(idle.data, idleBefore)
+  assert.equal((await publishMirror(idle, await envelope(idle, client(257), 1), { retire: 'retire' })).ok, true)
+  assert.equal([...idle.data.keys()].filter(key => key.startsWith(HEAD)).length, 256)
+  assert.equal(idle.data.has(HEAD + client(1)), false)
+  assert.equal(idle.data.get('world:v1:retired:' + client(1))?.state, 'retired')
 })
 
 test('revision-one without ACKs requires a matching completed bootstrap before publication', async () => {

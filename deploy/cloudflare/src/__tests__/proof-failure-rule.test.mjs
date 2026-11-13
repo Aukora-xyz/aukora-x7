@@ -134,6 +134,8 @@ const IDENTITY_FILES = ['access.mjs', 'aumlok.mjs', 'enrollment-approval.mjs', '
 const NOT_IDENTITY = {
   'cold-archive.mjs': 'backup checkpoints: an archive refusal (400), no owner budget, no session',
   'messages-store.mjs': 'Nostr event signatures (schnorr) in the message store: no owner budget, no session',
+  // Classified when world-holder.mjs landed: the file imports neither the one rule nor the gate lockout.
+  'world-holder.mjs': 'installation-key proofs (which browser is her body): a 403 KEY_PROOF_INVALID refusal, no owner budget, no session; the owner\'s passkey for a move is judged in aumlok.mjs and head-do.mjs',
 }
 /**
  * The verification primitives in this codebase, by the callee's source text:

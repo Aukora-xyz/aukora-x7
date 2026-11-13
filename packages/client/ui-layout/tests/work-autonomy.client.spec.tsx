@@ -957,7 +957,7 @@ describe('the arena and the status cannot be talked into more than they show', (
 describe('where this page runs: Mac host or Cloudflare edge, read from the host itself', () => {
   const answer = (routes: Record<string, unknown>) => vi.fn(async (input: string) =>
     (Object.hasOwn(routes, input) ? json(routes[input]) : new Response('nope', { status: 404 })))
-  const health = (over: Record<string, unknown> = {}) => ({ ok: true, ready: true, runtime: 'cloudflare', macDependency: false, buildSha: 'd07baa83',
+  const health = (over: Record<string, unknown> = {}) => ({ ok: true, ready: true, runtime: 'cloudflare', macDependency: false, buildSha: '2ad2e908',
     capabilities: { head: true, mirror: true, providerDoors: { deepseek: true, anthropic: false } }, unsupported: ['eyes', 'no-tab-agent-loop'], ...over })
   it('the Mac host is said to be the Mac, and the edge is never claimed or probed from it', async () => {
     const { hostModeWords, readHostMode } = await import('../src/client/spatial-components.tsx')
@@ -971,7 +971,7 @@ describe('where this page runs: Mac host or Cloudflare edge, read from the host 
   it('the edge, seeded with a model door bound, says the Mac is not in the path; unseeded or doorless is NOT READY', async () => {
     const { hostModeWords, readHostMode } = await import('../src/client/spatial-components.tsx')
     const ready = await readHostMode(answer({ '/__x6/status': { ok: true, runtime: 'cloudflare' }, '/api/health': health() }), undefined, 'node.example.invalid')
-    expect(ready).toMatchObject({ kind: 'cloudflare', edge: { ready: true, doorsBound: 1, doorsTotal: 2, buildSha: 'd07baa83' } })
+    expect(ready).toMatchObject({ kind: 'cloudflare', edge: { ready: true, doorsBound: 1, doorsTotal: 2, buildSha: '2ad2e908' } })
     expect(hostModeWords(ready)).toMatchObject({ pill: 'CLOUDFLARE EDGE · node.example.invalid', tone: 'mint' })
     expect(hostModeWords(ready).detail).toMatch(/the Mac is not in the path/)
     const doorless = await readHostMode(answer({ '/__x6/status': { ok: true, runtime: 'cloudflare' },

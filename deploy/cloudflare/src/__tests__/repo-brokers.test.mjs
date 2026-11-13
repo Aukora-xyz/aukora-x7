@@ -28,19 +28,25 @@ function tree(files, sha, overrides = {}) {
   return { sha, truncated: false, tree: [...entries.values()], ...overrides }
 }
 
-/** CI evidence is ONLY proposal-gate.yml's latest push run on the exact branch and head, with its four required jobs in
- * that attempt (cloud-brokers proposalCi). Other checks on the commit are never read as evidence. */
+/** CI evidence is ONLY the latest push run of proposal-gate.yml (its four required jobs) AND of proposal-checks.yml (job
+ * `checks`) on the exact branch and head, in that attempt (cloud-brokers proposalCi).
+ * Other checks on the commit are never read as evidence. Unless a test says otherwise, proposal-checks passed too. */
 const GATE_RUNS = '/actions/workflows/proposal-gate.yml/runs', GATE_JOBS = ['preflight', 'build', 'scrub-dist', 'bundle']
+const CHECKS_RUNS = '/actions/workflows/proposal-checks.yml/runs', CHECKS_RUN_ID = 9001
 const gateRun = (patch = {}) => ({ id: 7, workflow_id: 11, run_number: 3, run_attempt: 1, head_sha: HEAD, head_branch: BRANCH, event: 'push', path: '.github/workflows/proposal-gate.yml', status: 'completed', conclusion: 'success', ...patch })
 const gateJob = (name, patch = {}) => ({ id: 100 + GATE_JOBS.indexOf(name) + 1, run_id: 7, head_sha: HEAD, name, status: 'completed', conclusion: 'success', ...patch })
-const gateCi = ({ runs = [gateRun()], jobs = GATE_JOBS.map(name => gateJob(name)), checks = [] } = {}) => url => url.pathname.endsWith(GATE_RUNS) ? json({ total_count: runs.length, workflow_runs: runs })
+const checksRun = (patch = {}) => ({ id: CHECKS_RUN_ID, workflow_id: 12, run_number: 3, run_attempt: 1, head_sha: HEAD, head_branch: BRANCH, event: 'push', path: '.github/workflows/proposal-checks.yml', status: 'completed', conclusion: 'success', ...patch })
+const checksJob = (patch = {}) => ({ id: 9101, run_id: CHECKS_RUN_ID, head_sha: HEAD, name: 'checks', status: 'completed', conclusion: 'success', ...patch })
+const gateCi = ({ runs = [gateRun()], jobs = GATE_JOBS.map(name => gateJob(name)), checks = [], checksRuns = [checksRun()], checksJobs = [checksJob()] } = {}) => url => url.pathname.endsWith(GATE_RUNS) ? json({ total_count: runs.length, workflow_runs: runs })
+  : url.pathname.endsWith(CHECKS_RUNS) ? json({ total_count: checksRuns.length, workflow_runs: checksRuns })
+  : url.pathname.endsWith(`/actions/runs/${CHECKS_RUN_ID}/attempts/1/jobs`) ? json({ total_count: checksJobs.length, jobs: checksJobs })
   : url.pathname.endsWith('/jobs') ? json({ total_count: jobs.length, jobs }) : json({ total_count: checks.length, check_runs: checks })
-/** proposal-gate passed on the exact proposal head: merges need it (cloud-brokers mergeProposal reads CI before approval). */
+/** Both workflows passed on the exact proposal head: merges need it (cloud-brokers mergeProposal reads CI before approval). */
 const PASSED_CI = gateCi()
 
-function fixture({ before = { 'deploy/cloudflare/src/fixture.mjs': 'old\n' }, after = { 'deploy/cloudflare/src/fixture.mjs': 'new\n' }, access = owner, hook, treeOverride, ci, storage, bootstrap = BOOTSTRAP, now = () => NOW, env: extraEnv = {} } = {}) {
+function fixture({ before = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'old\n' }, after = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'new\n' }, access = owner, hook, treeOverride, ci, storage, bootstrap = BOOTSTRAP, now = () => NOW, env: extraEnv = {} } = {}) {
   const refs = new Map([['main', BASE], [BRANCH, HEAD]]), calls = [], tokens = new Map(), proposals = [], outcomes = []
-  let staged = null, attempt = null, consumed = 0, currentRequest
+  let staged = null, attempt = null, attemptOwner = null, consumed = 0, currentRequest
   const env = { GITHUB_TOKEN: 'synthetic-token-value', OWNER_EMAIL: EMAIL, PUBLIC_HOST: 'fixture.example', SOURCE_REVISION: BASE, ...extraEnv }
   env.HEAD ??= { idFromName: name => name, get: () => ({ fetch: async request => {
     const input = await request.json()
@@ -50,9 +56,23 @@ function fixture({ before = { 'deploy/cloudflare/src/fixture.mjs': 'old\n' }, af
     if (input.action === 'stage') { if (attempt) return json({ ok: false, code: 'REPO_MERGE_PENDING' }); staged = input.proposal; proposals.push(staged); return json({ ok: true }) }
     if (input.action === 'begin_merge') {
       if (attempt || !staged || canonicalJson(input.mergeBody) !== canonicalJson(staged.mergeBody) || canonicalJson(input.binding) !== canonicalJson(staged.binding)) return new Response(JSON.stringify({ ok: false, code: 'REPO_PROPOSAL_MISMATCH' }), { status: 409, headers: { 'content-type': 'application/json' } })
-      attempt = 'fixture-attempt-123456'; return json({ ok: true, attemptId: attempt })
+      // MUST 3a: HEAD consumes his approval in the same step that claims the attempt (as the real HeadDO does in
+      // one storage transaction): a refused or expired approval claims nothing.
+      const key = request.headers.get('x-x6-class3-approval'), approval = tokens.get(key)
+      const refuse = code => new Response(JSON.stringify({ ok: false, code }), { status: 403, headers: { 'content-type': 'application/json' } })
+      if (!approval || canonicalJson(approval.binding) !== canonicalJson(input.binding)) return refuse('CLASS3_WEBAUTHN_REQUIRED')
+      if (approval.expiresAt <= now()) return refuse('CLASS3_APPROVAL_EXPIRED')
+      tokens.delete(key); consumed++
+      attempt = 'fixture-attempt-123456'; attemptOwner = input.owner
+      return json({ ok: true, attemptId: attempt, startedAt: now(), approvalExpiresAt: approval.expiresAt })
     }
-    if (input.action === 'merge_outcome') { assert.equal(input.attemptId, attempt); outcomes.push(input.outcome); if (input.outcome.status === 'succeeded') staged = null; if (input.outcome.status !== 'unknown') attempt = null; return json({ ok: true }) }
+    if (input.action === 'mark_merge') { assert.equal(input.owner, attemptOwner); assert.equal(input.attemptId, attempt); outcomes.push({ state: 'marked' }); return json({ ok: true, attemptId: attempt, state: 'marked' }) }
+    if (input.action === 'merge_outcome') {
+      assert.equal(input.owner, attemptOwner); if (input.attemptId !== undefined) assert.equal(input.attemptId, attempt)
+      outcomes.push(input.outcome); if (input.outcome.status === 'succeeded') staged = null; if (input.outcome.status !== 'unknown') attempt = null; return json({ ok: true })
+    }
+    // HEAD's answer when no earlier merge call left a durable attempt (every merge asks first: MUST 5).
+    if (input.action === 'inspect_merge' && !attempt) return new Response(JSON.stringify({ ok: false, code: 'REPO_MERGE_ATTEMPT_MISSING' }), { status: 409, headers: { 'content-type': 'application/json' } })
     throw new Error('Unexpected HEAD action')
   } }) }
   const networkFetch = async (rawUrl, init) => {
@@ -86,7 +106,7 @@ function fixture({ before = { 'deploy/cloudflare/src/fixture.mjs': 'old\n' }, af
       return json({ base_commit: { sha: base }, merge_base_commit: { sha: base }, ahead_by: base === head ? 0 : 1, behind_by: 0, status: base === head ? 'identical' : 'ahead', files: [] })
     }
     if (url.pathname.endsWith('/check-runs')) return ci ? await ci(url) : json({ total_count: 0, check_runs: [] })
-    if (url.pathname.endsWith('/actions/runs') || url.pathname.endsWith(GATE_RUNS)) return ci ? await ci(url) : json({ total_count: 0, workflow_runs: [] })
+    if (url.pathname.endsWith('/actions/runs') || url.pathname.endsWith(GATE_RUNS) || url.pathname.endsWith(CHECKS_RUNS)) return ci ? await ci(url) : json({ total_count: 0, workflow_runs: [] })
     if (/\/actions\/runs\/\d+\/attempts\/\d+\/jobs$/.test(url.pathname)) return ci ? await ci(url) : json({ total_count: 0, jobs: [] })
     if (url.pathname.startsWith(PREFIX + '/commits/')) {
       const ref = decodeURIComponent(url.pathname.slice((PREFIX + '/commits/').length)), sha = refs.get(ref) ?? ref
@@ -135,7 +155,7 @@ function mirror(files, gone = []) {
 }
 
 test('private branch writes permit T2 source and bind caller drafts and commits to the observed branch', async () => {
-  const broker = fixture(), path = 'deploy/cloudflare/src/fixture.mjs'
+  const broker = fixture(), path = 'deploy/cloudflare/src/crew-relay-tool.mjs'
   const draft = await broker.request({ action: 'write', branch: BRANCH, path, content: 'next\n', ownerSession: true })
   assert.equal(draft.status, 200); assert.equal(draft.value.scope, 'caller'); assert.equal(draft.value.baseSha, HEAD)
   assert.equal(broker.calls.some(call => call.method === 'POST'), false)
@@ -178,20 +198,20 @@ test('workflow, traversal, private paths and content stay refused on sandbox bra
     assert.equal((await broker.request({ action: 'write', branch: BRANCH, path, content: 'safe' })).status, 403)
   }
   for (const content of ['synthetic-token-value', '-----BEGIN PRIVATE KEY-----', '{"access_token":"fixture"}']) {
-    assert.equal((await broker.request({ action: 'write', branch: BRANCH, path: 'server/fixture.mjs', content })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+    assert.equal((await broker.request({ action: 'write', branch: BRANCH, path: 'deploy/cloudflare/src/crew-relay-tool.mjs', content })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
   }
   assert.equal(broker.calls.length, 0)
 })
 
 test('main T2 publication stays refused even with exact legacy Class 3 publication fields, naming the proposal route', async () => {
-  const broker = fixture(), input = { action: 'write', path: 'deploy/cloudflare/src/fixture.mjs', content: 'next', expectedHeadSha: BASE, idempotencyKey: 'fixture-idempotency', message: 'Fix' }
+  const broker = fixture(), input = { action: 'write', path: 'deploy/cloudflare/src/crew-relay-tool.mjs', content: 'next', expectedHeadSha: BASE, idempotencyKey: 'fixture-idempotency', message: 'Fix' }
   const refused = (await broker.request(input, { token: broker.grant(input) })).value
   assert.equal(refused.code, 'REPO_PROPOSAL_REQUIRED'); assert.match(refused.next, /^proposal: branch_create auma\/proposal\/<name>/)
   assert.equal(broker.consumed, 0); assert.equal(broker.calls.length, 0)
 })
 
 test('branch edit reads exact branch bytes and refuses stale draft base', async () => {
-  const broker = fixture(), input = { action: 'edit', branch: BRANCH, path: 'deploy/cloudflare/src/fixture.mjs', oldString: 'new', newString: 'fixed' }
+  const broker = fixture(), input = { action: 'edit', branch: BRANCH, path: 'deploy/cloudflare/src/crew-relay-tool.mjs', oldString: 'new', newString: 'fixed' }
   assert.equal((await broker.request(input)).value.content, 'fixed\n')
   assert.equal((await broker.request({ ...input, expectedHeadSha: BASE })).value.code, 'REPO_HEAD_CONFLICT')
   assert.equal(broker.calls.some(call => call.method === 'POST'), false)
@@ -245,12 +265,14 @@ test('stage proposal derives complete changed paths and exact canonical binding 
   assert.deepEqual(proposal.mergeBody, { action: 'merge_proposal', baseSha: BASE, branch: BRANCH, headSha: HEAD, treeSha: HEAD_TREE })
   assert.equal(proposal.binding.bodySha256, digest(canonicalJson(proposal.mergeBody))); assert.equal(proposal.binding.audience, ORIGIN)
   assert.equal(proposal.ciStatus, 'none'); assert.equal(proposal.changedFiles[0].t2Protected, true)
-  assert.deepEqual(proposal.changedFiles[0], { path: 'deploy/cloudflare/src/fixture.mjs', status: 'modified', additions: 1, deletions: 1, t2Protected: true })
+  assert.deepEqual(proposal.changedFiles[0], { path: 'deploy/cloudflare/src/crew-relay-tool.mjs', status: 'modified', additions: 1, deletions: 1, t2Protected: true })
   assert.equal(broker.calls.some(call => call.method === 'POST'), false)
 })
 
 test('stage_proposal admits core-sized immutable content with an actual compare response above 256 KiB', async () => {
-  const path = 'packages/experimental/webworker-runtime/src/x6/ball-loader.ts'
+  // A core-sized T2 file her proposals may change (ball-loader.ts itself is frozen: repo-frozen-paths.test.mjs; a file of
+  // her own edge folder is open for ADDITION only, so a change stands on her relay tool).
+  const path = 'deploy/cloudflare/src/crew-relay-tool.mjs'
   const content = 'export const marker = "new";\n' + '// source 😀 "quoted" \\value\n'.repeat(16000)
   assert.ok(Buffer.byteLength(content) > 400 * 1024)
   const compare = { base_commit: { sha: BASE }, merge_base_commit: { sha: BASE }, ahead_by: 1, behind_by: 0, status: 'ahead',
@@ -277,7 +299,7 @@ test('stage_proposal refuses compare responses beyond the finite 8 MiB ancestry 
 
 test('proposal inspection refuses any forbidden changed path before allowed-path projection', async () => {
   for (const path of ['.github/workflows/evil.yml', 'server/private/fixture.mjs', 'server/.hidden/fixture.mjs', 'unapproved/file.mjs']) {
-    const broker = fixture({ after: { 'deploy/cloudflare/src/fixture.mjs': 'new\n', [path]: 'forbidden\n' } })
+    const broker = fixture({ after: { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'new\n', [path]: 'forbidden\n' } })
     assert.equal((await broker.request({ action: 'stage_proposal', branch: BRANCH, title: 'Fix' })).status, 403)
     assert.equal(broker.proposals.length, 0)
   }
@@ -288,7 +310,7 @@ test('proposal inspection refuses truncated trees, nonregular changes and oversi
     const broker = fixture({ treeOverride: override })
     assert.notEqual((await broker.request({ action: 'stage_proposal', branch: BRANCH, title: 'Fix' })).status, 200); assert.equal(broker.proposals.length, 0)
   }
-  const after = Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`server/file-${index}.mjs`, 'new']))
+  const after = Object.fromEntries(Array.from({ length: 101 }, (_, index) => [`deploy/cloudflare/src/auma/file-${index}.mjs`, 'new']))
   const large = fixture({ before: {}, after })
   assert.equal((await large.request({ action: 'stage_proposal', branch: BRANCH, title: 'Fix' })).value.code, 'REPO_PROPOSAL_TOO_LARGE')
 })
@@ -301,7 +323,7 @@ test('CI evidence is the latest proposal-gate run on the exact branch and commit
   assert.ok(passed.calls.some(call => new URL(call.url).pathname.endsWith('/actions/runs/7/attempts/1/jobs')))
   assert.equal(passed.calls.some(call => call.url.includes('/check-runs')), false, 'other checks on the commit are not evidence')
   // An unrelated green check with no proposal-gate run is no evidence at all.
-  assert.equal((await fixture({ ci: gateCi({ runs: [], checks: [{ id: 1, head_sha: HEAD, status: 'completed', conclusion: 'success' }] }) }).stage()).ciStatus, 'none')
+  assert.equal((await fixture({ ci: gateCi({ runs: [], checksRuns: [], checks: [{ id: 1, head_sha: HEAD, status: 'completed', conclusion: 'success' }] }) }).stage()).ciStatus, 'none')
   for (const [ci, ciStatus] of [
     [gateCi({ runs: [gateRun({ status: 'in_progress', conclusion: null })] }), 'pending'],
     [gateCi({ runs: [gateRun({ conclusion: 'failure' })] }), 'failed'],
@@ -322,15 +344,15 @@ test('CI evidence is the latest proposal-gate run on the exact branch and commit
 })
 
 test('merge needs proposal-gate passed on the exact head now, not the card snapshot, and a refusal spends no approval', async () => {
-  let current = { runs: [] }
+  let current = { runs: [], checksRuns: [] }
   const broker = fixture({ ci: url => gateCi(current)(url) })
   const proposal = await broker.stage()
   assert.equal(proposal.ciStatus, 'none')
   const token = broker.grant(proposal.mergeBody)
   for (const [state, ciStatus] of [
-    [{ runs: [] }, 'none'],
+    [{ runs: [], checksRuns: [] }, 'none'],
     // One unnamed successful check and zero proposal-gate runs is not "CI passed".
-    [{ runs: [], checks: [{ id: 1, head_sha: HEAD, status: 'completed', conclusion: 'success' }] }, 'none'],
+    [{ runs: [], checksRuns: [], checks: [{ id: 1, head_sha: HEAD, status: 'completed', conclusion: 'success' }] }, 'none'],
     [{ runs: [gateRun({ status: 'in_progress', conclusion: null })] }, 'pending'],
     [{ runs: [gateRun({ conclusion: 'failure' })] }, 'failed'],
     [{ runs: [gateRun({ conclusion: 'cancelled' })] }, 'failed'],
@@ -359,8 +381,12 @@ test('merge consumes exact single-use approval and atomically binds both refs to
   assert.equal(result.status, 200); assert.equal(result.value.commitSha, HEAD); assert.equal(broker.refs.get('main'), HEAD)
   const updates = JSON.parse(broker.calls.find(call => call.method === 'POST').body).variables.input.refUpdates
   assert.deepEqual(updates, [{ name: 'refs/heads/main', beforeOid: BASE, afterOid: HEAD, force: false }, { name: 'refs/heads/' + BRANCH, beforeOid: HEAD, afterOid: HEAD, force: false }])
-  assert.deepEqual(broker.outcomes, [{ status: 'succeeded', commitSha: HEAD }]); assert.equal(broker.consumed, 1)
-  assert.equal((await broker.request(proposal.mergeBody, { token })).value.code, 'CLASS3_WEBAUTHN_REQUIRED')
+  // The attempt is marked as reaching the ref update before the dispatch (MUST 5: by its owner), then settled.
+  assert.deepEqual(broker.outcomes, [{ state: 'marked' }, { status: 'succeeded', commitSha: HEAD }]); assert.equal(broker.consumed, 1)
+  // A replay now meets the moved main in the reads, before any approval is asked for (the token's single use is proven
+  // where the reads still pass: repo-merge-approval.test.mjs).
+  assert.equal((await broker.request(proposal.mergeBody, { token })).value.code, 'REPO_HEAD_CONFLICT')
+  assert.equal(broker.consumed, 1); assert.equal(broker.calls.filter(call => call.method === 'POST').length, 1)
 })
 
 test('merge refuses mismatched route binding and preflight branch swap without mutations', async () => {
@@ -377,14 +403,14 @@ test('atomic CAS rejects main or branch movement after preflight without landing
     const proposal = await broker.stage(), result = await broker.request(proposal.mergeBody, { token: broker.grant(proposal.mergeBody) })
     assert.equal(result.status, 503); assert.equal(result.value.code, 'REPO_REF_OUTCOME_UNKNOWN')
     assert.equal(broker.refs.get('main'), moved === 'main' ? NEXT : BASE)
-    assert.equal(broker.outcomes[0].status, 'unknown')
+    assert.deepEqual(broker.outcomes[0], { state: 'marked' }); assert.equal(broker.outcomes.at(-1).status, 'unknown')
   }
 })
 
 test('lost mutation response records unknown and never retries or substitutes a REST update', async () => {
   const broker = fixture({ ci: PASSED_CI, hook: (url, init, { refs }) => { if (url.pathname === '/graphql') { refs.set('main', HEAD); throw new Error('Lost provider response') } } })
   const proposal = await broker.stage(), result = await broker.request(proposal.mergeBody, { token: broker.grant(proposal.mergeBody) })
-  assert.equal(result.value.code, 'REPO_REF_OUTCOME_UNKNOWN'); assert.equal(broker.outcomes[0].status, 'unknown')
+  assert.equal(result.value.code, 'REPO_REF_OUTCOME_UNKNOWN'); assert.equal(broker.outcomes.at(-1).status, 'unknown')
   assert.equal(broker.calls.filter(call => call.method === 'POST').length, 1)
   assert.equal(broker.calls.some(call => call.method === 'PATCH'), false)
 })
@@ -445,10 +471,10 @@ test('GraphQL internal errors after synthetic commits preserve unknown outcomes 
       refs.set(merge ? 'main' : BRANCH, merge ? HEAD : NEXT)
       return json({ data: null, errors: [{ type: 'INTERNAL', message: 'Resolver failed after write' }] })
     } })
-    const input = merge ? (await broker.stage()).mergeBody : { action: 'commit', branch: BRANCH, message: 'Fix', changes: [{ path: 'server/fixture.mjs', content: 'new' }] }
+    const input = merge ? (await broker.stage()).mergeBody : { action: 'commit', branch: BRANCH, message: 'Fix', changes: [{ path: 'deploy/cloudflare/src/crew-relay-tool.mjs', content: 'new' }] }
     const result = await broker.request(input, { token: merge ? broker.grant(input) : undefined })
     assert.equal(result.value.code, 'REPO_REF_OUTCOME_UNKNOWN'); assert.equal(broker.refs.get(merge ? 'main' : BRANCH), merge ? HEAD : NEXT)
-    if (merge) assert.equal(broker.outcomes[0].status, 'unknown')
+    if (merge) assert.equal(broker.outcomes.at(-1).status, 'unknown')
     assert.equal(broker.calls.filter(call => call.method === 'POST').length, 1)
   }
 })
@@ -463,7 +489,7 @@ test('proposal scans whole immutable trees even when a forbidden path would lie 
 })
 
 test('proposal screens unchanged context within changed files and refuses exact tree mismatch before dispatch', async () => {
-  const broker = fixture({ after: { 'deploy/cloudflare/src/fixture.mjs': 'new\nsynthetic-token-value\n' } })
+  const broker = fixture({ after: { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'new\nsynthetic-token-value\n' } })
   assert.equal((await broker.request({ action: 'stage_proposal', branch: BRANCH, title: 'Fix' })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
   const second = fixture({ ci: PASSED_CI }), staged = await second.stage(), input = { ...staged.mergeBody, treeSha: 'f'.repeat(40) }
   assert.equal((await second.request(input, { token: second.grant(input) })).value.code, 'REPO_HEAD_CONFLICT')
@@ -506,6 +532,13 @@ test('real HeadDO persists broker proposal, claims exact merge, clears stage and
   const env = { PUBLIC_HOST: 'fixture.example', OWNER_EMAIL: EMAIL, OWNER_PUBLIC_KEY_HEX: '11'.repeat(32), AUMLOK_CUSTODY_PEPPER: '22'.repeat(32) }, events = []
   const head = new X61HeadDurableObject({ storage, getWebSockets: () => [] }, env)
   head.broadcast = async value => { events.push(value) }
+  // The real HEAD consumes his approval in begin_merge's own transaction. AUMLOK needs a passkey ceremony, so a
+  // single-use synthetic approval store stands in for it here.
+  const used = new Set()
+  head.aumlokStore = { consumeApprovalInTransaction: async (tx, token, binding) => {
+    if (typeof token !== 'string' || !token.startsWith('fixture-approval-') || used.has(token)) throw Object.assign(new Error('CLASS3_WEBAUTHN_REQUIRED'), { code: 'CLASS3_WEBAUTHN_REQUIRED', status: 403 })
+    used.add(token); return { ok: true, binding, approvalId: null, expiresAt: Date.now() + 60000 }
+  } }
   const code = 'export const organ = "fixture";\n', sha = digest(code)
   const draft = { version: 'x6.1-ball/v1', epoch: 167, parentBallId: null, createdAt: '2026-11-11T00:00:00.000Z', authorPeerId: 'fixture-peer',
     entries: { 'seed-echo': { id: 'seed-echo', specifier: `ball:${sha}`, disabled: false, config: {}, previousSpecifiers: [] } }, modules: { [sha]: { sha256: sha, specifier: `ball:${sha}`, size: Buffer.byteLength(code) } } }
@@ -520,6 +553,7 @@ test('real HeadDO persists broker proposal, claims exact merge, clears stage and
   assert.equal(result.status, 200, JSON.stringify(result.value))
   const final = await status()
   assert.equal(final.stagedRepoProposal, null); assert.equal(final.lastRepoMergeOutcome.status, 'succeeded'); assert.equal(final.lastRepoMergeOutcome.commitSha, HEAD)
+  assert.equal(used.size, 1)
   assert.equal(events.some(event => event.type === 'repo:staged'), true); assert.equal(events.some(event => event.type === 'repo:merged' && event.commitSha === HEAD), true)
 })
 
@@ -545,7 +579,8 @@ test('approval expiry during immutable inspection prevents dispatch and finite o
   const proposal = await broker.stage(); expire = true
   const result = await broker.request(proposal.mergeBody, { token: broker.grant(proposal.mergeBody) })
   assert.equal(result.value.code, 'CLASS3_APPROVAL_EXPIRED'); assert.equal(broker.calls.some(call => call.method === 'POST'), false)
-  assert.equal(broker.outcomes[0].status, 'failed')
+  // HEAD refuses the expired approval in the step that would claim the attempt, so nothing is claimed or spent.
+  assert.deepEqual(broker.outcomes, []); assert.equal(broker.consumed, 0)
   for (const now of [() => NaN, () => Infinity, () => 0]) {
     const invalid = fixture({ now })
     assert.equal((await invalid.request({ action: 'branch_create', branch: BRANCH })).value.code, 'OWNER_SESSION_REQUIRED')
@@ -594,7 +629,8 @@ test('cancellation after provider dispatch is unknown even if the ignored reques
 })
 
 test('core-sized source over 400 KiB reads, edits, stages and commits exact bytes on a private branch', async () => {
-  const path = 'packages/experimental/webworker-runtime/src/x6/ball-loader.ts'
+  // A core-sized file her branches may carry (ball-loader.ts itself is frozen: repo-frozen-paths.test.mjs).
+  const path = 'deploy/cloudflare/src/auma/ball-manifest.mjs'
   const content = 'export const marker = "old";\n' + '// source 😀 "quoted" \\value\n'.repeat(16000)
   assert.ok(Buffer.byteLength(content) > 400 * 1024); assert.ok(Buffer.byteLength(content) < CLOUD_REPO_READ_LIMITS.fileBytes)
   const broker = fixture({ before: {}, after: { [path]: content } })
@@ -611,15 +647,15 @@ test('core-sized source over 400 KiB reads, edits, stages and commits exact byte
 })
 
 test('private file and commit byte caps stay finite across assembled edits and escaped envelopes', async () => {
-  const path = 'server/large.mjs', content = '\u0001'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes)
+  const path = 'deploy/cloudflare/src/auma/large.mjs', content = '\u0001'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes)
   const broker = fixture({ after: { [path]: content } })
   const staged = await broker.request({ action: 'write', branch: BRANCH, path, content })
   assert.equal(staged.status, 200); assert.equal(staged.value.content, content)
-  const commit = await broker.request({ action: 'commit', branch: BRANCH, message: 'Two bounded files', changes: [{ path, content }, { path: 'server/second.mjs', content }] })
+  const commit = await broker.request({ action: 'commit', branch: BRANCH, message: 'Two bounded files', changes: [{ path, content }, { path: 'deploy/cloudflare/src/auma/second.mjs', content }] })
   assert.equal(commit.status, 200)
   const over = await broker.request({ action: 'write', branch: BRANCH, path, content: content + 'x' })
   assert.equal(over.value.code, 'BROKER_CONTENT_INVALID')
-  const aggregate = await broker.request({ action: 'commit', branch: BRANCH, message: 'Too many bytes', changes: [{ path, content }, { path: 'server/second.mjs', content }, { path: 'server/third.mjs', content: 'x' }] })
+  const aggregate = await broker.request({ action: 'commit', branch: BRANCH, message: 'Too many bytes', changes: [{ path, content }, { path: 'deploy/cloudflare/src/auma/second.mjs', content }, { path: 'deploy/cloudflare/src/auma/third.mjs', content: 'x' }] })
   assert.equal(aggregate.value.code, 'REPO_CHANGE_INVALID')
   const assembled = fixture({ after: { [path]: 'x'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes - 6) + 'TARGET' } })
   assert.equal((await assembled.request({ action: 'edit', branch: BRANCH, path, oldString: 'TARGET', newString: 'TOO-LONG' })).value.code, 'BROKER_CONTENT_INVALID')
@@ -628,7 +664,7 @@ test('private file and commit byte caps stay finite across assembled edits and e
 })
 
 test('larger source reads never widen the compare_files 256 KiB wire limit or secret checks', async () => {
-  const path = 'server/large.mjs', content = 'x'.repeat(300 * 1024)
+  const path = 'deploy/cloudflare/src/auma/large.mjs', content = 'x'.repeat(300 * 1024)
   const broker = fixture({ after: { [path]: content } })
   assert.equal((await broker.request({ action: 'read', branch: BRANCH, path })).status, 200)
   assert.equal((await broker.request({ action: 'compare_files', ref: HEAD, leftPath: path, rightPath: path })).status, 413)

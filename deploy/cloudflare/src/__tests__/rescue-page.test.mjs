@@ -18,6 +18,7 @@ import { rescueKit } from '../rescue-kit.mjs'
 import { RESCUE_PAGE, rescuePageResponse, rescueBusyResponse, wantsRescueDocument } from '../rescue-page.mjs'
 import { composeRescuePageScript, rescuePageScriptModule, composeLocalConsoleScript, composeMemoryConsoleScript } from '../rescue-page.generate.mjs'
 import { FakeIndexedDb, FakeLocalStorage, createFakeVault, fakeFsFromEntries, rowBreaksRule, fileEntry, dirEntry, goneEntry } from './rescue-fakes.mjs'
+import { waitFor } from './wait-for.mjs'
 
 const DB = 'aukora-x6-vfs'
 const PIECE = 64
@@ -150,7 +151,7 @@ test('her app upgrading its storage mid-run closes the connection and stops with
 
 // ── MUST 2: what is copied, and what is not ─────────────────────────────────────────────────────────────────────────
 
-const SECRET_BASES = ['.credentials.yaml', 'credentials.yaml', 'session.cap', '.afferent-probe', 'ed25519-keypair.json', '.credentials', '.ssh', '.aws', '.transport', 'pepper.v1']
+const SECRET_BASES = ['.credentials.yaml', 'credentials.yaml', 'session.cap', '.afferent-probe', 'ed25519-keypair.json', '.credentials', '.ssh', '.aws', '.transport', 'pepper.v1', 'checkpoint-signer.v1.json']
 
 test('the secret rule: every name, with any ending after the mark, dotted or not; ordinary names pass', () => {
   const kit = rescueKit({ indexedDB: null, localStorage: null })
@@ -186,6 +187,8 @@ test('secret-shaped rows are skipped as path rows, reset rows, waiting saves and
     ['/dsh/home/.ssh/id_ed25519', fileEntry('key')],
     ['/dsh/home/.env.local', fileEntry('A=1')],
     ['/dsh/home/auma/pepper.v1.next', fileEntry('p')],
+    // job 2: a secret-shaped row INSIDE her private room is judged by its key first, like any other: never read.
+    ['/dsh/home/auma/private/ed25519-keypair.json', fileEntry('made-up pair')],
     ['@x6-vfs-reset:/dsh/home/.credentials.yaml.3fa9c1.tmp', { kind: 'subtree-reset', path: '/dsh/home/.credentials.yaml.3fa9c1.tmp' }],
     ['@x6-vfs-reset:/dsh/home/auma', { kind: 'subtree-reset', path: '/dsh/home/auma' }],
     ['@x6-deferred-journal:/dsh/home/.aukora-cache/x.jsonl', { kind: 'deferred-journal', path: '/dsh/home/.aukora-cache/x.jsonl', notBefore: 1, failures: 0 }],
@@ -198,7 +201,7 @@ test('secret-shaped rows are skipped as path rows, reset rows, waiting saves and
   // The rows and the client travel; the skipped list names only shapes (checked below).
   const sent = JSON.parse(new TextDecoder().decode(w.vault.rescues.get(result.id)))
   const text = JSON.stringify([sent.rows, sent.client])
-  for (const fragment of ['.credentials', 'session.cap', '.ssh', '.env', 'pepper.v1', '.aukora-', 'apiKey', 'ession' + 'Token', 'secret: ']) {
+  for (const fragment of ['.credentials', 'session.cap', '.ssh', '.env', 'pepper.v1', '.aukora-', 'apiKey', 'ession' + 'Token', 'secret: ', 'keypair', 'made-up pair']) {
     assert.ok(!text.includes(fragment), fragment + ' must not travel')
   }
   const keys = sent.rows.map(row => row.key)
@@ -210,6 +213,7 @@ test('secret-shaped rows are skipped as path rows, reset rows, waiting saves and
     { shape: 'file or folder named .credentials.yaml plus an ending', count: 3 },
     { shape: 'file or folder named .env…', count: 1 },
     { shape: 'file or folder named .ssh', count: 2 },
+    { shape: 'file or folder named ed25519-keypair.json', count: 1 },
     { shape: 'file or folder named pepper.v1 plus an ending', count: 1 },
     { shape: 'file or folder named session.cap plus an ending', count: 1 },
     { shape: 'queued save holding session.cap plus an ending', count: 1 },
@@ -219,7 +223,9 @@ test('secret-shaped rows are skipped as path rows, reset rows, waiting saves and
   ])
   // Secret-shaped rows are never even read.
   const read = new Set(w.idb.log.requests.filter(request => request.method === 'get').map(request => request.key))
-  assert.ok(![...read].some(key => /credentials|session\.cap|\.ssh|\.env|pepper|\.aukora-/.test(key)), [...read].join(','))
+  assert.ok(![...read].some(key => /credentials|session\.cap|\.ssh|\.env|pepper|\.aukora-|keypair/.test(key)), [...read].join(','))
+  // ... and one in her private room is listed by kind above, never counted as one of the room's files.
+  assert.deepEqual(result.leftAtOrigin, { private: { files: 0, bytes: 0 } })
   assert.equal(w.ls.writes.length, 0)
 })
 
@@ -639,6 +645,11 @@ test('the page: headers, CSP hashes, the committed script, the Spatial palette b
   assert.ok(html.includes('<style>' + RESCUE_PAGE.style + '</style>'))
   assert.match(html, /<title>Rescue copy<\/title>/)
   assert.match(html, /<h1>A second copy of this browser<\/h1>/)
+  // job 2: before anything is pressed, the intro says what each way out holds (her private folder: local pack only).
+  assert.ok(html.includes('<p>This page copies what this browser holds of hers: every thread, her home files, her storage’s own records and her Auma Live chat logs. '
+    + 'Other saved settings stay in this browser. The copy saved on this computer holds every home file; the copy in her cloud holds every home file '
+    + 'except her private folder, which stays in this browser and is said by its size only. Secret files ('), 'the intro')
+  assert.ok(!html.includes('every thread, every home file'), 'the old intro is gone')
   assert.match(html, /<button id="rescue-cloud" type="button" disabled>Copy to her cloud<\/button>/)
   assert.match(html, /<button id="rescue-local" type="button" disabled>Save a copy on this computer<\/button>/)
   assert.match(html, /id="rescue-status" role="status"/)
@@ -720,7 +731,8 @@ test('the kit runs in a context with no page and no outer names; the page script
       get firstChild() { return this.children[0] ?? null }, addEventListener(type, listener) { this.listeners[type] = listener },
       appendChild(child) { this.children.push(child) }, removeChild(child) { this.children.splice(this.children.indexOf(child), 1) },
       click() { this.clicked = true }, remove() {} })
-    for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin']) elements.set(id, element(id))
+    for (const id of ['rescue-cloud', 'rescue-local', 'rescue-status', 'rescue-detail', 'rescue-left', 'rescue-left-list', 'rescue-signin',
+    'rescue-join', 'rescue-state', 'rescue-threads']) elements.set(id, element(id))
     elements.get('rescue-left').hidden = true; elements.get('rescue-signin').hidden = true
     const created = []
     const assigned = []
@@ -736,7 +748,7 @@ test('the kit runs in a context with no page and no outer names; the page script
     for (const id of ['rescue-cloud', 'rescue-local', 'rescue-signin']) assert.equal(typeof elements.get(id).listeners.click, 'function', id)
     assert.equal(elements.get('rescue-cloud').disabled, false)
     elements.get(button).listeners.click()
-    for (let spins = 0; spins < 2000 && elements.get('rescue-cloud').disabled; spins++) await later(1)
+    await waitFor(() => !elements.get('rescue-cloud').disabled, 'the run to end (rescue-cloud enabled again)')
     return { v, elements, created, assigned }
   }
   const cloud = await run()

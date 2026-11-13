@@ -8,8 +8,9 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import {
-  approveAndMerge, CHANGED_FILES_SHOWN, mergeOutcomeWords, readPromotionStatus, repoProposalProblems,
-  type RepoProposal, type RepoProposalRead,
+  approveAndMerge, approveAndRelease, CHANGED_FILES_SHOWN, durableLanding, HELD_ATTEMPT_WORDS, heldAttemptOf, mergeOutcomeWords,
+  needsReconcile, readPromotionAnswer, reconcileHeld, repoProposalProblems, shownAttemptIds,
+  type ForgettableRelease, type HeldAttempt, type RepoProposal, type RepoProposalRead,
 } from '../aumlok/repo-proposal.ts'
 import type { Class3Action, Class3Dependencies } from '../aumlok/class3-approval.ts'
 import { FieldTable, Lead, PortalButton, PortalCell, RecordList, RecordRow, StatusPill, type Tone } from '../primitives/index.ts'
@@ -33,10 +34,18 @@ interface Checked {
   readonly problems: readonly string[]
   readonly terms: Class3Action
 }
-type CardRead = { readonly kind: 'quiet' } | { readonly kind: 'staged'; readonly checked: Checked } | { readonly kind: 'malformed' }
+/** `held`: an earlier merge of it HEAD holds as unknown past its margin (MUST 4); only a release ends it. */
+type CardRead = { readonly kind: 'quiet' } | { readonly kind: 'staged'; readonly checked: Checked; readonly held: HeldAttempt | null } | { readonly kind: 'malformed' }
   | { readonly kind: 'unread'; readonly why: string }
-/** `about`: the proposal the line is about; `carried`: a line that explains why the card now shows another one. */
-type Outcome = { readonly state: 'working' | 'merged' | 'refused' | 'unclear'; readonly text: string; readonly about: string }
+/** `about`: the proposal the line is about; `attemptId`: the merge attempt it is about, when it is about one (a release);
+ * `forget`: at the bound, the oldest kept release a release may forget. */
+interface Outcome {
+  readonly state: 'working' | 'merged' | 'released' | 'refused' | 'unclear'
+  readonly text: string
+  readonly about: string
+  readonly attemptId?: string
+  readonly forget?: ForgettableRelease
+}
 
 const CI_WORDS: Record<RepoProposal['ciStatus'], { readonly text: string; readonly tone: Tone; readonly note: string | null }> = {
   passed: { text: 'CI passed', tone: 'mint', note: null },
@@ -48,15 +57,29 @@ const CI_WORDS: Record<RepoProposal['ciStatus'], { readonly text: string; readon
 const short = (sha: string): string => sha.slice(0, 12)
 
 async function readCard(signal: AbortSignal, fetchImpl: typeof fetch | undefined): Promise<CardRead> {
-  const { repo } = await readPromotionStatus(signal, fetchImpl)
-  return checkedRead(repo)
+  const { repo, body } = await readPromotionAnswer(signal, fetchImpl)
+  return checkedRead(repo, body)
 }
-async function checkedRead(repo: RepoProposalRead): Promise<CardRead> {
+/** The card's own read: when HEAD holds a merge past its margin, or one he released, the host is asked
+ * to reconcile from GitHub first and the status is read again, so a merge that landed is said, never left as held or void.
+ * Review, MUST 3: whether it landed is read from HEAD's DURABLE status (the read after the reconcile, or the
+ * only read), for the attempts the card shows (`watching`: its own release's and the held one's; and those of this read),
+ * never from the reconcile's answer: another tab may have reconciled it, or this card's answer may have been lost. */
+async function readCardReconciled(signal: AbortSignal, fetchImpl: typeof fetch | undefined, watching: readonly string[])
+  : Promise<{ readonly read: CardRead; readonly landed: { readonly attemptId: string; readonly text: string } | null }> {
+  const first = await readPromotionAnswer(signal, fetchImpl)
+  const shown = [...watching, ...shownAttemptIds(first.body)]
+  if (!needsReconcile(first.body)) return { read: await checkedRead(first.repo, first.body), landed: durableLanding(first.body, shown) }
+  await reconcileHeld(signal, fetchImpl ?? globalThis.fetch)
+  const again = await readPromotionAnswer(signal, fetchImpl)
+  return { read: await checkedRead(again.repo, again.body), landed: durableLanding(again.body, shown) }
+}
+async function checkedRead(repo: RepoProposalRead, body: unknown): Promise<CardRead> {
   if (repo.kind === 'malformed') return { kind: 'malformed' }
   if (repo.kind === 'unread') return { kind: 'unread', why: repo.why }
   if (repo.kind !== 'staged') return { kind: 'quiet' }
   const { problems, terms } = await repoProposalProblems(repo.proposal, globalThis.location.origin)
-  return { kind: 'staged', checked: { proposal: repo.proposal, canonical: repo.canonical, problems, terms } }
+  return { kind: 'staged', checked: { proposal: repo.proposal, canonical: repo.canonical, problems, terms }, held: heldAttemptOf(body) }
 }
 
 export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImpl, onShown }: RepoProposalCellProps) {
@@ -69,14 +92,22 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
   const [stale, setStale] = useState<string | null>(null)
   /** When the card last read HEAD: a check this recent is used as it is at the tap (Safari). */
   const [readAt, setReadAt] = useState(0)
+  /** The attempts the card is showing (its outcome's, the held one's), for the next read. */
+  const watching = useRef<readonly string[]>([])
+  // Declared before the read below, so a read started by the same render already sees them.
+  useEffect(() => {
+    const heldNow = read.kind === 'staged' ? read.held : null
+    watching.current = [...(outcome?.attemptId === undefined ? [] : [outcome.attemptId]), ...(heldNow === null ? [] : [heldNow.attemptId])]
+  }, [outcome, read])
   useEffect(() => {
     if (!active) return
     const controller = new AbortController()
     const startedAt = Date.now()
-    void readCard(controller.signal, fetchImpl).then((next) => {
+    void readCardReconciled(controller.signal, fetchImpl, watching.current).then(({ read: next, landed }) => {
       // During an approval nothing replaces the card the owner is acting on; a read that failed keeps the proposal shown,
       // and says so on it.
       if (controller.signal.aborted || busyRef.current) return
+      if (landed !== null) setOutcome({ state: 'merged', text: landed.text, about: next.kind === 'staged' ? next.checked.canonical : '', attemptId: landed.attemptId })
       setStale(next.kind === 'unread' ? next.why : null)
       if (next.kind !== 'unread') setReadAt(startedAt)
       setRead(prev => (next.kind === 'unread' && prev.kind === 'staged' ? prev : next))
@@ -98,6 +129,7 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
   useEffect(() => { if (!active) reread.cancel() }, [active, reread])
 
   const checked = read.kind === 'staged' ? read.checked : null
+  const held = read.kind === 'staged' ? read.held : null
   const shownOutcome = outcome !== null && (checked === null || outcome.about === checked.canonical) ? outcome : null
   // Nothing staged and nothing to say: no card. A route that failed is said only while a proposal was being shown.
   const shows = !(checked === null && read.kind !== 'malformed' && shownOutcome === null)
@@ -125,7 +157,7 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
     try {
       // READ AGAIN AT THE CLICK (when the card's check is not fresh): the passkey is asked only for the proposal HEAD holds now.
       const recheckAt = Date.now()
-      const now: CardRead = fresh ? { kind: 'staged', checked } : await readCard(signal, fetchImpl)
+      const now: CardRead = fresh ? { kind: 'staged', checked, held } : await readCard(signal, fetchImpl)
       if (now.kind !== 'staged' || now.checked.canonical !== checked.canonical) {
         // The line goes with the proposal the card now shows (it explains why that one is there).
         setOutcome({ state: 'refused', about: now.kind === 'staged' ? now.checked.canonical : checked.canonical, text: 'Not approved: what HEAD '
@@ -161,6 +193,30 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
     }
   }
 
+  // MUST 4: the owner releases a held attempt with his passkey over the release's own terms.
+  // Review, MUST: `forget` (the oldest kept release, as the host named it) rides in the terms his passkey signs.
+  const release = async (attempt: HeldAttempt, about: string, forget?: ForgettableRelease): Promise<void> => {
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    const controller = new AbortController()
+    approval.current = controller
+    const attemptId = attempt.attemptId
+    setOutcome({ state: 'working', about, text: 'Waiting for Touch ID…', attemptId })
+    try {
+      const result = await approveAndRelease(attempt, { ...ceremony, signal: controller.signal }, fetchImpl, forget)
+      const offer = result.forget === undefined ? {} : { forget: result.forget }
+      setOutcome({ state: result.kind, about, text: result.text, attemptId, ...offer })
+    } catch (error) {
+      setOutcome({ state: 'unclear', about, attemptId, text: `No clear answer (${error instanceof Error ? error.message : String(error)}). Refresh reads it again.` })
+    } finally {
+      if (approval.current === controller) approval.current = null
+      busyRef.current = false
+      setBusy(false)
+      setTick(n => n + 1)
+    }
+  }
+
   const proposal = checked?.proposal ?? null
   const ci = proposal === null ? null : CI_WORDS[proposal.ciStatus]
   const t2 = proposal === null ? 0 : proposal.changedFiles.filter(file => file.t2Protected).length
@@ -185,6 +241,28 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
         ) : (
           <>
             {ci?.note === null || ci === null ? null : <Lead><span role="status" data-repo-proposal-ci-warning="">{ci.note}</span></Lead>}
+            {held === null ? null : (
+              <Lead>
+                <span role="status" data-repo-proposal-held="">{HELD_ATTEMPT_WORDS[held.state]}</span>
+                {' '}
+                <button type="button" className="x5-field" data-repo-proposal-release="" disabled={busy || !ownerBound}
+                  onClick={() => { void release(held, checked.canonical) }}>
+                  Release with Touch ID
+                </button>
+                {shownOutcome?.forget === undefined || shownOutcome.attemptId !== held.attemptId ? null : (
+                  <>
+                    {' '}
+                    <button type="button" className="x5-field" data-repo-proposal-release-forget="" disabled={busy || !ownerBound}
+                      onClick={() => {
+                        const forget = shownOutcome.forget
+                        if (forget !== undefined) void release(held, checked.canonical, forget)
+                      }}>
+                      {`Release and forget ${short(shownOutcome.forget.headSha)} with Touch ID`}
+                    </button>
+                  </>
+                )}
+              </Lead>
+            )}
             {checked.problems.length > 0 ? (
               <Lead><span data-repo-proposal-problems="">{`No passkey is asked for: ${checked.problems.join(' · ')}`}</span></Lead>
             ) : (

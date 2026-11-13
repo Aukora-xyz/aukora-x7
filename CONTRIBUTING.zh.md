@@ -13,7 +13,7 @@ Aukora 正在构建一个由个人拥有的 AI。它可以修改自己的软件�
 | 标签 | 含义 |
 | --- | --- |
 | IMPLEMENTED | 代码和测试在这棵树中。 |
-| RECORDED RUN | 显示在 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md) 中。 |
+| RECORDED RUN（属于较早的一棵树） | 显示在 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md) 中。 |
 | INDEPENDENTLY VERIFIED | 由作者以外的人运行过。目前还没有任何内容带这个标签。 |
 | UNVERIFIED | 有人声称或写下，但这里没有测试支撑它，也没有运行显示它。 |
 | DIRECTION | 尚未建成。 |
@@ -34,22 +34,22 @@ node scripts/verify-lite.mjs
 ```
 
 - 需要 Node 24.9 或更高版本，别的都不需要。它用 Node 自带的测试运行器逐个运行 22 个测试文件，把每个文件的失败数与 [docs/KNOWN-RED-TESTS.zh.md](docs/KNOWN-RED-TESTS.zh.md) 中该文件那一行对照，只有每个失败都在那份清单上时才以 0 退出。
-- 它打印的最后一行应为：`verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`。这是在一台机器上（Node 24.11.1）连续三次、每次 40 到 45 秒看到的。它不在运行记录里，所以在你自己看到之前，请视为 UNVERIFIED。
-- 12 个失败分布在三个文件中：`server/memory.test.mjs` 3 个，`server/predict.test.mjs` 6 个，`server/receipts-policy.test.mjs` 3 个。这次运行与第 3 节中记录的运行不同，规模也小得多，所以它的数字不是项目的状态。
+- 它打印的最后一行应为：`verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`。这是在一台机器上（Node 24.11.1）连续三次、每次 40 到 45 秒看到的。它不在运行记录（属于较早的一棵树）里，所以在你自己看到之前，请视为 UNVERIFIED。
+- 12 个失败分布在三个文件中：`server/memory.test.mjs` 3 个，`server/predict.test.mjs` 6 个，`server/receipts-policy.test.mjs` 3 个。这次运行与第 3 节中记录的运行（属于较早的一棵树）不同，规模也小得多，所以它的数字不是项目的状态。
 - 它**不**运行权限测试：只能用一次的批准、证明失败规则、仅限所有者的 id、night grant（一次 passkey 批准，覆盖之后一组有边界的普通修改）、转换分类器，以及回滚缺口的复现。这些测试导入本仓库没有附带的 npm 包。脚本在输出中会这样说明。
 - `--with-packages` 在安装之后增加 16 个权限测试文件。该选项为 UNVERIFIED：还没有人从干净安装运行过它。
 - 它是对新克隆的冒烟检查，不能证明权限规则成立。
 
 ## 3. 安装并运行完整测试套件
 
-这些步骤取自那一次记录的运行，见 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)。那次运行在一台机器上（Node v24.11.1、pnpm 11.28.5、vitest 4.1.11），`HOME`、XDG 目录、npm 缓存和 `TMPDIR` 都指向一个临时文件夹，并且一次只做一个重步骤。请照做：把 `HOME` 设为一个空文件夹。
+这些步骤取自那一次记录的运行（属于较早的一棵树），见 [docs/RUN-RECORD.zh.md](docs/RUN-RECORD.zh.md)。那次运行在一台机器上（Node v24.11.1、pnpm 11.28.5、vitest 4.1.11），`HOME`、XDG 目录、npm 缓存和 `TMPDIR` 都指向一个临时文件夹，并且一次只做一个重步骤。请照做：把 `HOME` 设为一个空文件夹。
 
 | 步骤 | 命令 | 记录的结果 |
 | --- | --- | --- |
-| 安装 | `pnpm install --frozen-lockfile` | RECORDED RUN 使用了 `--offline --store-dir <a local pnpm store>`，注册表元数据已在缓存中：1,458 个包。在线安装没有记录：UNVERIFIED。 |
-| 构建 | `DSH_CLIENT_COMMIT_HASH=0000000 PORT=<a free port> node server/build-preview.mjs` | RECORDED RUN：退出码 0，`apps/web/dist` 中有 260 个文件。当时设置了 `NODE_OPTIONS=--max-old-space-size=5632`。 |
-| 启动 | `PORT=<a free port> X6_OWNER_EMAIL=<made up> X6_OWNER_PUBLIC_KEY_HEX=<64 random hex> pnpm run x6:start` | RECORDED RUN：本机宿主在 127.0.0.1 上监听，并用 SIGTERM 停止。 |
-| 试运行 | `node server/cloudflare-bootstrap-cli.mjs --dry-run` | RECORDED RUN：ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`，epoch 1。ball 是按哈希点名每个 organ（Auma 的一个可替换模块）的清单；它的 epoch 是它的版本号。 |
+| 安装 | `pnpm install --frozen-lockfile` | RECORDED RUN（属于较早的一棵树） 使用了 `--offline --store-dir <a local pnpm store>`，注册表元数据已在缓存中：1,458 个包。在线安装没有记录：UNVERIFIED。 |
+| 构建 | `DSH_CLIENT_COMMIT_HASH=0000000 PORT=<a free port> node server/build-preview.mjs` | RECORDED RUN（属于较早的一棵树）：退出码 0，`apps/web/dist` 中有 260 个文件。当时设置了 `NODE_OPTIONS=--max-old-space-size=5632`。 |
+| 启动 | `PORT=<a free port> X6_OWNER_EMAIL=<made up> X6_OWNER_PUBLIC_KEY_HEX=<64 random hex> pnpm run x6:start` | RECORDED RUN（属于较早的一棵树）：本机宿主在 127.0.0.1 上监听，并用 SIGTERM 停止。 |
+| 试运行 | `node server/cloudflare-bootstrap-cli.mjs --dry-run` | RECORDED RUN（属于较早的一棵树）：ball `a26b7a027014e6af067a0a8433c49c56639ac09642726110c91f8300e9e81624`，epoch 1。ball 是按哈希点名每个 organ（Auma 的一个可替换模块）的清单；它的 epoch 是它的版本号。 |
 
 两条警告：
 
@@ -66,7 +66,7 @@ node scripts/verify-lite.mjs
 | 运行时 | `pnpm exec vitest run packages/experimental/webworker-runtime/tests --maxWorkers=3` | 1,711 | 1,708 | 3 |
 | 全部 | | 5,502 | 5,399 | 90 |
 
-这些数字全部是 RECORDED RUN。90 个失败中有 89 个在红色清单上；第 90 个（`packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`，“execa refuses 1 called symbol(s)”）由那次运行发现，现已列入。在 macOS 和 Windows 上，`vitest.config.ts` 排除了两个只在 Linux 上运行的运行时规格文件。
+这些数字全部是 RECORDED RUN（属于较早的一棵树）。90 个失败中有 89 个在红色清单上；第 90 个（`packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`，“execa refuses 1 called symbol(s)”）由那次运行发现，现已列入。在 macOS 和 Windows 上，`vitest.config.ts` 排除了两个只在 Linux 上运行的运行时规格文件。
 
 那次运行没有浏览器会话、没有 Cloudflare 部署、没有模型调用，也没有 passkey 仪式。你机器上的通过同样不覆盖这些。
 

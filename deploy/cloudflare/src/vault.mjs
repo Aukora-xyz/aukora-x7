@@ -588,7 +588,7 @@ async function listRescues(ctx) {
     }
   }
   const out = [...rescues].map(([id, e]) => ({ id, verifiedAt: e.verifiedAt, files: e.files, bytes: e.bytes, clientId: e.clientId }))
-  return json({ ok: true, rescues: out, ...(listed.truncated === true ? { more: true } : {}) }, 200)
+  return json({ ok: true, rescues: out, limit: ctx.maxRescues, ...(listed.truncated === true ? { more: true } : {}) }, 200)
 }
 
 /** @param {Ctx} ctx @param {string} id @param {string[]} cursors */

@@ -91,6 +91,8 @@ export async function mountE4(options: {
   plugin?: (plugin: unknown, config: unknown) => unknown
   /** The worker's own node builtins (`fs`, `path`, `crypto`, ...) over this VFS, as worker.ts gives her loader. */
   nodeBuiltins?: boolean
+  /** A synthetic build pin, installed before runtime boot. */
+  buildIdentity?: Record<string, unknown>
   /** A REAL host instead of the stand-ins: a Cordis Context with DSH's ToolsService mounted, and the
    *  real `@deepseek-ai/dsh-tools` module for her loader's `defineTool`. `plugin` is then unused. */
   host?: { context: { tools: { get(name: string): unknown } }; dshTools: unknown }
@@ -125,7 +127,7 @@ export async function mountE4(options: {
   vi.stubGlobal('WebSocket', FakeSocket)
   vi.stubGlobal('__X6_SERVICES__', {})
   vi.stubGlobal('__X6_BALL__', undefined)
-  vi.stubGlobal('__X6_BUILD_IDENTITY__', undefined)
+  vi.stubGlobal('__X6_BUILD_IDENTITY__', options.buildIdentity)
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'info').mockImplementation(() => {})

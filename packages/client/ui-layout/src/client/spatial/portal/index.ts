@@ -6,7 +6,8 @@
  * slots. Each entry below says where its facts come from; the ones x6.1 has no source for say "not connected yet".
  *
  *   AUKORA APPS (triangle)  Auma Live, Auma Lingwa, Zeta Harp, Nostr Messages, Media and Documents, Auma Canvas
- *   SYSTEM (square)         Work (its own module), Sovereignty, AUMLOK, Identity, Aura Coherence, the four Settings sections
+ *   SYSTEM (square)         Notices, Work (its own module), Sovereignty, AUMLOK, Identity, Aura Coherence, the four Settings
+ *                           sections
  *   MY APPS (circle)        Dakini Code
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -30,6 +31,8 @@ import {
 import { createScheduleDoor, type ScheduleActiveEdit } from './sovereignty-panels.ts'
 import { StockAppFrames } from './StockAppFrames.tsx'
 import { ApprovalWaiting, type ApprovalWaitingInjected } from './ApprovalWaiting.tsx'
+import { NoticesMenu, NoticesSurface } from './NoticesSurface.tsx'
+import { NOTICES_SURFACE } from './notices.ts'
 import './spatial-layer.css'
 import './spatial-layer-fit.css'
 
@@ -67,10 +70,14 @@ export function installPortal(ctx: ClientContext, openSurface?: (id: string) => 
 
   ctx.slots.inject('shell.menu.apps', () => ctx.slots.register({ name: 'shell.menu.apps', id: 'aukora-apps' }, AukoraAppsMenu))
   ctx.slots.inject('shell.menu.yours', () => ctx.slots.register({ name: 'shell.menu.yours', id: 'aukora-yours' }, MyAppsMenu))
+  // NOTHING FLOATS: Notices is the system menu's first entry, above Work (order 0); its surface lists them.
+  ctx.slots.inject('shell.menu.system', () => ctx.slots.register(
+    { name: 'shell.menu.system', id: NOTICES_SURFACE, order: -10 }, NoticesMenu))
   ctx.slots.inject('shell.menu.system', () => ctx.slots.register({ name: 'shell.menu.system', id: 'aukora-system', order: 10 }, SystemMenu))
   ctx.slots.inject('shell.menu.system', () => ctx.slots.register({ name: 'shell.menu.system', id: 'aukora-settings', order: 20 }, SettingsMenu))
 
   ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: 'aukora-stock-apps' }, StockAppFrames))
+  ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: NOTICES_SURFACE }, NoticesSurface))
   // Wave 4 (AC1): "Approval waiting" on the outer chrome, above every surface, while HEAD holds something for the passkey.
   if (openSurface !== undefined) {
     ctx.slots.inject('shell.overlay', () => ctx.slots.register({

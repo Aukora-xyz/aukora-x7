@@ -3,6 +3,7 @@ import { canonicalJson } from './owner-grant-policy.mjs'
 import { EDGE_DIAGNOSTIC_LIMITS, projectDiagnostics } from './edge-diagnostics.mjs'
 import { validStateDiffBase, validMirrorIdentity, projectHeadStateDiff } from './state-diff.mjs'
 import { isDeployInertRepoPath } from '../../ci/deploy-paths.mjs'
+import { PROPOSAL_PATH_NEXTS, caseTwinPaths, isPlainRepoPath, proposalPathRefusal } from '../../ci/frozen-paths.mjs'
 import { headProblem, mirrorCopyRefusals, referencedModules, serializeHead, sha256Hex } from '../../ci/mirror-copy.mjs'
 
 const REPOSITORY = 'your_org_x/your-node'
@@ -192,18 +193,25 @@ async function boundedJson(source, maximum, signal, observeBytes) {
   try { return JSON.parse(decoder.decode(bytes)) } catch (_error) { fail('BROKER_BODY_INVALID') }
 }
 
-async function withDeadline(signal, operation) {
+/**
+ * Run `operation` with a signal that aborts at the deadline (or when `signal` does). Without `settleMs` the answer is
+ * BROKER_TIMEOUT at that moment. With `settleMs`, the operation is told (its signal aborts) and given up to that long to
+ * settle its own bookkeeping, and ITS answer is the answer: a merge cut off before sending says in the same call that the
+ * approval is spent and nothing changed (nothing runs after the response, there is no waitUntil).
+ */
+async function withDeadline(signal, operation, { settleMs = 0 } = {}) {
   const controller = new AbortController()
-  let timeout, onAbort
+  let timeout, grace, onAbort
   const aborted = new Promise((resolve, reject) => {
-    onAbort = () => { controller.abort(); reject(Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408 })) }
+    const refuse = () => reject(Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408 }))
+    onAbort = () => { controller.abort(); if (settleMs <= 0) refuse(); else grace ??= setTimeout(refuse, settleMs) }
     timeout = setTimeout(onAbort, CLOUD_BROKER_LIMITS.timeoutMs)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
   try {
-    if (signal?.aborted) { onAbort(); return await aborted }
+    if (signal?.aborted) { controller.abort(); throw Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408 }) }
     return await Promise.race([operation(controller.signal), aborted])
-  } finally { clearTimeout(timeout); signal?.removeEventListener('abort', onAbort) }
+  } finally { clearTimeout(timeout); clearTimeout(grace); signal?.removeEventListener('abort', onAbort) }
 }
 
 async function upstream(networkFetch, url, init, signal, mutation = false, maximum = CLOUD_BROKER_LIMITS.responseBytes) {
@@ -646,9 +654,26 @@ function requireOwner(env, context) {
     || !Number.isSafeInteger(now) || now < 1 || !Number.isFinite(access.expires) || access.expires * 1000 <= now) fail('OWNER_SESSION_REQUIRED', 403)
 }
 
-function branchPath(path, env) {
+/** A path on her branches, as judged before the fence: .github/ refused, the path canonical and publishable. */
+function branchPathName(path, env) {
   if (typeof path === 'string' && (path === '.github' || path.startsWith('.github/'))) fail('REPO_WORKFLOW_PATH_REFUSED', 403)
   return safeText(requirePath(path, true), env, 1024)
+}
+
+/** Refuse a proposal path by the one judgement of deploy/ci/frozen-paths.mjs (plain, frozen, test main has, open). */
+function refuseProposalPath(path, status, twin = false) {
+  const refusal = proposalPathRefusal(path, status, { twin })
+  if (refusal) fail(refusal.code, 403, { protectedPath: path, next: refusal.next })
+}
+
+/** Her branches carry only plain, open, unfrozen paths (deploy/ci/frozen-paths.mjs): refused at write, before anything
+ * reaches GitHub. A write cannot tell an addition from a change relative to main, so it is judged as an addition (a new
+ * test file may be written); stage, merge and CI judge the real status with both trees in hand. */
+function branchPath(path, env) {
+  if (typeof path === 'string' && path.length > 0 && !isPlainRepoPath(path)) refuseProposalPath(path, 'added')
+  const canonical = branchPathName(path, env)
+  refuseProposalPath(canonical, 'added')
+  return canonical
 }
 
 function readablePath(path) {
@@ -890,6 +915,8 @@ async function branchOperation(input, env, context) {
   }
   if (input.action !== 'commit') files = [{ path, content }]
   for (const file of files) regularFile(pinned.tree, file.path, true)
+  // A case twin of a path already on her branch (one file on a case-insensitive disk) is refused here too (MUST 1).
+  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true)
   if (input.action !== 'commit' && input.message === undefined) return { ok: true, action: input.action, branch, path, content, baseSha: current, bytesWritten: size(content), staged: input.dryRun !== true, scope: 'caller', ...(input.dryRun ? { dryRun: true } : {}) }
   const message = safeText(input.message, env, 1024)
   if (!message.trim() || /[\r\n]/.test(message)) fail('REPO_COMMIT_MESSAGE_INVALID')
@@ -908,9 +935,14 @@ async function branchOperation(input, env, context) {
   return { ok: true, action: input.action, branch, commit, commitSha: commit, headSha: commit, paths: files.map(file => file.path), stdout: commit, stderr: '' }
 }
 
-async function inspectedChanges(before, after, env, context, allowEmpty = false) {
+/** Every changed path of a proposal, judged with both trees in hand (stage, merge, branch diff) by the one judgement of
+ * deploy/ci/frozen-paths.mjs: plain (printable ASCII, no case twin in either tree), not frozen, not a test main already
+ * has (changed or deleted), and open. Either side of a rename counts (it is a delete and an add here). `pathsOnly` judges
+ * names and reads no file. `markFrozen` is for the branch diff, a read: it refuses nothing for the fence and marks each
+ * such file with `refused` (its code) and `next` instead (`frozen: true` for a frozen one). */
+async function inspectedChanges(before, after, env, context, allowEmpty = false, { pathsOnly = false, markFrozen = false } = {}) {
   if (before.tree.truncated || after.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
-  const paths = ordered(new Set([...before.tree.entries.keys(), ...after.tree.entries.keys()])), changed = []
+  const paths = ordered(new Set([...before.tree.entries.keys(), ...after.tree.entries.keys()])), candidates = [], changed = []
   for (const path of paths) {
     const a = before.tree.entries.get(path), b = after.tree.entries.get(path)
     if (a && b && a.sha === b.sha && a.mode === b.mode && a.type === b.type) continue
@@ -918,13 +950,20 @@ async function inspectedChanges(before, after, env, context, allowEmpty = false)
     // renames/deletions and mode-only changes must not disappear from evidence.
     if (!canonicalPath(path) || path === '.github' || path.startsWith('.github/')) fail('REPO_PROPOSAL_PATH_REFUSED', 403)
     if ([a, b].every(entry => !entry || entry.type === 'tree')) continue
-    branchPath(path, env)
+    candidates.push({ path, a, b })
+  }
+  const twins = new Set(caseTwinPaths(candidates.map(({ path }) => path), before.tree.entries.keys(), after.tree.entries.keys()))
+  for (const { path, a, b } of candidates) {
+    const status = !a ? 'added' : !b ? 'removed' : 'modified', refusal = proposalPathRefusal(path, status, { twin: twins.has(path) })
+    if (refusal && !markFrozen) fail(refusal.code, 403, { protectedPath: path, next: refusal.next })
+    if (refusal?.code !== 'REPO_PATH_NOT_PLAIN') branchPathName(path, env)
     if (a) regularFile(before.tree, path)
     if (b) regularFile(after.tree, path)
-    changed.push({ path, status: !a ? 'added' : !b ? 'removed' : 'modified' })
+    changed.push({ path, status, ...(refusal ? { refused: refusal.code, next: refusal.next, ...(refusal.code === 'REPO_FROZEN_PATH_REFUSED' ? { frozen: true } : {}) } : {}) })
   }
   if (!changed.length && !allowEmpty) fail('REPO_PROPOSAL_EMPTY', 409)
   if (changed.length > CLOUD_REPO_PROPOSAL_LIMITS.files) fail('REPO_PROPOSAL_TOO_LARGE', 413)
+  if (pathsOnly) return changed
   let bytes = 0
   for (const file of changed) {
     const left = file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, context.networkFetch, context.signal)).content
@@ -964,23 +1003,27 @@ async function paginatedCi(path, key, env, context) {
   fail('REPO_CI_INCOMPLETE', 502)
 }
 
-/** The one workflow whose result is a proposal's CI evidence, and the jobs it must have run (deploy-x61.yml's gates). */
+/** The two workflows whose results are a proposal's CI evidence, and the jobs each must have run: proposal-gate.yml runs
+ * deploy-x61.yml's gates; proposal-checks.yml runs the fence (main's frozen list), every edge test, the UI suite and the
+ * boot test. A merge needs both, for the exact head. */
 export const PROPOSAL_GATE_WORKFLOW = Object.freeze({ file: 'proposal-gate.yml', path: '.github/workflows/proposal-gate.yml', jobs: Object.freeze(['preflight', 'build', 'scrub-dist', 'bundle']) })
+export const PROPOSAL_CHECKS_WORKFLOW = Object.freeze({ file: 'proposal-checks.yml', path: '.github/workflows/proposal-checks.yml', jobs: Object.freeze(['checks']) })
+export const PROPOSAL_CI_WORKFLOWS = Object.freeze([PROPOSAL_GATE_WORKFLOW, PROPOSAL_CHECKS_WORKFLOW])
 const RUN_STATUSES = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']
 const RUN_CONCLUSIONS = ['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']
 
 /**
- * CI evidence for a proposal head: ONLY the latest run of proposal-gate.yml for a push of this exact branch and commit,
- * and every one of its required jobs in that run attempt. Other checks on the commit are not evidence:
- * an unrelated green check with no proposal-gate run is 'none'. 'passed' needs the run completed with success AND each
+ * One workflow's evidence for a proposal head: ONLY its latest run for a push of this exact branch and commit, and every
+ * one of its required jobs in that run attempt. Other checks on the commit are not evidence: an
+ * unrelated green check with no run of this workflow is 'none'. 'passed' needs the run completed with success AND each
  * required job present once, completed with success. Malformed or incomplete provider answers throw REPO_CI_INCOMPLETE.
  * @returns {Promise<'passed'|'pending'|'failed'|'none'>}
  */
-async function proposalCi(branch, headSha, env, context) {
-  const runs = await paginatedCi(`/actions/workflows/${PROPOSAL_GATE_WORKFLOW.file}/runs?branch=${encodeURIComponent(branch)}&head_sha=${headSha}&event=push`, 'workflow_runs', env, context)
+async function workflowCi(workflow, branch, headSha, env, context) {
+  const runs = await paginatedCi(`/actions/workflows/${workflow.file}/runs?branch=${encodeURIComponent(branch)}&head_sha=${headSha}&event=push`, 'workflow_runs', env, context)
   let latest = null
   for (const run of runs) {
-    if (run.head_sha !== headSha || run.head_branch !== branch || run.event !== 'push' || run.path !== PROPOSAL_GATE_WORKFLOW.path
+    if (run.head_sha !== headSha || run.head_branch !== branch || run.event !== 'push' || run.path !== workflow.path
       || !Number.isSafeInteger(run.run_number) || run.run_number < 1 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt < 1
       || !RUN_STATUSES.includes(run.status) || !(run.conclusion === null || RUN_CONCLUSIONS.includes(run.conclusion))) fail('REPO_CI_INCOMPLETE', 502)
     if (!latest || run.run_number > latest.run_number || run.run_number === latest.run_number && run.run_attempt > latest.run_attempt) latest = run
@@ -993,26 +1036,53 @@ async function proposalCi(branch, headSha, env, context) {
     if (job.run_id !== latest.id || job.head_sha !== headSha || typeof job.name !== 'string' || !RUN_STATUSES.includes(job.status)
       || !(job.conclusion === null || RUN_CONCLUSIONS.includes(job.conclusion))) fail('REPO_CI_INCOMPLETE', 502)
   }
-  for (const name of PROPOSAL_GATE_WORKFLOW.jobs) {
+  for (const name of workflow.jobs) {
     const named = jobs.filter(job => job.name === name)
     if (named.length !== 1 || named[0].status !== 'completed' || named[0].conclusion !== 'success') return 'failed'
   }
   return 'passed'
 }
 
+/**
+ * CI evidence for a proposal head: BOTH workflows of PROPOSAL_CI_WORKFLOWS under the same exact-run rules. 'passed' only
+ * when both passed; 'failed' when either failed (a failed gate is not read further); 'none' when neither has a run;
+ * else 'pending'. stage_proposal shows this same combined state, and merge_proposal reads it before the passkey.
+ * @returns {Promise<'passed'|'pending'|'failed'|'none'>}
+ */
+async function proposalCi(branch, headSha, env, context) {
+  const states = []
+  for (const workflow of PROPOSAL_CI_WORKFLOWS) {
+    const state = await workflowCi(workflow, branch, headSha, env, context)
+    if (state === 'failed') return 'failed'
+    states.push(state)
+  }
+  if (states.every(state => state === 'passed')) return 'passed'
+  if (states.every(state => state === 'none')) return 'none'
+  return 'pending'
+}
+
 const CI_STATES = Object.freeze(['passed', 'pending', 'failed', 'none'])
 /** What to do when a merge is refused because the proposal's gate has not passed on its exact head. */
-export const PROPOSAL_CI_NEXT = 'wait for proposal-gate to pass on this exact head, then stage_proposal again so the card shows it; a failed gate needs a new commit on the branch'
+export const PROPOSAL_CI_NEXT = 'wait for both proposal-gate and proposal-checks to pass on this exact head, then stage_proposal again so the card shows it; a failed run of either needs a new commit on the branch'
 
-async function headProposal(input, env, context) {
+/** One call to HEAD's repo-proposal route. `approval`: his Class 3 approval, sent only with begin_merge, which consumes it
+ * in HEAD's own transaction. `signal`: a bookkeeping call's own limit, for settling after this call's deadline fired. A
+ * refusal keeps HEAD's code; a 409's attempt age and a 403 of the passkey check reach the answer. */
+async function headProposal(input, env, context, { approval = null, signal: own = null } = {}) {
   if (!env.HEAD || context.bootstrap?.ready !== true) fail('BOOTSTRAP_REQUIRED', 503)
-  return await withDeadline(context.signal, async signal => {
+  return await withDeadline(own ?? context.signal, async signal => {
     const response = await env.HEAD.get(env.HEAD.idFromName('node-main-v1')).fetch(new Request('https://x61.internal/_head/repo-proposal', {
-      method: 'POST', headers: { 'content-type': 'application/json', 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': context.bootstrap.head.seedId, 'x-x6-verified-access': JSON.stringify(context.access) },
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': context.bootstrap.head.seedId, 'x-x6-verified-access': JSON.stringify(context.access),
+        ...(approval !== null && ['begin_merge', 'release_attempt'].includes(input.action) ? { 'x-x6-class3-approval': approval } : {}) },
       body: JSON.stringify(input), signal,
     }))
     const value = await boundedJson(response, 128 * 1024, signal)
-    if (!response.ok || value?.ok !== true) fail(typeof value?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(value.code) ? value.code : 'REPO_PROPOSAL_STORAGE_FAILED', response.status === 409 ? 409 : 503)
+    if (!response.ok || value?.ok !== true) {
+      const code = typeof value?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(value.code) ? value.code : 'REPO_PROPOSAL_STORAGE_FAILED'
+      const timing = ['ageMs', 'reconcileAfterMs', 'limit', 'unresolved'].filter(key => Number.isSafeInteger(value?.[key])).map(key => [key, value[key]])
+      fail(code, response.status === 409 ? 409 : response.status === 403 && code.startsWith('CLASS3_') ? 403 : 503, {
+        headAnswered: true, ...Object.fromEntries(timing), ...(value?.outcome === 'unknown' ? { outcome: 'unknown' } : {}), ...(releaseRef(value?.oldest) ? { oldest: releaseRef(value.oldest) } : {}) })
+    }
     return value
   })
 }
@@ -1037,62 +1107,300 @@ async function stageProposal(input, env, context) {
   return { ok: true, action: input.action, proposal }
 }
 
-/** Reconcile only a durable attempt using bounded provider reads; never retry publication. */
-async function reconcileProposal(input, env, context) {
-  requireOwner(env, context)
-  exactFields(input, ['action'])
-  const pending = await headProposal({ action: 'inspect_merge' }, env, context)
-  const body = pending.mergeBody
-  if (typeof pending.attemptId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(pending.attemptId)
-    || !record(body) || Object.keys(body).length !== 5 || body.action !== 'merge_proposal'
-    || !validProposalBranch(body.branch) || ![body.baseSha, body.headSha, body.treeSha].every(value => typeof value === 'string' && SHA.test(value))
-    || body.baseSha === body.headSha || !record(pending.binding) || canonicalJson(pending.binding) !== canonicalJson(await mergeBinding(body, context))) fail('REPO_PROPOSAL_STORAGE_FAILED', 503)
+/**
+ * Whether `headSha` is an ancestor of `mainSha` (SHOULD 1): ONE call to GitHub's compare endpoint, bounded by this
+ * action's deadline. true when main is ahead of the head with the head as merge base; false when GitHub says otherwise;
+ * null when the answer failed or is not one of those (a failed compare leaves the attempt unknown, never void).
+ */
+async function headIsAncestor(headSha, mainSha, env, context) {
+  if (headSha === mainSha) return true
+  let value
+  try { value = await github(env, context.networkFetch, `/compare/${headSha}...${mainSha}`, context.signal, 8 * 1024 * 1024) } catch (_error) { return null }
+  if (!record(value) || value.base_commit?.sha !== headSha || !SHA.test(value.merge_base_commit?.sha ?? '') || !['ahead', 'behind', 'diverged', 'identical'].includes(value.status)
+    || !Number.isSafeInteger(value.ahead_by) || !Number.isSafeInteger(value.behind_by)) return null
+  if (value.status === 'ahead' && value.behind_by === 0 && value.ahead_by > 0 && value.merge_base_commit.sha === headSha) return true
+  if (value.status === 'identical') return null
+  return false
+}
+
+/** What GitHub says about a durable attempt, read-only: main, her branch, the approved head's tree, and whether the head
+ * is in main (asked only when main is neither the head nor the base). */
+async function attemptVerification(body, env, context) {
   const mainSha = await branchHead('main', env, context)
   const branchSha = await branchHead(body.branch, env, context, true)
   const commit = await github(env, context.networkFetch, '/commits/' + body.headSha, context.signal)
   if (commit?.sha !== body.headSha || typeof commit.commit?.tree?.sha !== 'string' || !SHA.test(commit.commit.tree.sha)) fail('REPO_REF_INVALID', 502)
-  // The durable owner compares this observation with the still-current attempt.
-  // Seeing the old base is not proof that an in-flight publication failed.
-  const verification = { mainSha, branchSha, treeSha: commit.commit.tree.sha, checkedAt: context.now() }
-  if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
-  requireOwner(env, context)
-  const result = await headProposal({ action: 'reconcile_merge', attemptId: pending.attemptId, mergeBody: body, binding: pending.binding, verification }, env, context)
-  return { ...result, action: input.action }
+  const headInMain = mainSha === body.headSha ? true : mainSha === body.baseSha ? false : await headIsAncestor(body.headSha, mainSha, env, context)
+  return { mainSha, branchSha, treeSha: commit.commit.tree.sha, checkedAt: context.now(), headInMain }
 }
 
+/** The durable attempt as HEAD's inspect_merge answers it, checked; null when there is none. */
+async function pendingMergeAttempt(env, context) {
+  let pending
+  try { pending = await headProposal({ action: 'inspect_merge' }, env, context) } catch (error) {
+    if (error?.code === 'REPO_MERGE_ATTEMPT_MISSING') return null
+    throw error
+  }
+  const body = pending.mergeBody
+  if (typeof pending.attemptId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(pending.attemptId)
+    || !record(body) || Object.keys(body).length !== 5 || body.action !== 'merge_proposal'
+    || !validProposalBranch(body.branch) || ![body.baseSha, body.headSha, body.treeSha].every(value => typeof value === 'string' && SHA.test(value))
+    || body.baseSha === body.headSha || !record(pending.binding) || canonicalJson(pending.binding) !== canonicalJson(await mergeBinding(body, context))
+    || !['claimed', 'marked', 'dispatched'].includes(pending.state) || !Number.isSafeInteger(pending.ageMs) || !Number.isSafeInteger(pending.reconcileAfterMs)) fail('REPO_PROPOSAL_STORAGE_FAILED', 503)
+  return pending
+}
+
+/** Reconcile a durable attempt from what GitHub says (MUST 4), never by sending anything: main at the approved
+ * head, or main containing it, is merged at any age; past HEAD's deadline plus margin an attempt still claimed (nothing was
+ * sent) is void; a marked or dispatched one stays REPO_REF_OUTCOME_UNKNOWN, whatever its age and whatever main is, until
+ * the owner releases it (release_attempt). Younger, nothing is released. */
+async function reconcileAttempt(pending, env, context) {
+  const verification = await attemptVerification(pending.mergeBody, env, context)
+  if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
+  requireOwner(env, context)
+  return await headProposal({ action: 'reconcile_merge', attemptId: pending.attemptId, mergeBody: pending.mergeBody, binding: pending.binding, verification }, env, context)
+}
+
+/** Reconcile only a durable attempt using bounded provider reads; never retry publication. The held attempt (if any) and
+ * EVERY release HEAD still keeps unresolved are read again (MUST 4; MUST 2: a newer attempt
+ * held never hides an older release): when a released head is now in main, HEAD records it merged after release, so he is
+ * never left told void about something that merged. `releasedReconciled` lists each release's answer. */
+async function reconcileProposal(input, env, context) {
+  requireOwner(env, context)
+  exactFields(input, ['action'])
+  const pending = await pendingMergeAttempt(env, context)
+  if (pending) {
+    const held = await reconcileAttempt(pending, env, context)
+    // The held attempt's answer is the answer; the releases are read too, and a failure there only leaves them for the next read.
+    let releasedReconciled
+    try { releasedReconciled = (await reconcileReleasedAll(env, context)).results } catch (error) { releasedReconciled = [{ ok: false, code: typeof error?.code === 'string' ? error.code : 'REPO_RECONCILE_FAILED' }] }
+    return { ...held, action: input.action, releasedReconciled }
+  }
+  const { releases, results, failure } = await reconcileReleasedAll(env, context)
+  if (!releases.length) fail('REPO_MERGE_ATTEMPT_MISSING', 409)
+  // With no attempt held: the first release that settled merged; else a failed read is said as before (never a quiet "not
+  // reconciled"); else the last one read; else the newest (nothing left unresolved).
+  const merged = results.find(result => result?.reconciled === true)
+  if (!merged && failure) throw failure
+  return { ...(merged ?? results.at(-1) ?? { ok: true, reconciled: false, released: releases.at(-1) }), action: input.action, releasedReconciled: results }
+}
+
+/** HEAD's kept releases (inspect_released), each checked; `read` is that answer when the caller already has it. */
+async function keptReleases(env, context, read = null) {
+  const value = read ?? await headProposal({ action: 'inspect_released' }, env, context)
+  const releases = Array.isArray(value?.releases) ? value.releases : value?.released ? [value.released] : []
+  for (const released of releases) {
+    if (!record(released) || typeof released.attemptId !== 'string' || ![released.baseSha, released.headSha, released.treeSha].every(item => typeof item === 'string' && SHA.test(item))
+      || !validProposalBranch(released.branch) || !['void-by-owner', 'merged-after-release'].includes(released.state)) fail('REPO_PROPOSAL_STORAGE_FAILED', 503)
+  }
+  return releases
+}
+
+/** One kept release read again from what GitHub says (only one still void-by-owner asks GitHub anything). */
+async function reconcileReleased(released, env, context) {
+  if (released.state !== 'void-by-owner') return { ok: true, reconciled: false, released }
+  const verification = await attemptVerification(released, env, context)
+  if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
+  requireOwner(env, context)
+  return await headProposal({ action: 'reconcile_released', attemptId: released.attemptId, verification }, env, context)
+}
+
+/** Review, MUST 2: every kept release still unresolved, read again, oldest first (at most HEAD's
+ * REPO_RELEASED_MAX, so at most that many times four GitHub reads); one whose reads fail stays unresolved for the next
+ * read (`failure` is the first such error), and the deadline ends the round (BROKER_TIMEOUT) with the rest unread, never
+ * misread. */
+async function reconcileReleasedAll(env, context) {
+  const releases = await keptReleases(env, context), results = []
+  let failure = null
+  for (const released of releases) {
+    if (released.state !== 'void-by-owner') continue
+    if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
+    try { results.push(await reconcileReleased(released, env, context)) } catch (error) {
+      if (error?.code === 'OWNER_SESSION_REQUIRED' || context.signal.aborted) throw error
+      failure ??= error
+      results.push({ ok: false, attemptId: released.attemptId, code: typeof error?.code === 'string' ? error.code : 'REPO_RECONCILE_FAILED' })
+    }
+  }
+  return { releases, results, failure }
+}
+
+/**
+ * Review ("never told void about something that merged"): with no attempt held, a new merge of the very
+ * merge the owner released first asks GitHub about the released one. When its head is now in main, HEAD records it merged
+ * after release (the stage is cleared) and the merge answers merged, resumed, with no approval spent; otherwise null and the
+ * merge goes on as before. Only for the same branch, base, head and tree, so another proposal's merge pays no extra read.
+ * A released record HEAD cannot read is left alone here: it is advisory, and the merge's own reads still decide.
+ */
+async function mergedAfterRelease(input, env, context) {
+  let releases
+  try { releases = await keptReleases(env, context) } catch (_error) { return null }
+  // Review, MUST 2: the kept release of this very merge, by its terms, whichever release is newest.
+  const released = releases.find(item => item.state === 'void-by-owner' && ['branch', 'baseSha', 'headSha', 'treeSha'].every(key => item[key] === input[key]))
+  if (!released) return null
+  const result = await reconcileReleased(released, env, context)
+  if (result?.reconciled !== true || result.outcome?.status !== 'succeeded' || result.outcome.commitSha !== input.headSha) return null
+  return { ok: true, action: 'merge_proposal', commitSha: input.headSha, branch: input.branch, treeSha: input.treeSha, attemptId: released.attemptId, resumed: true, mergedAfterRelease: true }
+}
+
+/** What to do when GitHub shows neither the approved head in main nor anything that proves the ref update failed. */
+export const RELEASE_ATTEMPT_NEXT = 'GitHub shows main neither at this merge nor containing it, and a ref update that was sent may still land: check GitHub; only when he is sure it did not land does he release the attempt with a fresh passkey (release_attempt), and a later read still says merged if it lands after all'
+
+/** Review, MUST 2: why a release is refused when every release HEAD keeps is still unresolved. Review,
+ * MUST: and the owner's way out, named in his own passkey terms. */
+export const RELEASE_LIMIT_NEXT = 'every release HEAD keeps is still unresolved (GitHub has not shown it in main); a new release would forget one that may still land, so it waits until one of them shows up in main, or he releases with a fresh passkey over terms that also name the oldest one (forgets: oldest.attemptId; its head is shown), which HEAD then stops watching'
+/** A kept release as HEAD names it in a refusal: its id, branch and head; anything else is dropped. */
+const releaseRef = value => value !== null && typeof value === 'object' && typeof value.attemptId === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value.attemptId)
+  && validProposalBranch(value.branch) && typeof value.headSha === 'string' && SHA.test(value.headSha) ? { attemptId: value.attemptId, branch: value.branch, headSha: value.headSha } : null
+
+/**
+ * The owner releases a held attempt (MUST 4): { action: 'release_attempt', attemptId, baseSha, headSha }, behind
+ * the same owner session rule as a merge and a fresh Class 3 approval over exactly these terms, which HEAD consumes in
+ * the transaction that records the attempt void-by-owner. Every read comes first: when GitHub shows the head in main the
+ * attempt is settled merged instead and no approval is spent.
+ */
+async function releaseAttempt(input, env, context) {
+  requireOwner(env, context)
+  exactFields(input, ['action', 'attemptId', 'baseSha', 'headSha', 'forgets'])
+  const id = value => typeof value === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(value)
+  // Review, MUST: `forgets` (optional) names the oldest kept release to drop at the bound; his passkey covers it.
+  if (Object.keys(input).length !== (Object.hasOwn(input, 'forgets') ? 5 : 4) || !id(input.attemptId) || Object.hasOwn(input, 'forgets') && (!id(input.forgets) || input.forgets === input.attemptId)
+    || ![input.baseSha, input.headSha].every(value => SHA.test(value)) || input.baseSha === input.headSha) fail('REPO_RELEASE_INVALID')
+  const binding = await mergeBinding(input, context)
+  const approvalToken = context.request?.headers.get('x-x6-class3-approval') ?? null
+  const pending = await pendingMergeAttempt(env, context)
+  if (!pending) fail('REPO_MERGE_ATTEMPT_MISSING', 409)
+  if (pending.attemptId !== input.attemptId || pending.mergeBody.baseSha !== input.baseSha || pending.mergeBody.headSha !== input.headSha) fail('REPO_MERGE_ATTEMPT_STALE', 409)
+  const verification = await attemptVerification(pending.mergeBody, env, context)
+  if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
+  requireOwner(env, context)
+  freezeJson(input)
+  return { ...await headProposal({ action: 'release_attempt', release: input, binding, verification }, env, context, { approval: approvalToken }), action: input.action }
+}
+
+/** What to do when a merge attempt ended after his approval was spent but before main could move (MUST 5). */
+export const APPROVAL_SPENT_VOID_NEXT = 'his approval for this merge was spent and main did not move: stage_proposal again and ask him for a new passkey'
+/** Time the steps after the reads need (attempt claimed with his approval, mark, ref update, bookkeeping). With less
+ * left, the merge stops before anything is claimed or spent. */
+export const MERGE_AFTER_READS_RESERVE_MS = 3000
+/** Bookkeeping that settles an attempt after this call's own deadline fired gets its own short limit (HEAD only). */
+const SETTLE_TIMEOUT_MS = 3000
+/** How long a merge cut off by its deadline may take to settle its own attempt before the answer (one HEAD call, at most
+ * SETTLE_TIMEOUT_MS, follows the cut on every path), so its answer is the truthful one, not a bare 408. */
+export const MERGE_SETTLE_GRACE_MS = SETTLE_TIMEOUT_MS + 1000
+
+/**
+ * An earlier attempt meets a new merge call (MUST 3b and d). A call for ANOTHER proposal is refused. For the same
+ * one, what GitHub says decides: main at the approved head, or containing it, finishes it as merged with no passkey;
+ * otherwise an attempt younger than HEAD's deadline plus margin may still have its owning call running, so the answer is
+ * 409 REPO_MERGE_PENDING with its age and nothing is released or spent; an older one still claimed (nothing sent) is void
+ * (the call continues with its own approval, or says the earlier one was spent); a marked or dispatched one stays
+ * REPO_REF_OUTCOME_UNKNOWN, with both refs and its age, until the owner releases it (MUST 4).
+ * @returns {Promise<{ result: object } | { voided: true }>}
+ */
+async function settleEarlierAttempt(pending, input, binding, env, context) {
+  const timing = { outcome: 'unknown', ageMs: pending.ageMs, reconcileAfterMs: pending.reconcileAfterMs }
+  if (canonicalJson(pending.mergeBody) !== canonicalJson(input) || canonicalJson(pending.binding) !== canonicalJson(binding)) fail('REPO_MERGE_PENDING', 409, timing)
+  const result = await reconcileAttempt(pending, env, context)
+  if (result.reconciled === true && result.outcome?.status === 'succeeded') {
+    return { result: { ok: true, action: 'merge_proposal', commitSha: input.headSha, branch: input.branch, treeSha: input.treeSha, attemptId: pending.attemptId, resumed: true } }
+  }
+  if (result.reconciled === true && result.outcome?.status === 'failed') return { voided: true }
+  if (result.outcome?.code === 'REPO_REF_OUTCOME_UNKNOWN') fail('REPO_REF_OUTCOME_UNKNOWN', 409, { outcome: 'unknown', mainSha: result.mainSha, baseSha: input.baseSha, headSha: input.headSha,
+    attemptId: pending.attemptId, held: true, ...(Number.isSafeInteger(result.ageMs) ? { ageMs: result.ageMs } : {}) })
+  fail('REPO_MERGE_PENDING', 409, { ...timing, ...(Number.isSafeInteger(result.ageMs) ? { ageMs: result.ageMs } : {}) })
+}
+
+/** Settle this call's own attempt as void (its owner nonce): only ever when nothing was sent. 'void' when HEAD wrote it;
+ * 'absent' when HEAD holds no attempt of this nonce (begin_merge never committed, so nothing was consumed either: the two
+ * are one transaction); 'unknown' when HEAD did not answer (the attempt stays and is reconciled after the margin). */
+async function voidOwnAttempt(owner, attemptId, env, context) {
+  try {
+    await headProposal({ action: 'merge_outcome', owner, ...(attemptId ? { attemptId } : {}), outcome: { status: 'failed', code: 'REPO_APPROVAL_SPENT_VOID' } }, env, context, { signal: AbortSignal.timeout(SETTLE_TIMEOUT_MS) })
+    return 'void'
+  } catch (error) { return error?.code === 'REPO_MERGE_ATTEMPT_STALE' ? 'absent' : 'unknown' }
+}
+
+/** The facts a merge refusal carries for the card (MUST 3): an attempt's age while it is held, and both refs
+ * when what GitHub says fits neither outcome. Numbers and SHAs only. */
+function mergeAttemptFacts(code, error) {
+  if (code === 'REPO_RELEASE_LIMIT') return { next: RELEASE_LIMIT_NEXT, ...Object.fromEntries(['limit', 'unresolved'].filter(key => Number.isSafeInteger(error?.[key])).map(key => [key, error[key]])),
+    ...(releaseRef(error?.oldest) ? { oldest: releaseRef(error.oldest) } : {}) }
+  if (code === 'REPO_MERGE_PENDING') return Object.fromEntries(['ageMs', 'reconcileAfterMs'].filter(key => Number.isSafeInteger(error?.[key])).map(key => [key, error[key]]))
+  if (code === 'REPO_REF_OUTCOME_UNKNOWN') return { ...Object.fromEntries(['mainSha', 'baseSha', 'headSha'].filter(key => typeof error?.[key] === 'string' && SHA.test(error[key])).map(key => [key, error[key]])),
+    ...(error?.held === true ? { held: true, next: RELEASE_ATTEMPT_NEXT, ...(typeof error.attemptId === 'string' && /^[0-9a-f-]{36}$/.test(error.attemptId) ? { attemptId: error.attemptId } : {}),
+      ...(Number.isSafeInteger(error.ageMs) ? { ageMs: error.ageMs } : {}) } : {}) }
+  return {}
+}
+
+/**
+ * Merge a staged proposal into main (MUST 3 and 4). Order: an earlier attempt settled or refused -> every read
+ * (fresh refs, so a moved branch is refused here; ancestry; both trees and every file, so the fence; the repository id;
+ * both workflows) -> enough time left -> begin_merge, in which HEAD consumes his approval and claims the attempt in ONE
+ * storage transaction, owned by this call's nonce -> the mark -> the atomic ref update (GitHub checks each ref's expected
+ * old value) -> its bookkeeping. After consumption nothing but the mark, the ref update and its bookkeeping remain, and
+ * every exit is settled truthfully by this call: before anything is sent, void (REPO_APPROVAL_SPENT_VOID, approve again);
+ * after, unknown until GitHub says.
+ */
 async function mergeProposal(input, env, context) {
   requireOwner(env, context)
   exactFields(input, ['action', 'baseSha', 'branch', 'headSha', 'treeSha'])
   if (Object.keys(input).length !== 5 || !validAumaBranch(input.branch) || ![input.baseSha, input.headSha, input.treeSha].every(value => SHA.test(value))) fail('REPO_PROPOSAL_INVALID')
   const binding = await mergeBinding(input, context)
-  if (typeof context.authorizeClass3 !== 'function') fail('CLASS3_WEBAUTHN_REQUIRED', 403)
-  // The card's ciStatus is the snapshot from stage_proposal. Main moves only to a head whose gate passed, read now and
-  // before the approval is consumed, so a refusal here leaves his approval unspent.
+  const approvalToken = context.request?.headers.get('x-x6-class3-approval') ?? null
+  const pending = await pendingMergeAttempt(env, context)
+  const earlier = pending ? await settleEarlierAttempt(pending, input, binding, env, context) : null
+  if (earlier?.result) return earlier.result
+  // Review: a merge he released that GitHub now shows in main is merged, not a conflict and not a second spend.
+  const landed = pending ? null : await mergedAfterRelease(input, env, context)
+  if (landed) return landed
+  if (!approvalToken) fail(earlier?.voided ? 'REPO_APPROVAL_SPENT_VOID' : 'CLASS3_WEBAUTHN_REQUIRED', earlier?.voided ? 409 : 403)
+  // Every read before his approval: the fence (frozen, open, plain) is judged inside, so a refused path, a moved branch
+  // or a red workflow leaves his approval unspent. The card's ciStatus is the snapshot from stage_proposal; this is now.
+  await proposalEvidence(input.branch, env, context, input)
   const ciStatus = await proposalCi(input.branch, input.headSha, env, context)
   if (ciStatus !== 'passed') fail('REPO_PROPOSAL_CI_NOT_PASSED', 409, { ciStatus })
-  freezeJson(input)
-  const approval = freezeJson(structuredClone(await context.authorizeClass3(input)))
-  if (approval?.ok !== true || canonicalJson(approval.binding) !== canonicalJson(binding) || !Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= context.now()) fail('CLASS3_WEBAUTHN_REQUIRED', 403)
-  context.repoApprovalExpiresAt = approval.expiresAt
-  await proposalEvidence(input.branch, env, context, input)
   const id = await repositoryId(env, context)
-  const begin = await headProposal({ action: 'begin_merge', mergeBody: input, binding }, env, context)
-  if (typeof begin.attemptId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(begin.attemptId)) fail('REPO_PROPOSAL_STORAGE_FAILED', 503)
+  if (context.signal.aborted || (Number.isFinite(context.deadlineAt) && Date.now() > context.deadlineAt - MERGE_AFTER_READS_RESERVE_MS)) fail('BROKER_TIMEOUT', 408)
+  // His session must outlast everything this call can still do, its settling included: HEAD refuses an
+  // expired session, so one that ran out after begin_merge could not even void the attempt. Refused here, nothing is spent.
+  // On the owner clock requireOwner uses (context.now()); the time left to the deadline is measured on the real one.
+  const left = Number.isFinite(context.deadlineAt) ? Math.max(0, context.deadlineAt - Date.now()) : CLOUD_BROKER_LIMITS.timeoutMs
+  if (!Number.isFinite(context.access?.expires) || context.access.expires * 1000 <= context.now() + left + MERGE_SETTLE_GRACE_MS) fail('OWNER_SESSION_REQUIRED', 403)
+  freezeJson(input)
+  const owner = crypto.randomUUID()
+  let begin
+  try { begin = await headProposal({ action: 'begin_merge', mergeBody: input, binding, owner }, env, context, { approval: approvalToken }) } catch (error) {
+    // HEAD answered with a refusal (his approval refused, another attempt held, the stage changed): its one transaction
+    // wrote nothing, so nothing was consumed.
+    if (error?.headAnswered === true) throw error
+    // The answer was lost: the claim may have been written with this call's nonce. Nothing was sent, so it is settled void.
+    const settled = await voidOwnAttempt(owner, null, env, context)
+    if (settled === 'void') fail('REPO_APPROVAL_SPENT_VOID', 409)
+    throw settled === 'absent' ? error : Object.assign(error, { outcome: 'unknown' })
+  }
+  if (typeof begin.attemptId !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(begin.attemptId) || !Number.isSafeInteger(begin.approvalExpiresAt)) {
+    if (await voidOwnAttempt(owner, null, env, context) === 'void') fail('REPO_APPROVAL_SPENT_VOID', 409)
+    fail('REPO_PROPOSAL_STORAGE_FAILED', 503, { outcome: 'unknown' })
+  }
+  context.repoApprovalExpiresAt = begin.approvalExpiresAt
   try {
-    if (approval.expiresAt <= context.now()) fail('CLASS3_APPROVAL_EXPIRED', 403)
+    await headProposal({ action: 'mark_merge', attemptId: begin.attemptId, owner }, env, context)
     await updateRefs([
       { name: 'refs/heads/main', beforeOid: input.baseSha, afterOid: input.headSha, force: false },
       { name: 'refs/heads/' + input.branch, beforeOid: input.headSha, afterOid: input.headSha, force: false },
     ], id, env, context)
-    const actual = await branchHead('main', env, context)
-    if (actual !== input.headSha) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
-    await headProposal({ action: 'merge_outcome', attemptId: begin.attemptId, outcome: { status: 'succeeded', commitSha: input.headSha } }, env, context)
+    await headProposal({ action: 'merge_outcome', attemptId: begin.attemptId, owner, outcome: { status: 'succeeded', commitSha: input.headSha } }, env, context)
     return { ok: true, action: 'merge_proposal', commitSha: input.headSha, branch: input.branch, treeSha: input.treeSha }
   } catch (error) {
-    const unknown = context.refMutationDispatched
+    if (!context.refMutationDispatched) {
+      // A refusal made here before anything was sent (the mark failed or its answer was lost; the owner session or his
+      // approval expired; the call was cancelled): settled void in this same call (MUST 3c).
+      if (await voidOwnAttempt(owner, begin.attemptId, env, context) === 'void') fail('REPO_APPROVAL_SPENT_VOID', 409)
+      throw Object.assign(error, { outcome: 'unknown' })
+    }
     try {
-      await headProposal({ action: 'merge_outcome', attemptId: begin.attemptId, outcome: { status: unknown ? 'unknown' : 'failed', code: unknown ? 'REPO_REF_OUTCOME_UNKNOWN' : typeof error?.code === 'string' ? error.code : 'REPO_MERGE_FAILED' } }, env, context)
-    } catch (_storageError) { /* A durable pending claim remains blocked when outcome storage fails. */ }
+      await headProposal({ action: 'merge_outcome', attemptId: begin.attemptId, owner, outcome: { status: 'unknown', code: 'REPO_REF_OUTCOME_UNKNOWN' } }, env, context, { signal: AbortSignal.timeout(SETTLE_TIMEOUT_MS) })
+    } catch (_storageError) { /* The attempt stays marked; a later call reconciles it from what GitHub says. */ }
     throw error
   }
 }
@@ -1157,6 +1465,7 @@ async function repo(input, env, context) {
   if (input.action === 'compare_files') return await compareFiles(input, env, context)
   if (input.action === 'stage_proposal') return await stageProposal(input, env, context)
   if (input.action === 'reconcile_proposal') return await reconcileProposal(input, env, context)
+  if (input.action === 'release_attempt') return await releaseAttempt(input, env, context)
   if (input.action === 'merge_proposal') return await mergeProposal(input, env, context)
   const branch = repoRef(input.branch)
   if (['branch_create', 'branch_delete'].includes(input.action) || branch !== 'main' && ['write', 'edit', 'commit'].includes(input.action)) return await branchOperation(input, env, context)
@@ -1216,11 +1525,12 @@ async function repo(input, env, context) {
     if (branch !== 'main') {
       const base = input.base ?? await branchHead('main', env, context)
       if (!SHA.test(base)) fail('REPO_BASE_SHA_REQUIRED')
-      if (input.path !== undefined) branchPath(input.path, env)
+      // A read: a frozen file is marked (frozen, next), never refused here; stage, merge and CI refuse it.
+      if (input.path !== undefined) branchPathName(input.path, env)
       const after = await pinnedTree(branch, env, networkFetch, signal)
       await mainComparison(base, after.commitSha, env, networkFetch, signal)
       const before = await pinnedTree(base, env, networkFetch, signal)
-      const changed = await inspectedChanges(before, after, env, context, true), files = []
+      const changed = await inspectedChanges(before, after, env, context, true, { markFrozen: true }), files = []
       for (const file of changed) {
         if (input.path !== undefined && file.path !== input.path) continue
         const left = file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, networkFetch, signal)).content
@@ -1749,16 +2059,17 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
       : url.pathname === '/_host/repo' ? await repo(input, env, context)
       : url.pathname === '/_host/github' ? await githubBroker(input, env, context)
         : await cloudflareBroker(input, env, context)
-    const boundedAction = url.pathname === '/_host/repo' && (['search', 'compare_files', 'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'reconcile_proposal'].includes(input.action) || input.branch !== undefined && input.branch !== 'main')
+    const boundedAction = url.pathname === '/_host/repo' && (['search', 'compare_files', 'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'reconcile_proposal', 'release_attempt'].includes(input.action) || input.branch !== undefined && input.branch !== 'main')
       || url.pathname === '/_host/github' && typeof input.endpoint === 'string' && input.endpoint.includes('/actions/')
     const result = boundedAction ? await withDeadline(request.signal, async signal => {
       // Share the mutation markers with the outer error handler even when its
       // deadline wins a race with a provider that ignores cancellation.
       context.signal = signal
+      context.deadlineAt = Date.now() + CLOUD_BROKER_LIMITS.timeoutMs
       const value = await execute()
       if (signal.aborted) fail('BROKER_TIMEOUT', 408)
       return value
-    }) : await execute()
+    }, { settleMs: url.pathname === '/_host/repo' && input.action === 'merge_proposal' ? MERGE_SETTLE_GRACE_MS : 0 }) : await execute()
     const serialized = JSON.stringify(result)
     const fileRead = (url.pathname === '/_host/repo' && input.action === 'read')
       || (url.pathname === '/_host/github' && typeof result.json?.content === 'string')
@@ -1773,7 +2084,7 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     if (context?.repoMutationDispatched) return reply({ ok: false, code: 'REPO_PUBLICATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true, macFallback: false }, 503)
     if (context?.mutationDispatched) return reply({ ok: false, code: 'GITHUB_MUTATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'inspect-github-before-new-approval', requiresFreshClass3Approval: true, replaySafe: false, macFallback: false }, 503)
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED'
-    return reply({ ok: false, code, macFallback: false, ...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: PROPOSAL_CI_NEXT } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}) }, [400, 403, 404, 405, 408, 409, 413, 502, 503, 507].includes(error?.status) ? error.status : 503)
+    return reply({ ok: false, code, macFallback: false, ...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error) }, [400, 403, 404, 405, 408, 409, 413, 502, 503, 507].includes(error?.status) ? error.status : 503)
   }
 }
 

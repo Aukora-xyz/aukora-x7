@@ -1087,9 +1087,39 @@ interface SeedOrganSpec {
   readonly description?: string
   readonly parameters?: Record<string, unknown>
   readonly sha256?: string
-  setup?(ctx: unknown): (() => void) | void
-  run(args: unknown, ctx: unknown): Promise<unknown> | unknown
+  readonly setup?: ((ctx: unknown) => (() => void) | void) | undefined
+  readonly run: (args: unknown, ctx: unknown) => unknown
 }
+
+interface RetentionTrialInput {
+  organId?: string
+  candidateSource?: string
+  candidateSpecifier?: string
+  baselineSpecifier?: string
+  baseline?: boolean
+}
+
+interface SeedOrganMount {
+  dispose(): void
+  scion(): unknown
+}
+
+const RUNTIME_CANDIDATE_AUTHOR = 'auma'
+const RETENTION_INDEPENDENT_AUTHORS: readonly string[] = Object.freeze(['dot'])
+// Capture before loading organs: a later replacement must not observe private authority-bearing values.
+const freezeRuntimeValue = Object.freeze
+const retentionIncludes = Function.prototype.call.bind(Array.prototype.includes) as (rows: readonly unknown[], value: unknown) => boolean
+const retentionEvery = Function.prototype.call.bind(Array.prototype.every) as
+  <T>(rows: readonly T[], test: (row: T, index: number) => boolean) => boolean
+// oxlint-disable-next-line typescript/unbound-method -- Bind the intrinsic to an explicit receiver before loading organs.
+const retentionNormalize = Function.prototype.call.bind(String.prototype.normalize) as (value: string, form: string) => string
+// oxlint-disable-next-line typescript/unbound-method -- Bind the intrinsic to an explicit receiver before loading organs.
+const retentionReplace = Function.prototype.call.bind(String.prototype.replace) as
+  (value: string, pattern: RegExp, replacement: string) => string
+// oxlint-disable-next-line typescript/unbound-method -- Capture the refusal matcher before organ loading.
+const retentionStartsWith = Function.prototype.call.bind(String.prototype.startsWith) as (value: string, prefix: string) => boolean
+const retentionFilter = Function.prototype.call.bind(Array.prototype.filter) as
+  <T>(rows: readonly T[], test: (row: T, index: number) => boolean) => T[]
 
 interface MountedOrganRecord {
   readonly name: string
@@ -1098,6 +1128,7 @@ interface MountedOrganRecord {
   readonly parameters: Record<string, unknown>
   readonly updatedAt: number
   readonly run: (args: unknown, ctx: unknown) => Promise<unknown> | unknown
+  readonly scion: () => unknown
 }
 
 interface OrganServiceLike {
@@ -1767,7 +1798,10 @@ function getX6Services(): Record<string, unknown> {
   return ((globalThis as { __X6_SERVICES__?: Record<string, unknown> }).__X6_SERVICES__) ?? {}
 }
 
-function wrapSeedOrganAsCordisPlugin(spec: SeedOrganSpec, mount: (spec: SeedOrganSpec) => () => void): Record<string, unknown> {
+function wrapSeedOrganAsCordisPlugin(exported: SeedOrganSpec, mount: (spec: SeedOrganSpec) => SeedOrganMount): Record<string, unknown> {
+  // Capture verified callbacks before another organ can mutate the cached module exports.
+  const run = exported.run, setup = exported.setup
+  const spec = freezeRuntimeValue({ ...exported, name: exported.name, run, setup })
   const organName = String(spec.name || 'seed-organ').trim()
   const underscoreName = organName.replace(/[^a-zA-Z0-9_-]/g, '_').replace(/-/g, '_')
   const description = String(spec.description ?? `Seed organ ${organName}`)
@@ -1780,7 +1814,7 @@ function wrapSeedOrganAsCordisPlugin(spec: SeedOrganSpec, mount: (spec: SeedOrga
     inject: ['tools', 'presence', 'organs'],
     __seedOrgan: spec,
     apply(ctx: CordisContextLike) {
-      const unmountOrgan = mount(spec)
+      const mounted = mount(spec)
       const organCtx = {
         get organs() { return getX6Services().organs ?? ctx.organs },
         get presence() { return getX6Services().presence ?? ctx.get('presence') },
@@ -1791,7 +1825,7 @@ function wrapSeedOrganAsCordisPlugin(spec: SeedOrganSpec, mount: (spec: SeedOrga
         get agentPresets() { return (getX6Services().agentPresets ?? ctx.get('agentPresets')) as AgentPresetsServiceLike | undefined },
         get fs() { return getX6Services().fs ?? ctx.get('fs') },
         get snapshots() { return getX6Services().snapshots ?? ctx.get('snapshots') },
-        get scion() { return getX6Services().scion },
+        get scion() { return mounted.scion() },
         get checkpointPolicy() { return ctx.get('checkpointPolicy') },
         // Round 37: pinned, metered Wasm cells (x6/wasm-cells.ts): pure computation, no imports, fresh fuel per call.
         get wasm() { return workerCellHost() },
@@ -1812,7 +1846,7 @@ function wrapSeedOrganAsCordisPlugin(spec: SeedOrganSpec, mount: (spec: SeedOrga
           return toLosslessJson(out)
         },
       }
-      const disposers: Array<() => void> = [unmountOrgan]
+      const disposers: Array<() => void> = [() => { mounted.dispose() }]
       const beforeSetupTools = new Set((ctx.tools?.definitions?.() ?? []).map(d => d.name))
       if (typeof spec.setup === 'function') {
         try {
@@ -1852,7 +1886,7 @@ function wrapSeedOrganAsCordisPlugin(spec: SeedOrganSpec, mount: (spec: SeedOrga
   }
 }
 
-function unwrapPluginExport(raw: unknown, mount: (spec: SeedOrganSpec) => () => void): unknown {
+function unwrapPluginExport(raw: unknown, mount: (spec: SeedOrganSpec) => SeedOrganMount): unknown {
   let plugin: unknown = raw
   if (typeof raw === 'object' && raw !== null) {
     const rec = raw as Record<string, unknown>
@@ -2208,15 +2242,13 @@ export async function mountX6BallRuntime(
   // Reconcile with AumaHead (/_head/ball) on boot if reachable
   const stamp = typeof __X6_BUILD_IDENTITY__ !== 'undefined' ? __X6_BUILD_IDENTITY__ : null
   const sourceRevision = stamp?.sourceRevision && /^[a-f0-9]{40}$/.test(stamp.sourceRevision) ? stamp.sourceRevision : null
-  const admittedSuiteDigest = typeof stamp?.retentionSuiteDigest === 'string' && /^[a-f0-9]{64}$/.test(stamp.retentionSuiteDigest)
-    ? stamp.retentionSuiteDigest : null
-  const baselineConfigured = stamp?.retentionBaselineSuite != null || stamp?.retentionBaselineDigest != null
   // Detach the build snapshot before exposing any organ capabilities. Later stamp mutation cannot repin it.
   const baselineSnapshot: unknown = record(stamp?.retentionBaselineSuite) ? JSON.parse(JSON.stringify(stamp.retentionBaselineSuite)) : null
   const admittedBaseline = record(baselineSnapshot) && typeof stamp?.retentionBaselineDigest === 'string'
     && /^[a-f0-9]{64}$/.test(stamp.retentionBaselineDigest) && retentionSuiteDigest(baselineSnapshot) === stamp.retentionBaselineDigest
     && retentionSuiteExtendsBaseline(baselineSnapshot, baselineSnapshot) ? baselineSnapshot : null
-  const suitePinAvailable = baselineConfigured ? admittedBaseline !== null : admittedSuiteDigest !== null
+  const baselineDigest = admittedBaseline ? retentionSuiteDigest(admittedBaseline) : null
+  const suitePinAvailable = admittedBaseline !== null
   const buildSha = sourceRevision ? sourceRevision.slice(0, 8) + (stamp?.sourceDirty ? '-dirty' : '') : 'UNVERIFIED'
   const buildIdentity = Object.freeze({
     sourceRevision, sourceDirty: stamp?.sourceDirty ?? null, builtAt: stamp?.builtAt ?? null,
@@ -2675,7 +2707,7 @@ export async function mountX6BallRuntime(
   // Register `ctx.organs` service on Cordis root context bridging Auma's Seed v3/v4 organ contract
   // directly onto the native Cordis `ball:<sha256>` loader (`ballPut`, `treePatch`, `treeUndo`).
   const mountedOrgans = new Map<string, MountedOrganRecord>()
-  const mountSeedOrgan = (spec: SeedOrganSpec, sha256: string, entryId: string): (() => void) => {
+  const mountSeedOrgan = (spec: SeedOrganSpec, sha256: string, entryId: string): SeedOrganMount => {
     if (spec.name !== entryId) {
       // A Seed organ's exported name must equal its HEAD entry id. The refusal names both, so she knows
       // what to rename (she stages the corrected organ; the owner permits it).
@@ -2690,9 +2722,10 @@ export async function mountX6BallRuntime(
       parameters: record(spec.parameters) ? spec.parameters : {},
       updatedAt: Date.now(),
       run: (args: unknown, ctx: unknown) => spec.run(args, ctx),
+      scion: () => scionForCaller(rec),
     }
     mountedOrgans.set(entryId, rec)
-    return () => { if (mountedOrgans.get(entryId) === rec) mountedOrgans.delete(entryId) }
+    return { scion: rec.scion, dispose: () => { if (mountedOrgans.get(entryId) === rec) mountedOrgans.delete(entryId) } }
   }
   vfs.mkdirSync('/dsh/home/organs', { recursive: true })
 
@@ -2789,7 +2822,7 @@ export async function mountX6BallRuntime(
         agentPresets: hostCtx.get('agentPresets'),
         fs: vfs,
         snapshots: getX6Services().snapshots ?? hostCtx.get('snapshots'),
-        scion: getX6Services().scion,
+        scion: target.scion(),
         checkpointPolicy: hostCtx.get('checkpointPolicy'),
         wasm: workerCellHost(),
       }
@@ -3374,127 +3407,287 @@ export async function mountX6BallRuntime(
   }
 
   const compiler = createScionCompiler()
-  const scionService = {
-    /** Compare an explicit candidate with the current incumbent; diagnostic baseline reads never admit promotion. */
-    async trialRetentionCandidate(input: {
-      organId?: string
-      candidateSource?: string
-      candidateSpecifier?: string
-      baselineSpecifier?: string
-      baseline?: boolean
-    }) {
-      try { syncCandidateBallsStore(vfs) } catch {}
-      const head = currentBall
-      const suiteText = vfs.readFileSync(RETENTION_SUITE_PATH, 'utf8') as string
-      if (new TextEncoder().encode(suiteText).byteLength > 1024 * 1024) throw new Error('PEARL_SUITE_LIMIT')
-      const suite = JSON.parse(suiteText) as Record<string, unknown>
-      if (suite.schema !== 'aukora.pearl.retention-suite.v1' || !Array.isArray(suite.cases) || !suite.cases.length || !suite.fixtures || typeof suite.fixtures !== 'object' || Array.isArray(suite.fixtures)
-        || typeof suite.fixedNow !== 'number' || !Number.isFinite(suite.fixedNow)) throw new Error('PEARL_SUITE_INVALID')
-      const suiteDigest = retentionSuiteDigest(suite)
-      const suiteBytesDigest = sha256HexSync(vfs.readFileSync(RETENTION_SUITE_PATH))
-      const suiteAdmitted = baselineConfigured ? admittedBaseline !== null && retentionSuiteExtendsBaseline(suite, admittedBaseline)
-        : admittedSuiteDigest !== null && admittedSuiteDigest === suiteDigest
-      const cases: Record<string, unknown>[] = suite.cases.map((row: unknown) => {
-        if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('PEARL_SUITE_INVALID')
-        const test = row as Record<string, unknown>
-        return { id: test.id, args: test.args, ...(Object.hasOwn(test, 'expectError') ? { expectError: test.expectError } : { expect: test.expect }), ...(test.routePolicy === undefined ? {} : { routePolicy: test.routePolicy }) }
+  /** All callers may compare; only the captured, still-mounted Pearl record can mint. */
+  async function trialRetentionCandidate(input: RetentionTrialInput, caller: MountedOrganRecord | null) {
+    try { syncCandidateBallsStore(vfs) } catch {}
+    const head = currentBall
+    const suiteText = vfs.readFileSync(RETENTION_SUITE_PATH, 'utf8') as string
+    if (new TextEncoder().encode(suiteText).byteLength > 1024 * 1024) throw new Error('PEARL_SUITE_LIMIT')
+    const suite = JSON.parse(suiteText) as Record<string, unknown>
+    if (suite.schema !== 'aukora.pearl.retention-suite.v1' || !Array.isArray(suite.cases) || !suite.cases.length || !suite.fixtures || typeof suite.fixtures !== 'object' || Array.isArray(suite.fixtures)
+      || typeof suite.fixedNow !== 'number' || !Number.isFinite(suite.fixedNow)) throw new Error('PEARL_SUITE_INVALID')
+    const suiteDigest = retentionSuiteDigest(suite)
+    const suiteBytesDigest = sha256HexSync(vfs.readFileSync(RETENTION_SUITE_PATH))
+    const suiteAdmitted = admittedBaseline !== null && retentionSuiteExtendsBaseline(suite, admittedBaseline)
+    const trialCase = (test: Record<string, unknown>): Record<string, unknown> => ({
+      id: test.id, args: test.args, ...(Object.hasOwn(test, 'expectError') ? { expectError: test.expectError } : { expect: test.expect }),
+      ...(test.routePolicy === undefined ? {} : { routePolicy: test.routePolicy }),
+    })
+    const cases: Record<string, unknown>[] = suite.cases.map((row: unknown) => {
+      if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error('PEARL_SUITE_INVALID')
+      const test = row as Record<string, unknown>
+      return trialCase(test)
+    })
+    const names = new Set<string>()
+    for (const name of Array.isArray(suite.organs) ? suite.organs : []) {
+      if (typeof name !== 'string') throw new Error('PEARL_SUITE_INVALID')
+      names.add(name)
+    }
+    for (const test of cases) {
+      const args = test.args as { organ?: unknown } | null
+      if (!args || typeof args.organ !== 'string') throw new Error('PEARL_SUITE_INVALID')
+      names.add(args.organ)
+    }
+    const organId = input.organId
+    if (organId !== undefined && (!/^[a-z][a-z0-9-]{0,63}$/.test(organId) || !head.entries[organId])) throw new Error('PEARL_ORGAN_ID_INVALID')
+    if (!organId && (input.candidateSource !== undefined || input.candidateSpecifier !== undefined || input.baselineSpecifier !== undefined)) throw new Error('PEARL_ORGAN_ID_REQUIRED')
+    if (input.candidateSource !== undefined && input.candidateSpecifier !== undefined) throw new Error('PEARL_CANDIDATE_AMBIGUOUS')
+    if (input.baselineSpecifier !== undefined) throw new Error('PEARL_BASELINE_OVERRIDE_REFUSED')
+    if (organId) names.add(organId)
+    const build: Record<string, string> = Object.create(null)
+    const shas: Record<string, string> = Object.create(null)
+    const incumbentBuild: Record<string, string> = {}
+    const incumbentShas: Record<string, string> = {}
+    Object.setPrototypeOf(incumbentBuild, null)
+    Object.setPrototypeOf(incumbentShas, null)
+    for (const name of [...names].sort()) {
+      if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('PEARL_ORGAN_ID_INVALID')
+      const entry = head.entries[name]
+      const selected = name === organId
+      const readSource = (specifier: string | undefined): string => {
+        if (typeof specifier !== 'string' || !/^ball:[a-f0-9]{64}$/.test(specifier)) throw new Error('PEARL_BUILD_UNAVAILABLE: ' + name)
+        const code = vfs.readFileSync(join(BALLS_DIR, specifier.slice(5) + '.js'), 'utf8') as string
+        if (sha256HexSync(code) !== specifier.slice(5)) throw new Error('PEARL_MODULE_HASH_MISMATCH: ' + name)
+        return code
+      }
+      // Capture the selected incumbent and every peer before either arm executes.
+      incumbentBuild[name] = readSource(entry?.specifier)
+      incumbentShas[name] = sha256HexSync(incumbentBuild[name])
+      let code: string
+      if (selected && !input.baseline && input.candidateSource !== undefined) code = input.candidateSource
+      else if (selected && !input.baseline && input.candidateSpecifier !== undefined) code = readSource(input.candidateSpecifier)
+      else code = incumbentBuild[name]
+      if (typeof code !== 'string' || !code.trim()) throw new Error('PEARL_SOURCE_INVALID')
+      build[name] = code
+      shas[name] = sha256HexSync(code)
+    }
+    const retained = { fixtures: suite.fixtures as Record<string, unknown>, fixedNow: suite.fixedNow, cases }
+    const currentInputsMatch = (): boolean => currentBall.ballId === head.ballId && currentSuiteDigest() === suiteDigest
+      && sha256HexSync(vfs.readFileSync(RETENTION_SUITE_PATH)) === suiteBytesDigest
+    const answersRefusal = (got: unknown, expected: string): boolean => {
+      if (!record(got) || got.ok !== false) return false
+      const text = typeof got.error === 'string' ? got.error : typeof got.code === 'string' ? got.code : ''
+      return text === expected || retentionStartsWith(text, expected + ':')
+    }
+    const exactNotMounted = (got: unknown): boolean => record(got) && Object.keys(got).length === 2
+      && got.ok === false && got.error === 'PEARL_ORGAN_NOT_MOUNTED'
+    const ownIncumbentFailure = (row: Record<string, unknown>, test: Record<string, unknown> | undefined): boolean => {
+      const organ = test && record(test.args) ? test.args.organ : undefined
+      if (row.pass !== false || typeof organ !== 'string' || !Array.isArray(row.infrastructure)
+        || row.infrastructure.length >= 64) return false
+      return retentionEvery(row.infrastructure, (item: unknown) => record(item)
+        && (((item.phase === 'export' || item.phase === 'factory' || item.phase === 'setup')
+          && item.code === 'PEARL_ORGAN_NOT_MOUNTED' && item.subject === organId && exactNotMounted(row.got))
+          || (item.phase === 'guard' && item.subject === organ && typeof test?.expectError === 'string'
+            && !answersRefusal(row.got, test.expectError))))
+    }
+    const nonTargetRow = (test: Record<string, unknown> | undefined): boolean =>
+      Boolean(test && record(test.args) && typeof test.args.organ === 'string' && test.args.organ !== organId)
+    // Equal, bounded failures on peers are not evidence for or against the target.
+    const unchangedInfrastructure = (row: Record<string, unknown>, other: Record<string, unknown> | undefined): boolean => {
+      if (row.pass !== false || other?.pass !== false || !Array.isArray(row.infrastructure)
+        || !Array.isArray(other.infrastructure) || row.infrastructure.length === 0 || row.infrastructure.length >= 64
+        || row.infrastructure.length !== other.infrastructure.length) return false
+      const signatures = (items: unknown[]): string[] | null => {
+        const keys: string[] = []
+        for (const item of items) {
+          if (!record(item) || typeof item.phase !== 'string' || typeof item.code !== 'string' || typeof item.subject !== 'string'
+            || (item.code === 'PEARL_ORGAN_NOT_MOUNTED' && item.subject === organId)) return null
+          keys.push(JSON.stringify([item.phase, item.code, item.subject]))
+        }
+        return keys.sort()
+      }
+      const left = signatures(row.infrastructure), right = signatures(other.infrastructure)
+      return left !== null && right !== null && retentionEvery(left, (value, index) => value === right[index])
+    }
+    const completeTrial = (trial: CandidateTrialResult, expectedCases = cases,
+      arm: 'strict' | 'candidate' | 'incumbent' = 'strict', other?: CandidateTrialResult): boolean =>
+      trial.results.length === expectedCases.length
+      && retentionEvery(trial.results, (row, index) => row.id === expectedCases[index]?.id
+        && typeof row.pass === 'boolean' && Object.hasOwn(row, 'got')
+        && Array.isArray(row.infrastructure)
+        && (row.infrastructure.length === 0
+          || (arm === 'incumbent' && ownIncumbentFailure(row, expectedCases[index]))
+          || (arm !== 'strict' && nonTargetRow(expectedCases[index]) && unchangedInfrastructure(row, other?.results[index]))))
+      && trial.graderControls?.allPassed === true && trial.graderControls.knownGoodAccepted && trial.graderControls.knownBadRejected
+      && trial.graderControls.acceptAllRejected && trial.graderControls.rejectAllRejected
+      && (trial.routeEvidence?.status === 'checked' || trial.routeEvidence?.status === 'unsupported')
+      && retentionIncludes(trial.routeEvidence.checkedProperties, 'exact-case-result-framing')
+      && retentionIncludes(trial.routeEvidence.checkedProperties, 'parent-output-comparison')
+    const runArm = async (sources: Readonly<Record<string, string>>,
+      trialSuite: Parameters<typeof trialScionRetention>[1]): Promise<CandidateTrialResult> => {
+      try { return await trialScionRetention(sources, trialSuite) }
+      catch (error) {
+        if (!(error instanceof Error) || !retentionStartsWith(error.message, 'PEARL_UNSUPPORTED_EXPORT:')) throw error
+        return { ok: false, results: [], durationMs: 0, error: error.message }
+      }
+    }
+    const result = await runArm(build, retained)
+    const candidateInputsUnchanged = currentInputsMatch()
+    // Diagnostic incumbent reads never mint an admission. Promotion comparisons own both actual runs.
+    const incumbentResult = input.baseline ? null : await runArm(incumbentBuild, retained)
+    const zeroArm = result.results.length === 0 || result.error === 'CANDIDATE_TRIAL_TIMEOUT' ? { arm: 'candidate', cause: result.error }
+      : incumbentResult !== null && (incumbentResult.results.length === 0 || incumbentResult.error === 'CANDIDATE_TRIAL_TIMEOUT')
+        ? { arm: 'baseline', cause: incumbentResult.error } : null
+    const passedCases = retentionFilter(result.results, row => row.pass === true).length
+    const baselinePassedCases = incumbentResult ? retentionFilter(incumbentResult.results, row => row.pass === true).length : 0
+    // Only rows and fixtures captured in the verified build may establish independent coverage.
+    const eligibleRows: Record<string, unknown>[] = []
+    if (suiteAdmitted && organId && Array.isArray(admittedBaseline.cases) && record(admittedBaseline.fixtures)) {
+      for (const row of admittedBaseline.cases) {
+        if (!record(row) || typeof row.id !== 'string' || !record(row.args) || row.args.organ !== organId || typeof row.author !== 'string'
+          || typeof row.args.fixture !== 'string' || !Object.hasOwn(admittedBaseline.fixtures, row.args.fixture)) continue
+        const author = retentionReplace(retentionNormalize(row.author, 'NFKC'), /\p{Default_Ignorable_Code_Point}/gu, '')
+        if (author !== RUNTIME_CANDIDATE_AUTHOR && retentionIncludes(RETENTION_INDEPENDENT_AUTHORS, author)) {
+          eligibleRows.push(trialCase(row))
+        }
+      }
+    }
+    const pinnedTargetedCases = eligibleRows.length
+    const targetCovered = pinnedTargetedCases > 0
+    let unchanged = candidateInputsUnchanged && currentInputsMatch()
+    const completePair = (candidate: CandidateTrialResult, incumbent: CandidateTrialResult, expectedCases = cases): boolean =>
+      completeTrial(candidate, expectedCases, 'candidate', incumbent) && completeTrial(incumbent, expectedCases, 'incumbent', candidate)
+      && candidate.graderControls?.caseSetDigest === incumbent.graderControls?.caseSetDigest
+      && candidate.graderControls?.runnerDigest === incumbent.graderControls?.runnerDigest
+    const preservesRows = (candidate: CandidateTrialResult, incumbent: CandidateTrialResult, expectedCases = cases): boolean =>
+      retentionEvery(candidate.results, (row, index) => {
+        const args = expectedCases[index]?.args
+        return (record(args) && args.organ === organId ? row.pass === true : true)
+          && (incumbent.results[index]?.pass !== true || row.pass === true)
       })
-      const names = new Set<string>()
-      for (const name of Array.isArray(suite.organs) ? suite.organs : []) {
-        if (typeof name !== 'string') throw new Error('PEARL_SUITE_INVALID')
-        names.add(name)
+    const fullComparisonComplete = Boolean(incumbentResult && completePair(result, incumbentResult) && unchanged)
+    let isolatedComplete = true, isolatedCandidatePass = true, isolatedImprovement = false
+    let isolatedCandidatePassed = 0, isolatedIncumbentPassed = 0
+    let pinnedOnlyComplete = false, pinnedOnlyPassed = false
+    if (suiteAdmitted && fullComparisonComplete && record(admittedBaseline.fixtures)
+      && typeof admittedBaseline.fixedNow === 'number') {
+      // Live-only rows cannot add peers or shared-realm mutations to a pinned comparison.
+      const pinnedNames = new Set<string>()
+      const pinnedOrgans: unknown[] = Array.isArray(admittedBaseline.organs) ? admittedBaseline.organs : []
+      for (const name of pinnedOrgans) {
+        if (typeof name === 'string') pinnedNames.add(name)
       }
-      for (const test of cases) {
-        const args = test.args as { organ?: unknown } | null
-        if (!args || typeof args.organ !== 'string') throw new Error('PEARL_SUITE_INVALID')
-        names.add(args.organ)
+      const baselineRows: unknown[] = Array.isArray(admittedBaseline.cases) ? admittedBaseline.cases : []
+      for (const row of baselineRows) {
+        if (record(row) && record(row.args) && typeof row.args.organ === 'string') pinnedNames.add(row.args.organ)
       }
-      const organId = input.organId
-      if (organId !== undefined && (!/^[a-z][a-z0-9-]{0,63}$/.test(organId) || !head.entries[organId])) throw new Error('PEARL_ORGAN_ID_INVALID')
-      if (!organId && (input.candidateSource !== undefined || input.candidateSpecifier !== undefined || input.baselineSpecifier !== undefined)) throw new Error('PEARL_ORGAN_ID_REQUIRED')
-      if (input.candidateSource !== undefined && input.candidateSpecifier !== undefined) throw new Error('PEARL_CANDIDATE_AMBIGUOUS')
-      if (input.baselineSpecifier !== undefined) throw new Error('PEARL_BASELINE_OVERRIDE_REFUSED')
-      if (organId) names.add(organId)
-      const build: Record<string, string> = Object.create(null)
-      const shas: Record<string, string> = Object.create(null)
-      const incumbentBuild: Record<string, string> = {}
-      const incumbentShas: Record<string, string> = {}
-      Object.setPrototypeOf(incumbentBuild, null)
-      Object.setPrototypeOf(incumbentShas, null)
-      for (const name of [...names].sort()) {
-        if (!/^[a-z][a-z0-9-]{0,63}$/.test(name)) throw new Error('PEARL_ORGAN_ID_INVALID')
-        const entry = head.entries[name]
-        const selected = name === organId
-        const readSource = (specifier: string | undefined): string => {
-          if (typeof specifier !== 'string' || !/^ball:[a-f0-9]{64}$/.test(specifier)) throw new Error('PEARL_BUILD_UNAVAILABLE: ' + name)
-          const code = vfs.readFileSync(join(BALLS_DIR, specifier.slice(5) + '.js'), 'utf8') as string
-          if (sha256HexSync(code) !== specifier.slice(5)) throw new Error('PEARL_MODULE_HASH_MISMATCH: ' + name)
-          return code
-        }
-        // Capture the selected incumbent and every peer before either arm executes.
-        incumbentBuild[name] = readSource(entry?.specifier)
-        incumbentShas[name] = sha256HexSync(incumbentBuild[name])
-        let code: string
-        if (selected && !input.baseline && input.candidateSource !== undefined) code = input.candidateSource
-        else if (selected && !input.baseline && input.candidateSpecifier !== undefined) code = readSource(input.candidateSpecifier)
-        else code = incumbentBuild[name]
-        if (typeof code !== 'string' || !code.trim()) throw new Error('PEARL_SOURCE_INVALID')
-        build[name] = code
-        shas[name] = sha256HexSync(code)
+      const pinnedBuild = Object.create(null) as Record<string, string>
+      const pinnedIncumbent = Object.create(null) as Record<string, string>
+      for (const name of pinnedNames) {
+        const source = build[name], incumbent = incumbentBuild[name]
+        if (typeof source !== 'string' || typeof incumbent !== 'string') throw new Error('PEARL_BUILD_UNAVAILABLE: ' + name)
+        pinnedBuild[name] = source
+        pinnedIncumbent[name] = incumbent
       }
-      const retained = { fixtures: suite.fixtures as Record<string, unknown>, fixedNow: suite.fixedNow, cases }
-      const currentInputsMatch = (): boolean => currentBall.ballId === head.ballId && currentSuiteDigest() === suiteDigest
-        && sha256HexSync(vfs.readFileSync(RETENTION_SUITE_PATH)) === suiteBytesDigest
-      const completeTrial = (trial: CandidateTrialResult): boolean => trial.results.length === cases.length
-        && trial.results.every((row, index) => row.id === cases[index]?.id && typeof row.pass === 'boolean' && Object.hasOwn(row, 'got'))
-        && trial.graderControls?.allPassed === true && trial.graderControls.knownGoodAccepted && trial.graderControls.knownBadRejected
-        && trial.graderControls.acceptAllRejected && trial.graderControls.rejectAllRejected
-        && (trial.routeEvidence?.status === 'checked' || trial.routeEvidence?.status === 'unsupported')
-        && trial.routeEvidence.checkedProperties.includes('exact-case-result-framing')
-        && trial.routeEvidence.checkedProperties.includes('parent-output-comparison')
-      const result = await trialScionRetention(build, retained)
-      const candidateInputsUnchanged = currentInputsMatch()
-      // Diagnostic incumbent reads never mint an admission. Promotion comparisons own both actual runs.
-      const incumbentResult = input.baseline ? null : await trialScionRetention(incumbentBuild, retained)
-      const zeroArm = result.results.length === 0 ? { arm: 'candidate', cause: result.error }
-        : incumbentResult !== null && incumbentResult.results.length === 0 ? { arm: 'baseline', cause: incumbentResult.error } : null
-      const passedCases = result.results.filter(row => row.pass === true).length
-      const baselinePassedCases = incumbentResult?.results.filter(row => row.pass === true).length ?? 0
-      const targetCovered = Boolean(organId && cases.some(test => (test.args as { organ: string }).organ === organId))
-      const unchanged = candidateInputsUnchanged && currentInputsMatch()
-      const comparisonComplete = Boolean(incumbentResult && completeTrial(result) && completeTrial(incumbentResult)
-        && result.graderControls?.caseSetDigest === incumbentResult.graderControls?.caseSetDigest
-        && result.graderControls?.runnerDigest === incumbentResult.graderControls?.runnerDigest && unchanged)
-      const targetImproved = comparisonComplete && cases.some((test, index) => (test.args as { organ: string }).organ === organId
-        && incumbentResult?.results[index]?.pass === false && result.results[index]?.pass === true)
-      const winnerId = !comparisonComplete || passedCases === baselinePassedCases ? null : passedCases > baselinePassedCases ? 'candidate' : 'baseline'
-      const qualifiedForPromotion = Boolean(result.ok && passedCases === cases.length && targetCovered && targetImproved
-        && winnerId === 'candidate' && organId && shas[organId] !== incumbentShas[organId] && suiteAdmitted)
-      let qualificationId: string | null = null
-      // R39 T1: Pearl retention qualification is minted for any passing organ so T1 single-organ canonical updates can auto-commit.
-      if (qualifiedForPromotion && organId && !input.baseline) {
-        qualificationId = randomUUID()
-        if (retentionAdmissions.size >= 32) {
-          const oldest = retentionAdmissions.keys().next()
-          if (!oldest.done) retentionAdmissions.delete(oldest.value)
-        }
-        retentionAdmissions.set(qualificationId, { organId, specifier: `ball:${shas[organId]}`, headBallId: head.ballId, suiteDigest, issuedAt: Date.now() })
+      const pinnedCases = (admittedBaseline.cases as Record<string, unknown>[]).map(trialCase)
+      const pinnedOnly = await runArm(pinnedBuild, {
+        cases: pinnedCases, fixtures: admittedBaseline.fixtures, fixedNow: admittedBaseline.fixedNow,
+      })
+      unchanged = unchanged && currentInputsMatch()
+      const pinnedBaseline = await runArm(pinnedIncumbent, {
+        cases: pinnedCases, fixtures: admittedBaseline.fixtures, fixedNow: admittedBaseline.fixedNow,
+      })
+      unchanged = unchanged && currentInputsMatch()
+      pinnedOnlyComplete = completePair(pinnedOnly, pinnedBaseline, pinnedCases)
+      pinnedOnlyPassed = pinnedOnlyComplete && preservesRows(pinnedOnly, pinnedBaseline, pinnedCases)
+      for (const row of eligibleRows) {
+        const isolated = { cases: [row], fixtures: admittedBaseline.fixtures, fixedNow: admittedBaseline.fixedNow }
+        const candidateRow = await runArm(pinnedBuild, isolated)
+        unchanged = unchanged && currentInputsMatch()
+        const incumbentRow = await runArm(pinnedIncumbent, isolated)
+        unchanged = unchanged && currentInputsMatch()
+        const complete = completePair(candidateRow, incumbentRow, isolated.cases)
+        isolatedCandidatePassed += candidateRow.results[0]?.pass === true ? 1 : 0
+        isolatedIncumbentPassed += incumbentRow.results[0]?.pass === true ? 1 : 0
+        isolatedComplete = isolatedComplete && complete
+        isolatedCandidatePass = isolatedCandidatePass && candidateRow.ok && candidateRow.results[0]?.pass === true
+        isolatedImprovement = isolatedImprovement || (complete && incumbentRow.results[0]?.pass === false
+          && candidateRow.results[0]?.pass === true)
       }
-      return { ...result, trialOk: result.ok, passedCases, totalCases: cases.length, targetCovered, qualifiedForPromotion,
-        qualificationId, organs: shas, headBallId: head.ballId, headEpoch: head.epoch, suiteDigest, suiteBytesDigest,
-        comparisonComplete, targetImproved, winnerId, decidedBy: winnerId === null ? 'inconclusive' : 'retention-passes',
-        baselineResult: incumbentResult ? { ...incumbentResult, trialOk: incumbentResult.ok, passedCases: baselinePassedCases,
-          totalCases: cases.length, organs: incumbentShas, headBallId: head.ballId, headEpoch: head.epoch, suiteDigest, suiteBytesDigest,
-          suiteAdmission: suiteAdmitted ? 'build-pinned' : 'unverified', targetCovered, qualifiedForPromotion: false, qualificationId: null } : null,
-        suiteAdmission: suiteAdmitted ? 'build-pinned' : 'unverified',
-        ...(!suitePinAvailable ? { admissionError: 'PEARL_SUITE_PIN_UNAVAILABLE' }
-          : !suiteAdmitted ? { admissionError: 'PEARL_SUITE_PIN_MISMATCH' } : {}),
-        admissionScope: 'behavioral-retention-only', protectedSurface: Boolean(organId && protectedOrgans.has(organId)),
-        // Round 37: an arm that observed no case is not a score of zero; it is named, beside each arm's own error (which
-        // Pearl reports per arm), never written over it.
-        ...(zeroArm === null ? {} : { arenaRefusal: `ARENA_ZERO_OBSERVATIONS: the ${zeroArm.arm} arm ran no case`
-          + `${typeof zeroArm.cause === 'string' ? ` (${zeroArm.cause.slice(0, 300)})` : ''}`, arenaObservations: 0 }) }
-    },
+    }
+    const comparisonComplete = suiteAdmitted && fullComparisonComplete && pinnedOnlyComplete
+      && isolatedComplete && unchanged && currentInputsMatch()
+    const targetImproved = comparisonComplete && isolatedImprovement
+    const comparedWinner = !comparisonComplete || isolatedCandidatePassed === isolatedIncumbentPassed ? null
+      : isolatedCandidatePassed > isolatedIncumbentPassed ? 'candidate' : 'baseline'
+    const liveComplete = completeTrial(result, cases, 'candidate', incumbentResult ?? undefined)
+    const livePassed = liveComplete && incumbentResult !== null && fullComparisonComplete && preservesRows(result, incumbentResult)
+    const qualifiedForPromotion = Boolean(livePassed && pinnedOnlyPassed
+      && isolatedCandidatePass && targetCovered && targetImproved
+      && comparedWinner === 'candidate' && organId && shas[organId] !== incumbentShas[organId] && suiteAdmitted)
+    let admissionError: string | null = null
+    if (!suitePinAvailable) admissionError = 'PEARL_SUITE_PIN_UNAVAILABLE'
+    else if (!suiteAdmitted) admissionError = 'PEARL_SUITE_PIN_MISMATCH'
+    else if (!input.baseline && !targetCovered) admissionError = 'PEARL_SUITE_NO_APPROVED_TARGET_CASE'
+    else if (!liveComplete && retentionEvery(result.results, row => Array.isArray(row.infrastructure))
+      && !retentionEvery(result.results, row => Array.isArray(row.infrastructure) && row.infrastructure.length === 0)) admissionError = 'PEARL_SUITE_LIVE_FAILED'
+    else if (!liveComplete) admissionError = 'PEARL_SUITE_LIVE_INCOMPLETE'
+    else if (!fullComparisonComplete) admissionError = 'PEARL_SUITE_COMPARISON_INCOMPLETE'
+    else if (!livePassed) admissionError = 'PEARL_SUITE_LIVE_FAILED'
+    else if (!pinnedOnlyComplete) admissionError = 'PEARL_SUITE_PINNED_ONLY_INCOMPLETE'
+    else if (!pinnedOnlyPassed) admissionError = 'PEARL_SUITE_PINNED_ONLY_FAILED'
+    else if (!comparisonComplete) admissionError = 'PEARL_SUITE_COMPARISON_INCOMPLETE'
+    else if (!isolatedCandidatePass) admissionError = 'PEARL_SUITE_ISOLATED_FAILED'
+    else if (!targetImproved) admissionError = 'PEARL_SUITE_NOT_IMPROVED'
+    const winnerId = qualifiedForPromotion ? comparedWinner : null
+    let qualificationId: string | null = null
+    // Recheck the unique mount after both awaited trials; a saved context cannot survive disposal or same-SHA remount.
+    const pearlFiber = activeFibers.get('seed-pearl')
+    const pearlEntry = currentBall.entries['seed-pearl']
+    const pearlDisabled: unknown = pearlEntry?.disabled
+    const callerCurrent = caller !== null && caller.name === 'seed-pearl' && mountedOrgans.get('seed-pearl') === caller
+      && pearlEntry?.specifier === `ball:${caller.sha256}` && pearlDisabled === false
+      && pearlFiber?.specifier === `ball:${caller.sha256}` && pearlFiber.fiber.state === CORDIS_FIBER_ACTIVE
+      && typeof pearlFiber.fiber.uid === 'number'
+    if (qualifiedForPromotion && organId && !input.baseline && callerCurrent) {
+      qualificationId = randomUUID()
+      if (retentionAdmissions.size >= 32) {
+        const oldest = retentionAdmissions.keys().next()
+        if (!oldest.done) retentionAdmissions.delete(oldest.value)
+      }
+      retentionAdmissions.set(qualificationId, { organId, specifier: `ball:${shas[organId]}`, headBallId: head.ballId, suiteDigest, issuedAt: Date.now() })
+    }
+    return { ...result, ok: input.baseline ? result.ok : livePassed, trialOk: result.ok,
+      passedCases, totalCases: cases.length, targetCovered, qualifiedForPromotion,
+      qualificationId, organs: shas, headBallId: head.ballId, headEpoch: head.epoch,
+      suiteDigest, suiteBytesDigest, baselineDigest, pinnedTargetedCases, pinnedOnlyPassed,
+      comparisonComplete, targetImproved, winnerId, decidedBy: !qualifiedForPromotion ? 'refused' : 'retention-passes',
+      baselineResult: incumbentResult ? { ...incumbentResult, trialOk: incumbentResult.ok, passedCases: baselinePassedCases,
+        totalCases: cases.length, organs: incumbentShas, headBallId: head.ballId, headEpoch: head.epoch,
+        suiteDigest, suiteBytesDigest, baselineDigest, pinnedTargetedCases,
+        suiteAdmission: suiteAdmitted ? 'build-pinned' : 'unverified', targetCovered, qualifiedForPromotion: false, qualificationId: null } : null,
+      suiteAdmission: suiteAdmitted ? 'build-pinned' : 'unverified',
+      ...(admissionError ? { admissionError } : {}),
+      admissionScope: 'behavioral-retention-only', protectedSurface: Boolean(organId && protectedOrgans.has(organId)),
+      // Round 37: an arm that observed no case is not a score of zero; it is named, beside each arm's own error (which
+      // Pearl reports per arm), never written over it.
+      ...(zeroArm === null ? {} : { arenaRefusal: `ARENA_ZERO_OBSERVATIONS: the ${zeroArm.arm} arm ran no case`
+        + `${typeof zeroArm.cause === 'string' ? ` (${zeroArm.cause.slice(0, 300)})` : ''}`, arenaObservations: 0 }) }
+  }
+
+  // Lazy methods are safe while initial Seed setup runs before the public service is initialized.
+  function scionForCaller(caller: MountedOrganRecord) {
+    return freezeRuntimeValue({
+      trialRetentionCandidate: (input: RetentionTrialInput) => trialRetentionCandidate(input, caller),
+      growOrgan: (input: ScionGrowthInput) => scionService.growOrgan(input),
+      trialCandidate: (input: CandidateTrialInput) => scionService.trialCandidate(input),
+      compileOrgan: (input: ScionInput & { name?: string; includeCode?: boolean }) => scionService.compileOrgan(input),
+    })
+  }
+  const scionService = {
+    /** Global and direct calls are diagnostics, never issuing capabilities. */
+    trialRetentionCandidate: (input: RetentionTrialInput) => trialRetentionCandidate(input, null),
     async growOrgan(input: ScionGrowthInput): Promise<Record<string, unknown>> {
       return await growScionOrgan(input, {
         head: () => currentBall.ballId,
@@ -4212,6 +4405,7 @@ export async function mountX6BallRuntime(
     createSnapshot(`pre-tree_patch:${id}`)
     retentionAdmissions.delete(input.qualificationId ?? '')
     await mountOrSwapEntry(nextEntry, markApplied)
+    if (mountedOrgans.get(id)?.sha256 !== sha) throw new Error('PEARL_ADMITTED_MOUNT_SHA_MISMATCH')
     markApplied()
     const previousBall = currentBall
     currentBall = nextBall
@@ -6790,6 +6984,63 @@ export async function mountX6BallRuntime(
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), credentials: 'same-origin',
         })
         return await res.json()
+      },
+    })
+
+    registerBuiltin({
+      name: 'crew_relay',
+      description:
+        'Owner-gated door to the Linear crew relay. `read` is ONE call: it returns the newest 50 '
+        + 'comments on the relay issue and `gap: true` when your `after` cursor is older than that page. '
+        + '`say` posts one comment (max 4000 chars). Posts must be at least 5 s apart; a sooner one answers 429 '
+        + '`RELAY_RATE_LIMITED`: wait 5 s, retry once, then stop. On 429 `RELAY_UPSTREAM_RATE_LIMITED` (Linear), wait and '
+        + 'retry once, then stop. On 502 `RELAY_UPSTREAM_ERROR`, do not rapid-retry; report it. On '
+        + '`RELAY_ANSWER_TOO_LARGE`, read again with `after` set to a recent ISO time (for example one hour ago). An '
+        + 'answer that is not JSON returns `RELAY_ANSWER_NOT_JSON` with its status; do not retry it.',
+      parameters: {
+        op: {
+          type: 'string',
+          required: true,
+          enum: ['read', 'say'],
+          description: 'Read the relay, or post one comment.',
+        },
+        after: {
+          type: 'string',
+          description: 'Cursor for `read`: the `createdAt` ISO time of the newest comment you have seen (e.g. '
+            + '2026-11-13T07:00:00.000Z); anything else is refused as RELAY_AFTER_INVALID. When it is older than the newest '
+            + 'page the answer carries `gap: true`.',
+        },
+        // The tool schema DSL has no `maxLength` (defineTool refuses the key, so the tool would not register); the edge
+        // holds the 4000-character bound and answers RELAY_COMMENT_LENGTH.
+        body: { type: 'string', description: 'Comment text for `say`, 1 to 4000 characters.' },
+      },
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        if (!origin || origin === 'null') throw new Error('crew_relay requires a connected host origin')
+        const op = typeof args.op === 'string' ? args.op : ''
+        if (op !== 'read' && op !== 'say') throw new Error('RELAY_OPERATION_UNKNOWN')
+        enforceToolInvocation('crew_relay', { ...args, op })
+        // Lead's rule at landing, the same as her GitHub comments (githubTextSafe): a post that starts with a slash command
+        // or carries an @mention notifies someone under the owner's name and cannot be taken back, so it is not hers to send.
+        if (op === 'say' && typeof args.body === 'string' && args.body.trim() !== '' && !githubTextSafe(args.body, 65_536)) {
+          return { ok: false, code: 'RELAY_SAY_NEEDS_OWNER',
+            next: 'A comment that starts with a slash command or carries an @mention needs the owner: write it without, or ask him to post it.' }
+        }
+        const url = new URL('/_host/crew-relay', origin)
+        if (op === 'read' && typeof args.after === 'string' && args.after !== '') url.searchParams.set('after', args.after)
+        const res = await fetch(url.href, {
+          method: op === 'read' ? 'GET' : 'POST',
+          credentials: 'same-origin',
+          ...(op === 'say' ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ body: args.body }) } : {}),
+        })
+        const text = await res.text()
+        if (new TextEncoder().encode(text).byteLength > 256 * 1024) {
+          return { ok: false, code: 'RELAY_ANSWER_TOO_LARGE', status: res.status }
+        }
+        try {
+          const answer: unknown = JSON.parse(text)
+          return answer
+        } catch { return { ok: false, code: 'RELAY_ANSWER_NOT_JSON', status: res.status } }
       },
     })
 

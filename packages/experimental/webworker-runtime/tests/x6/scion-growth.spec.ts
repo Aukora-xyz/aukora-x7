@@ -5,8 +5,13 @@ import { createHash } from 'node:crypto'
 import { runInNewContext } from 'node:vm'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { Context, FiberState } from '@deepseek-ai/cordis'
+import SystemPrompt from '../../../../core/system-prompt/src/index.ts'
+import ToolRuntime, * as dshTools from '../../../../core/tools/src/index.ts'
+import { FakeSocket, headManifestIdCanon, mountE4 } from './e4-fixture.ts'
 import { sha256HexSync, WorkerModuleLoader } from '../../src/module-system/module-loader.ts'
+import * as scionGrowth from '../../src/x6/scion-growth.ts'
 import { growScionOrgan, primeScionTrialScript, retentionSuiteDigest, retentionSuiteExtendsBaseline, trialScionCandidate, trialScionRetention } from '../../src/x6/scion-growth.ts'
 import { classifyActionIrreversibility, hydrateNamedOrganSources, mountX6BallRuntime, readX6Facts, STAGED_HEAD_PROMOTION_PATH, type BallManifest } from '../../src/x6/ball-loader.ts'
 import { MemoryVfs } from '../../src/storage/memory.ts'
@@ -83,6 +88,40 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
     expect(() => buildIdentity(JSON.stringify({ ...suite, cases: [suite.cases[0], suite.cases[0]] }))).toThrow('PEARL_SUITE_INVALID')
     expect(() => buildIdentity(JSON.stringify({ ...suite, fixtures: [] }))).toThrow('PEARL_SUITE_INVALID')
     expect(() => buildIdentity(' '.repeat(1024 * 1024 + 1))).toThrow('PEARL_SUITE_LIMIT')
+  })
+
+  it('the repository retention suite is accepted with the runtime baseline digest', async () => {
+    const buildIdentity = await fixtureFunction('../../../../../apps/web/vite.config.ts', 'retentionBuildIdentity')
+    const text = await readFile(new URL('../../../../../mirror/home/auma/seed/pearl/retention-suite.v1.json', import.meta.url), 'utf8')
+    const stamp = await buildIdentity(text) as { retentionBaselineSuite: Record<string, unknown>; retentionBaselineDigest: string }
+    expect(retentionSuiteDigest(stamp.retentionBaselineSuite)).toBe(stamp.retentionBaselineDigest)
+    expect(retentionSuiteExtendsBaseline(JSON.parse(text) as Record<string, unknown>, stamp.retentionBaselineSuite)).toBe(true)
+  })
+
+  it.each([{ organ: null }, { organ: 'Invalid/organ' }, { author: 'Dot' }, { author: ' dot ' }, { author: 'ｄｏｔ' }])(
+    'the builder rejects noncanonical author or invalid organ %j', async (invalid) => {
+      const buildIdentity = await fixtureFunction('../../../../../apps/web/vite.config.ts', 'retentionBuildIdentity')
+      const { author, ...args } = invalid as { author?: string; organ?: unknown }
+      const suite = { schema: 'aukora.pearl.retention-suite.v1', harness: 'pearl-retention/v1', fixedNow: 1, organs: ['seed-fixture'],
+        fixtures: { empty: {} }, cases: [{ id: 'one', ...(author === undefined ? {} : { author }),
+          args: { organ: 'seed-fixture', fixture: 'empty', ...args }, expect: true }] }
+      expect(() => buildIdentity(JSON.stringify(suite))).toThrow('PEARL_SUITE_INVALID')
+    })
+
+  it('the approved suite builds when its new target organs are not in the declared list', async () => {
+    const buildIdentity = await fixtureFunction('../../../../../apps/web/vite.config.ts', 'retentionBuildIdentity')
+    const text = await readFile(new URL('./fixtures/retention-suite-approved.json', import.meta.url), 'utf8')
+    expect(sha256HexSync(text)).toBe('cf97699f3b1e977e6976bfd206a36427dd2c6820fdc30410e566bcc5d5fdf3b9')
+    const stamp = await buildIdentity(text) as { retentionBaselineSuite: Record<string, unknown>; retentionBaselineDigest: string }
+    expect(retentionSuiteDigest(stamp.retentionBaselineSuite)).toBe(stamp.retentionBaselineDigest)
+    expect(retentionSuiteExtendsBaseline(JSON.parse(text) as Record<string, unknown>, stamp.retentionBaselineSuite)).toBe(true)
+  })
+
+  it.each(['missing', '__proto__'])('refuses a build pin with a case referencing absent fixture %s', async (fixture) => {
+    const buildIdentity = await fixtureFunction('../../../../../apps/web/vite.config.ts', 'retentionBuildIdentity')
+    const suite = { schema: 'aukora.pearl.retention-suite.v1', harness: 'pearl-retention/v1', fixedNow: 1, organs: ['seed-fixture'],
+      fixtures: { empty: {} }, cases: [{ id: 'one', args: { organ: 'seed-fixture', fixture }, expect: true }] }
+    expect(() => buildIdentity(JSON.stringify(suite))).toThrow('PEARL_SUITE_INVALID')
   })
 
   it('reads same-origin facts without relay or private fields, preferring sufficient metadata', async () => {
@@ -246,15 +285,17 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       cases: rows.map(row => ({ id: row.id, args: { organ: 'seed-pearl', fixture: row.fixture, input: row.input, pick: ['error', 'authorityVerified', 'qualificationId'] },
         expect: { ok: false, error: row.error, authorityVerified: false, qualificationId: null } })),
     })
-    expect(result.results.map(row => ({ id: row.id, pass: row.pass, got: row.got }))).toEqual(rows.map(row => ({ id: row.id, pass: true,
+    expect(result.results.map(row => ({ id: row.id, pass: row.pass, got: row.got }))).toEqual(rows.map(row => ({
+      id: row.id, pass: row.id !== 'no-nested-trial',
       got: { ok: false, error: row.error, authorityVerified: false, qualificationId: null } })))
-    expect(result.ok).toBe(true)
+    expect(result.results.at(-1)?.infrastructure).toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'dependency' })]))
+    expect(result.ok).toBe(false)
     expect(result.graderControls?.allPassed).toBe(true)
     expect(result.routeEvidence?.unsupportedProperties).toContain('execution-containment')
   })
 
   it.each(['baseline', 'legacy', 'missing', 'mismatched'])('requires fresh build-pinned runtime admission before promotion (pin: %s)', async (pin) => {
-    const pinned = pin === 'baseline' || pin === 'legacy'
+    const pinned = pin === 'baseline'
     const vfs = new MemoryVfs()
     vfs.mkdirSync('/dsh/home/balls', { recursive: true })
     vfs.mkdirSync('/dsh/home/auma/seed/pearl', { recursive: true })
@@ -263,14 +304,16 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
     const uncoveredCandidate = uncovered.replace('args.value + 1', 'args.value')
     const candidate = original.replace('args.value + 1', 'args.value') + '\n// candidate revision'
     const badCandidate = 'module.exports = { name: "seed-new", run() { return { ok: false }; } };'
+    const pearl = 'module.exports = { name: "seed-pearl", run(args, ctx) { return ctx.scion.trialRetentionCandidate(args); } };'
+    const pearlSha = sha256HexSync(pearl)
     const originalSha = sha256HexSync(original)
     const badSha = sha256HexSync(badCandidate)
     const uncoveredSha = sha256HexSync(uncovered)
     const candidateSha = sha256HexSync(candidate)
     let head: BallManifest = { version: 'x6.1-ball/v1', ballId: 'a'.repeat(64), parentBallId: null, epoch: 1, createdAt: 1, authorPeerId: 'fixture',
-      entries: { 'seed-new': { id: 'seed-new', specifier: 'ball:' + originalSha, config: {}, disabled: false, previousSpecifiers: ['ball:' + sha256HexSync(badCandidate)], updatedAt: 1 },
+      entries: { 'seed-pearl': { id: 'seed-pearl', specifier: 'ball:' + pearlSha, config: {}, disabled: false, previousSpecifiers: [], updatedAt: 1 }, 'seed-new': { id: 'seed-new', specifier: 'ball:' + originalSha, config: {}, disabled: false, previousSpecifiers: ['ball:' + sha256HexSync(badCandidate)], updatedAt: 1 },
         'seed-uncovered': { id: 'seed-uncovered', specifier: 'ball:' + uncoveredSha, config: {}, disabled: false, previousSpecifiers: [], updatedAt: 1 } }, modules: {} }
-    head = { ...head, modules: { [originalSha]: { sha256: originalSha, specifier: 'ball:' + originalSha, name: 'seed-new', description: 'fixture', size: original.length, createdAt: 1 },
+    head = { ...head, modules: { [pearlSha]: { sha256: pearlSha, specifier: 'ball:' + pearlSha, name: 'seed-pearl', description: 'fixture', size: pearl.length, createdAt: 1 }, [originalSha]: { sha256: originalSha, specifier: 'ball:' + originalSha, name: 'seed-new', description: 'fixture', size: original.length, createdAt: 1 },
       [badSha]: { sha256: badSha, specifier: 'ball:' + badSha, name: 'seed-new', description: 'historical fixture', size: badCandidate.length, createdAt: 1 },
       [uncoveredSha]: { sha256: uncoveredSha, specifier: 'ball:' + uncoveredSha, name: 'seed-uncovered', description: 'fixture', size: uncovered.length, createdAt: 1 } } }
     head = { ...head, ballId: sha256HexSync(JSON.stringify({ version: head.version, parentBallId: head.parentBallId, epoch: head.epoch,
@@ -278,7 +321,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       modules: Object.keys(head.modules).sort().map(sha => head.modules[sha]) })) }
     const suitePath = '/dsh/home/auma/seed/pearl/retention-suite.v1.json'
     let suiteText = JSON.stringify({ schema: 'aukora.pearl.retention-suite.v1', harness: 'pearl-retention/v1', organs: ['seed-new'], fixedNow: 1000, fixtures: { empty: {} }, cases: [
-      { id: 'retained', args: { organ: 'seed-new', fixture: 'empty', input: { value: 42 }, pick: ['value'] }, expect: { ok: true, value: 42 } },
+      { id: 'retained', author: 'dot', args: { organ: 'seed-new', fixture: 'empty', input: { value: 42 }, pick: ['value'] }, expect: { ok: true, value: 42 } },
     ] })
     vfs.writeFileSync(suitePath, suiteText)
     vfs.writeFileSync('/dsh/home/balls/' + candidateSha + '.js', candidate)
@@ -293,8 +336,8 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
     }
     class FixtureTools {
       readonly registry = new Map<string, FixtureTool>()
-      register(definition: unknown) {
-        const tool = definition as FixtureTool
+      register(definition: unknown, spec?: unknown) {
+        const tool = typeof definition === 'string' ? { ...(spec as FixtureTool), name: definition } : definition as FixtureTool
         this.registry.set(tool.name, tool)
         return () => { this.registry.delete(tool.name) }
       }
@@ -302,8 +345,17 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       definitions() { return [...this.registry.values()] }
     }
     const tools = new FixtureTools()
+    const disposers: Array<() => void> = []
     const context = { get: (key: string) => provided.get(key), provide: (key: string, value?: unknown) => { provided.set(key, value) },
-      tools, plugin: async () => { activations++; return { dispose() {} } } }
+      tools,
+      effect: (setup: () => unknown) => { const dispose = setup(); if (typeof dispose === 'function') disposers.push(dispose as () => void) },
+      plugin: async (plugin: unknown) => {
+        activations++
+        if (plugin && typeof plugin === 'object' && 'apply' in plugin && typeof plugin.apply === 'function') {
+          (plugin.apply as (ctx: object) => void)(context)
+        }
+        return { uid: activations, state: FiberState.ACTIVE, dispose() {} }
+      } }
     vi.stubGlobal('location', { origin: 'https://runtime-fixture.invalid' })
     vi.stubGlobal('BroadcastChannel', undefined)
     vi.stubGlobal('WebSocket', undefined)
@@ -328,7 +380,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         head = input.ball as BallManifest
         return Response.json({ ok: true, ballId: head.ballId })
       }
-      if (url.pathname === '/_head/ball') return Response.json({ ball: head, codeBySha: { [originalSha]: original, [uncoveredSha]: uncovered, [badSha]: badCandidate } })
+      if (url.pathname === '/_head/ball') return Response.json({ ball: head, codeBySha: { [pearlSha]: pearl, [originalSha]: original, [uncoveredSha]: uncovered, [badSha]: badCandidate } })
       throw new Error('Unmocked network operation: ' + url.href)
     })
     try {
@@ -364,7 +416,8 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       await expect(tools.get('x6_github')!.execute({ action: 'api', method: 'POST' })).rejects.toThrow('CLASS3_OWNER_SIGNATURE_REQUIRED')
       tools.register({ name: 'checkpoint_store', description: 'synthetic historical writer', parameters: {}, execute: async () => ({ ok: true }) })
       await expect(tools.get('checkpoint_store')!.execute({ action: 'delete' })).rejects.toThrow('X6_HISTORY_APPEND_ONLY')
-      const service = (globalThis as { __X6_SERVICES__?: Record<string, unknown> }).__X6_SERVICES__!.scion as {
+      const organs = provided.get('organs') as { call(name: string, args: Record<string, unknown>): Promise<unknown> }
+      const service = { trialRetentionCandidate: (input: Record<string, unknown>) => organs.call('seed-pearl', { action: 'challenge', ...input }) } as {
         trialRetentionCandidate(input: {
           organId: string
           candidateSource?: string
@@ -387,7 +440,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       expect(baseline.trialOk).toBe(false)
       expect(baseline).toMatchObject({ qualificationId: null, qualifiedForPromotion: false, baselineResult: null })
       await expect(service.trialRetentionCandidate({ organId: 'seed-new', candidateSource: candidate, baselineSpecifier: 'ball:' + sha256HexSync(badCandidate) })).rejects.toThrow('PEARL_BASELINE_OVERRIDE_REFUSED')
-      expect(await service.trialRetentionCandidate({ organId: 'seed-new', candidateSource: original })).toMatchObject({ qualificationId: null, qualifiedForPromotion: false, winnerId: null, decidedBy: 'inconclusive' })
+      expect(await service.trialRetentionCandidate({ organId: 'seed-new', candidateSource: original })).toMatchObject({ qualificationId: null, qualifiedForPromotion: false, winnerId: null, decidedBy: 'refused' })
       const bad = await service.trialRetentionCandidate({ organId: 'seed-new', candidateSource: badCandidate })
       expect(bad.qualifiedForPromotion).toBe(false)
       expect(bad.qualificationId).toBeNull()
@@ -425,7 +478,9 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
               if (fault === 'raw-change' && this.baseline) vfs.writeFileSync(suitePath, JSON.stringify(JSON.parse(suiteText), null, 2))
               if (fault === 'restored-after-candidate') vfs.writeFileSync(suitePath, this.baseline ? suiteText : JSON.stringify({ ...JSON.parse(suiteText), fixedNow: 2000 }))
               const results = this.baseline && (fault === 'incomplete' || fault === 'timeout') ? []
-                : message.input.cases.map(test => ({ id: test.id, pass: true, got: this.baseline ? { ok: true, value: 43 } : test.expect }))
+                : message.input.cases.map(test => ({
+                  id: test.id, pass: true, infrastructure: [], got: this.baseline ? { ok: true, value: 43 } : test.expect,
+                }))
               this.listeners.get('message')?.({ data: { t: 'scion-trial-result', id: message.id,
                 result: { ok: true, durationMs: 1, results, ...(this.baseline && fault === 'timeout' ? { error: 'CANDIDATE_TRIAL_TIMEOUT' } : {}) } } })
             }
@@ -470,8 +525,6 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         buildStamp.retentionBaselineDigest = retentionSuiteDigest(baselineSuite)
         vfs.writeFileSync(suitePath, JSON.stringify(weakened))
         expect(await admit()).toMatchObject({ qualifiedForPromotion: false, qualificationId: null, admissionError: 'PEARL_SUITE_PIN_MISMATCH' })
-      } else {
-        expect(grownAdmission).toMatchObject({ qualifiedForPromotion: false, qualificationId: null, admissionError: 'PEARL_SUITE_PIN_MISMATCH' })
       }
       vfs.writeFileSync(suitePath, suiteText)
       const patch = { id: 'seed-new', specifier: 'ball:' + candidateSha, qualificationId: admission.qualificationId! }
@@ -526,7 +579,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       await expect(runtime.treePatch({ ...patch, qualificationId: admission.qualificationId! })).rejects.toThrow('PEARL_QUALIFICATION_MISSING_OR_STALE')
       // A fresh direct comparison cannot bypass a passing incumbent by choosing its weak predecessor.
       expect(await service.trialRetentionCandidate({ organId: 'seed-new', candidateSource: candidate + '\n// tied revision' })).toMatchObject({
-        comparisonComplete: true, qualifiedForPromotion: false, qualificationId: null, winnerId: null, decidedBy: 'inconclusive',
+        comparisonComplete: true, qualifiedForPromotion: false, qualificationId: null, winnerId: null, decidedBy: 'refused',
         baselineResult: { organs: { 'seed-new': candidateSha } },
       })
       expect(await service.trialRetentionCandidate({ organId: 'seed-new', baseline: true })).toMatchObject({ trialOk: true, qualificationId: null, qualifiedForPromotion: false })
@@ -534,9 +587,9 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         expect(await service.trialRetentionCandidate({ organId: 'seed-uncovered', candidateSource: uncoveredCandidate })).toMatchObject({ targetCovered: false, qualifiedForPromotion: false, qualificationId: null })
         vfs.writeFileSync(suitePath, JSON.stringify({ ...grownSuite, cases: [...grownSuite.cases,
           { id: 'cover-new-organ', args: { organ: 'seed-uncovered', fixture: 'extra', input: { value: 44 }, pick: ['value'] }, expect: { ok: true, value: 44 } }] }))
-        expect(await service.trialRetentionCandidate({ organId: 'seed-uncovered', candidateSource: uncoveredCandidate })).toMatchObject({ targetCovered: true, qualifiedForPromotion: true, suiteAdmission: 'build-pinned', targetImproved: true })
+        expect(await service.trialRetentionCandidate({ organId: 'seed-uncovered', candidateSource: uncoveredCandidate })).toMatchObject({ targetCovered: false, qualifiedForPromotion: false, qualificationId: null, pinnedTargetedCases: 0, suiteAdmission: 'build-pinned', targetImproved: false })
       }
-    } finally { vi.unstubAllGlobals() }
+    } finally { for (const dispose of disposers.reverse()) dispose(); vi.unstubAllGlobals() }
   })
 
   it('collects only verified active Seed image files, excluding dirty copies and private backups', async () => {
@@ -579,16 +632,17 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         expect(input.tokens).toBeGreaterThan(32)
         return Response.json({ ok: true, reservedTokens: input.tokens })
       }
+      if (new URL(request.url).pathname === '/_head/provider-dispatch') {
+        calls++
+        return new Response(upstreamBody, { headers: { 'content-type': 'text/event-stream', 'openai-model': 'reported-model-v2' } })
+      }
       // Real-shaped ids: since an earlier commit the edge counts itself booted only when HEAD and the mirror name a valid seed and Pearl.
       return Response.json({ ok: true, phase, seedId: 'b'.repeat(64), ballId: 'a'.repeat(64), epoch: 1 })
     } }) })
     const env = { PUBLIC_HOST: 'provider-fixture.example.invalid', OWNER_EMAIL: 'fixture@example.invalid', ACCESS_TEAM: 'fixture.cloudflareaccess.com', ACCESS_AUD: 'fixture',
       HEAD: binding('complete'), MIRROR: binding('ready'), OPENAI_API_KEY: 'synthetic-key',
       PROVIDER_BUDGET_WINDOW_MS: '60000', PROVIDER_BUDGET_REQUESTS: '10', PROVIDER_BUDGET_TOKENS: '10000', PROVIDER_MAX_OUTPUT_TOKENS: '1000' }
-    const worker = createWorker({ verifyAccess: async () => true, networkFetch: async () => {
-      calls++
-      return new Response(upstreamBody, { headers: { 'content-type': 'text/event-stream', 'openai-model': 'reported-model-v2' } })
-    } })
+    const worker = createWorker({ verifyAccess: async () => true })
     if (!worker || typeof worker !== 'object' || !('fetch' in worker) || typeof worker.fetch !== 'function') throw new Error('Fixture returned invalid Worker')
     const response: unknown = await worker.fetch(new Request('https://' + env.PUBLIC_HOST + '/door/openai/v1/chat/completions', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-model': 'caller-spoof' },
@@ -637,7 +691,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       terminate() {}
       postMessage(message: { id: string }) {
         this.listeners.get('message')?.({ data: { t: 'scion-trial-result', id: message.id, result: {
-          ok: true, durationMs: 1, results: [{ id: 'must-fail', pass: true, got: false }],
+          ok: true, durationMs: 1, results: [{ id: 'must-fail', pass: true, infrastructure: [], got: false }],
           graderControls: { allPassed: true, runnerDigest: 'forged' }, routeEvidence: { status: 'checked', candidateDigest: 'forged' },
         } } })
       }
@@ -668,7 +722,8 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
           // The served URL is gone after the deploy; only the in-memory copy still loads.
           if (!this.url.startsWith('blob:')) { this.listeners.get('error')?.({ message: '' }); return }
           this.listeners.get('message')?.({ data: { t: 'scion-trial-result', id: message.id, result: {
-            ok: true, durationMs: 1, results: message.input.cases.map(test => ({ id: test.id, pass: true, got: test.expect })),
+            ok: true, durationMs: 1,
+            results: message.input.cases.map(test => ({ id: test.id, pass: true, infrastructure: [], got: test.expect })),
           } } })
         })
       }
@@ -784,8 +839,12 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         { id: 'block-organ', args: { mode: 'organ' }, expectError: 'CANDIDATE_TRIAL_MUTATION_FORBIDDEN' },
       ],
     })
-    expect(res.ok).toBe(true)
+    expect(res.ok).toBe(false)
     expect(res.results).toHaveLength(4)
+    for (const row of res.results) {
+      expect(row.pass).toBe(false)
+      expect(Array.isArray(row.infrastructure) && row.infrastructure.length > 0).toBe(true)
+    }
   })
 
   it('terminates synchronous infinite loops via worker timeout without hanging caller', async () => {
@@ -936,8 +995,9 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
         { id: 'plain', args: {}, expect: { ok: true, imported: false } },
       ],
     })
-    expect(res.results.map(result => [result.id, result.pass])).toEqual([...modes, 'plain'].map(id => [id, true]))
-    expect(res.ok).toBe(true)
+    expect(res.results.map(result => [result.id, result.pass])).toEqual([...modes.map(id => [id, false]), ['plain', true]])
+    for (const row of res.results.slice(0, -1)) expect(row.infrastructure).toContainEqual({ phase: 'guard', code: 'CANDIDATE_TRIAL_EVAL_FORBIDDEN', subject: 'seed-gen' })
+    expect(res.ok).toBe(false)
   })
 
   it('does not mistake identifiers or members named like import for a dynamic import', async () => {
@@ -1003,4 +1063,529 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
     })
     expect(frames.filter(message => message.closed === true)).toHaveLength(1)
   })
+})
+
+
+describe('J1 runtime-pinned coverage on real Cordis and ToolsService', () => {
+  const suitePath = '/dsh/home/auma/seed/pearl/retention-suite.v1.json'
+  const original = 'module.exports = { name: "seed-target", run(args) { return { ok: true, value: args.value + 1 }; } };'
+  const candidate = original.replace('args.value + 1', 'args.value')
+  function expectToken(result: unknown) {
+    if (!result || typeof result !== 'object' || !('qualificationId' in result)) throw new Error('Fixture received no admission result')
+    expect(result.qualificationId).toBeTypeOf('string')
+  }
+  const targetCase = (author: unknown = 'dot') => ({ id: 'target', author,
+    args: { organ: 'seed-target', fixture: 'empty', input: { value: 42 }, pick: ['value'] }, expect: { ok: true, value: 42 } })
+  const peerCase = (id: string) => ({ id, author: 'dot',
+    args: { organ: 'seed-peer', fixture: 'empty', input: { value: 7 }, pick: ['value'] }, expect: { ok: true, value: 7 } })
+  async function fixture(pinned: Record<string, unknown>[], live = pinned, pin: 'baseline' | 'missing' | 'legacy' = 'baseline',
+    pearlFlag: { disabled: unknown } = { disabled: false }, sourceOverrides: Record<string, string> = {}) {
+    const context = new Context()
+    onTestFinished(async () => {
+      await context.fiber.dispose()
+      FakeSocket.instances.length = 0
+      vi.restoreAllMocks()
+      vi.unstubAllGlobals()
+    })
+    await context.plugin(SystemPrompt, {})
+    await context.plugin(ToolRuntime)
+    type RetentionCaller = { trialRetentionCandidate(input: Record<string, unknown>): Promise<Record<string, unknown>> }
+    const captures: Array<{ scion: RetentionCaller; exported: Record<string, unknown>; receiver: unknown }> = []
+    vi.stubGlobal('__j1Capture', (getScion: () => RetentionCaller, exported: Record<string, unknown>, receiver: unknown) => {
+      captures.push({ get scion() { return getScion() }, exported, receiver })
+    })
+    vi.stubGlobal('__j1DescribeReceiver', (receiver: unknown, value: unknown) => ({
+      frozen: Object.isFrozen(receiver), sameSetup: receiver === captures[0]?.receiver, value,
+    }))
+    const proxy = (name: string) => `module.exports = { name: '${name}', value: 'verified',
+      ${name === 'seed-pearl' ? 'setup(ctx) { globalThis.__j1Capture(() => ctx.scion, module.exports, this); },' : ''}
+      run(args, ctx) { if (args.inspectReceiver) return globalThis.__j1DescribeReceiver(this, this.value);
+        return ctx.scion.trialRetentionCandidate(args) } }`
+    const sources = { 'seed-target': original,
+      'seed-peer': 'module.exports = { name: "seed-peer", run(args) { return { ok: true, value: args.value }; } };',
+      'seed-pearl': proxy('seed-pearl'), 'seed-untrusted': proxy('seed-untrusted'), ...sourceOverrides }
+    const entries: Record<string, BallManifest['entries'][string]> = {}
+    const modules: Record<string, BallManifest['modules'][string]> = {}, codeBySha: Record<string, string> = {}
+    for (const [id, code] of Object.entries(sources)) {
+      const sha = sha256HexSync(code)
+      entries[id] = { id, specifier: 'ball:' + sha, config: {}, disabled: false, previousSpecifiers: [], updatedAt: 1000 }
+      modules[sha] = { sha256: sha, specifier: 'ball:' + sha, name: id, description: 'J1 fixture', size: code.length, createdAt: 1000 }
+      codeBySha[sha] = code
+    }
+    if (pearlFlag.disabled === undefined) Reflect.deleteProperty(entries['seed-pearl']!, 'disabled')
+    else Reflect.set(entries['seed-pearl']!, 'disabled', pearlFlag.disabled)
+    const body = { version: 'x6.1-ball/v1' as const, parentBallId: 'f'.repeat(64), epoch: 20, createdAt: 1000,
+      authorPeerId: 'fixture', entries, modules }
+    const head = { ball: { ...body, ballId: headManifestIdCanon(body) }, codeBySha }
+    const suite = { schema: 'aukora.pearl.retention-suite.v1', harness: 'pearl-retention/v1',
+      organs: ['seed-target', 'seed-peer'], fixedNow: 1000, fixtures: { empty: {} }, cases: pinned }
+    const baselineDigest = retentionSuiteDigest(suite)
+    const buildIdentity = pin === 'baseline' ? { retentionBaselineSuite: suite, retentionBaselineDigest: baselineDigest }
+      : pin === 'legacy' ? { retentionSuiteDigest: baselineDigest } : {}
+    const vfs = new MemoryVfs()
+    vfs.mkdirSync('/dsh/home/auma/seed/pearl', { recursive: true })
+    const writeCases = (cases: Record<string, unknown>[]) => { vfs.writeFileSync(suitePath, JSON.stringify({ ...suite, cases })) }
+    writeCases(live)
+    const mounted = await mountE4({ head, vfs, buildIdentity, nodeBuiltins: true, host: { context, dshTools },
+      respond: call => call.path === '/_head/lease' ? Response.json({ ok: true, ballId: head.ball.ballId,
+        lease: { ownerPeerId: call.body && typeof call.body === 'object' && 'ownerPeerId' in call.body ? call.body.ownerPeerId : '', generation: 1, expiresAt: Date.now() + 60_000 } }) : null })
+    const services = (globalThis as { __X6_SERVICES__?: Record<string, unknown> }).__X6_SERVICES__!
+    const organs = services.organs as { call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> }
+    const raw = services.scion as { trialRetentionCandidate(input: Record<string, unknown>): Promise<Record<string, unknown>> }
+    const args = { action: 'challenge', organId: 'seed-target', candidateSource: candidate }
+    const challenge = (name = 'seed-pearl', extra: Record<string, unknown> = {}) => organs.call(name, { ...args, ...extra })
+    const pearlRuntime = [...context.registry.values()].find(runtime => runtime.name === 'seed-organ:seed-pearl')
+    const pearlFiber = pearlRuntime && [...pearlRuntime.fibers][0]
+    if (!pearlFiber) throw new Error('Fixture Pearl did not mount in real Cordis')
+    return { ...mounted, context, services, raw, args, challenge, baselineDigest, suite, writeCases, captures, pearlFiber }
+  }
+
+  it('an unpinned dot row inserted between pinned rows gives neither coverage nor a token', async () => {
+    const pinned = [peerCase('peer-one'), peerCase('peer-two')]
+    const f = await fixture(pinned, [pinned[0]!, targetCase(), pinned[1]!])
+    expect(await f.challenge()).toMatchObject({ suiteAdmission: 'build-pinned', trialOk: true, targetCovered: false,
+      targetImproved: false, qualifiedForPromotion: false, qualificationId: null, pinnedTargetedCases: 0,
+      baselineDigest: f.baselineDigest, admissionError: 'PEARL_SUITE_NO_APPROVED_TARGET_CASE' })
+  })
+
+  it.each(['auma', ' Auma ', '', '   ', null])('a pinned author %j cannot qualify against runtime candidate auma', async (author) => {
+    const f = await fixture([targetCase(author)])
+    expect(await f.challenge('seed-pearl', { candidateAuthor: 'someone-else' })).toMatchObject({
+      pinnedTargetedCases: 0, targetCovered: false, qualifiedForPromotion: false, qualificationId: null })
+  })
+
+  it.each(['organs', 'tools'])('an improving pinned dot case mints through the real seed-pearl %s path', async (route) => {
+    const f = await fixture([targetCase('dot')])
+    const result = route === 'organs' ? await f.challenge() : await f.tool('seed_pearl').execute(f.args)
+    expect(result).toMatchObject({ pinnedTargetedCases: 1, baselineDigest: f.baselineDigest, targetCovered: true,
+      targetImproved: true, qualifiedForPromotion: true })
+    expectToken(result)
+  })
+
+  it('non-seed-pearl contexts and direct global calls cannot mint, even with forged caller arguments', async () => {
+    const f = await fixture([targetCase()])
+    const forged = { ...f.args, callerId: 'seed-pearl', caller: 'seed-pearl', candidateAuthor: 'dot' }
+    expect(await f.challenge('seed-untrusted', forged)).toMatchObject({ qualificationId: null })
+    expect(await f.tool('seed_untrusted').execute(forged)).toMatchObject({ qualificationId: null })
+    expect(await f.raw.trialRetentionCandidate(forged)).toMatchObject({ qualificationId: null })
+    expect(await f.raw.trialRetentionCandidate.call({ name: 'seed-pearl' }, forged)).toMatchObject({ qualificationId: null })
+  })
+
+  it('a missing pinned live row still reports PIN_MISMATCH', async () => {
+    const pinned = [targetCase(), peerCase('peer')]
+    const f = await fixture(pinned, [pinned[0]!])
+    expect(await f.challenge()).toMatchObject({ admissionError: 'PEARL_SUITE_PIN_MISMATCH', qualificationId: null,
+      winnerId: null, decidedBy: 'refused', comparisonComplete: false, pinnedTargetedCases: 0, targetCovered: false, targetImproved: false })
+  })
+
+  it('a missing build pin remains PIN_UNAVAILABLE', async () => {
+    const f = await fixture([targetCase()], undefined, 'missing')
+    expect(await f.challenge()).toMatchObject({ admissionError: 'PEARL_SUITE_PIN_UNAVAILABLE', qualificationId: null,
+      pinnedTargetedCases: 0, baselineDigest: null, targetCovered: false, targetImproved: false,
+      winnerId: null, decidedBy: 'refused', comparisonComplete: false })
+  })
+
+  it('a legacy digest without authenticated rows cannot create coverage or an admission', async () => {
+    const f = await fixture([targetCase()], undefined, 'legacy')
+    expect(await f.challenge()).toMatchObject({ qualificationId: null, pinnedTargetedCases: 0, targetCovered: false, baselineDigest: null,
+      admissionError: 'PEARL_SUITE_PIN_UNAVAILABLE', suiteAdmission: 'unverified', targetImproved: false,
+      winnerId: null, decidedBy: 'refused', comparisonComplete: false })
+  })
+
+  it('unchanged unrelated unpinned failures do not veto an eligible target repair', async () => {
+    const pinned = [targetCase()]
+    const f = await fixture(pinned, [...pinned, { ...peerCase('extra-guard'), expect: { ok: true, value: 8 } }])
+    const result = await f.challenge()
+    expect(result).toMatchObject({ pinnedTargetedCases: 1, trialOk: false, ok: true, qualifiedForPromotion: true })
+    expectToken(result)
+  })
+
+  it('rejects an unrelated live pass-to-fail regression even when aggregate pass counts tie', async () => {
+    const pinned = [targetCase()]
+    const f = await fixture(pinned, [...pinned, peerCase('live-peer')], 'baseline', { disabled: false }, {
+      'seed-peer': "module.exports = { name: 'seed-peer', run(args) { return { ok: true, value: globalThis.changed ? -1 : args.value } } }",
+    })
+    const result = await f.challenge('seed-pearl', {
+      candidateSource: "module.exports = { name: 'seed-target', run(args) { globalThis.changed = true; return { ok: true, value: args.value } } }",
+    })
+    expect(result).toMatchObject({ passedCases: 1, baselineResult: { passedCases: 1 },
+      admissionError: 'PEARL_SUITE_LIVE_FAILED', qualifiedForPromotion: false, qualificationId: null })
+  })
+
+  it('preserves raw success for a diagnostic baseline-only trial without issuing admission', async () => {
+    const f = await fixture([targetCase()], undefined, 'baseline', { disabled: false }, { 'seed-target': candidate })
+    expect(await f.challenge('seed-pearl', { baseline: true })).toMatchObject({
+      ok: true, trialOk: true, qualifiedForPromotion: false, qualificationId: null,
+    })
+  })
+
+  it('relabeling a pinned row in the live suite cannot create eligibility', async () => {
+    const f = await fixture([targetCase('auma')], [targetCase('dot')])
+    expect(await f.challenge()).toMatchObject({ admissionError: 'PEARL_SUITE_PIN_MISMATCH',
+      pinnedTargetedCases: 0, qualificationId: null })
+  })
+
+  it('an unpinned improvement cannot substitute for a tied eligible pinned target row', async () => {
+    const pinned = [{ ...targetCase(), args: { ...targetCase().args, input: { value: 1e20 } }, expect: { ok: true, value: 1e20 } }]
+    const f = await fixture(pinned, [...pinned, { ...targetCase(), id: 'unpinned-improvement' }])
+    // Adding one is rounded away at this magnitude, so the eligible row passes in both arms.
+    const result = await f.challenge()
+    expect(result).toMatchObject({ pinnedTargetedCases: 1, trialOk: true, targetImproved: false, qualificationId: null, admissionError: 'PEARL_SUITE_NOT_IMPROVED' })
+  })
+
+  it('does not route Pearl authority through the mutable global scion service', async () => {
+    const f = await fixture([targetCase()])
+    const hijacked = vi.fn(async () => ({ qualificationId: 'forged' }))
+    f.services.scion = { trialRetentionCandidate: hijacked }
+    const result = await f.challenge()
+    expect(result).toMatchObject({ pinnedTargetedCases: 1 })
+    expectToken(result)
+    expect(hijacked).not.toHaveBeenCalled()
+  })
+
+  it('captures verified run and setup callbacks before exported objects can be changed', async () => {
+    const f = await fixture([targetCase()])
+    const injectedRun = vi.fn(() => ({ qualificationId: 'injected' }))
+    const injectedSetup = vi.fn()
+    f.captures[0]!.exported.run = injectedRun
+    f.captures[0]!.exported.setup = injectedSetup
+    expectToken(await f.challenge())
+    expectToken(await f.tool('seed_pearl').execute(f.args))
+    await f.pearlFiber.restart()
+    expect(f.captures).toHaveLength(2)
+    expect(injectedRun).not.toHaveBeenCalled()
+    expect(injectedSetup).not.toHaveBeenCalled()
+  })
+
+  it('a saved Pearl context cannot mint after the same verified bytes are remounted', async () => {
+    const f = await fixture([targetCase()])
+    const stale = f.captures[0]!.scion
+    await f.pearlFiber.restart()
+    expect(await stale.trialRetentionCandidate(f.args)).toMatchObject({ qualificationId: null })
+    expectToken(await f.challenge())
+  })
+
+  it('rechecks the Pearl mount after awaited trials and revokes a disposed caller', async () => {
+    const f = await fixture([targetCase()])
+    const saved = f.captures[0]!.scion
+    const pending = saved.trialRetentionCandidate(f.args)
+    await f.pearlFiber.dispose()
+    expect(await pending).toMatchObject({ qualificationId: null })
+    expect(await saved.trialRetentionCandidate(f.args)).toMatchObject({ qualificationId: null })
+  })
+
+
+  it('cannot mint during UNLOADING while a dependent pauses Pearl cleanup', async () => {
+    const f = await fixture([targetCase()])
+    const saved = f.captures[0]!.scion
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => { release = resolve })
+    try {
+      f.pearlFiber.ctx.provide('j1LifecycleBarrier', {})
+      await f.context.plugin({ inject: ['j1LifecycleBarrier'], apply(ctx: Context) { ctx.effect(() => () => barrier) } })
+      const pending = saved.trialRetentionCandidate(f.args)
+      const disposing = f.pearlFiber.dispose()
+      expect(f.pearlFiber.state).toBe(FiberState.UNLOADING)
+      try { expect(await pending).toMatchObject({ qualificationId: null }) }
+      finally { release(); await disposing }
+    } finally {
+      release()
+    }
+  })
+
+
+  it('does not pass the privileged facade through a replaced Object.freeze intrinsic', async () => {
+    const f = await fixture([targetCase()])
+    const freeze = vi.spyOn(Object, 'freeze')
+    expectToken(await f.challenge())
+    expect(freeze.mock.calls.some(([value]) => value && typeof value === 'object' && 'trialRetentionCandidate' in value)).toBe(false)
+  })
+
+
+  it.each([undefined, null, 0, ''])('does not mint when Pearl has malformed disabled flag %j', async (disabled) => {
+    const f = await fixture([targetCase()], undefined, 'baseline', { disabled })
+    expect(await f.challenge()).toMatchObject({ qualificationId: null })
+  })
+
+
+  it.each(['clock', 'path'])('an unpinned %s poison cannot turn a pinned tie into admission', async (kind) => {
+    const expression = kind === 'clock' ? 'Date.now()' : 'require("path").join("a", "b")'
+    const value = kind === 'clock' ? 1000 : 'a/b'
+    const poison = kind === 'clock' ? 'Date.now = () => 0' : 'require("path").join = () => "poisoned"'
+    const incumbent = `module.exports = { name: 'seed-target', run() { return { ok: true, value: ${expression} } } }`
+    const tiedCandidate = `module.exports = { name: 'seed-target', run() { return { ok: true, value: ${JSON.stringify(value)} } } }`
+    const pinned = [{ ...targetCase(), expect: { ok: true, value } }]
+    const extra = { id: 'warmup', author: 'auma', args: { organ: 'seed-poison', fixture: 'empty', input: {}, pick: [] },
+      expect: { ok: true } }
+    const f = await fixture(pinned, [extra, ...pinned], 'baseline', { disabled: false }, {
+      'seed-target': incumbent, 'seed-poison': `module.exports = { name: 'seed-poison', run() { ${poison}; return { ok: true } } }`,
+    })
+    expect(await f.challenge('seed-pearl', { candidateSource: tiedCandidate })).toMatchObject({ trialOk: true,
+      pinnedTargetedCases: 1, targetImproved: false, qualifiedForPromotion: false, qualificationId: null })
+  })
+
+  it('a fixture added only to the live suite cannot give a pinned row coverage', async () => {
+    const row = targetCase()
+    const f = await fixture([{ ...row, args: { ...row.args, fixture: 'later' } }])
+    f.vfs.writeFileSync(suitePath, JSON.stringify({ ...f.suite, fixtures: { empty: {}, later: {} } }))
+    expect(await f.challenge()).toMatchObject({ trialOk: true, pinnedTargetedCases: 0,
+      targetCovered: false, targetImproved: false, qualificationId: null })
+  })
+
+  it.each(['auma\u200b', '\u0430uma', '\uff41\uff55\uff4d\uff41', 'auma-scion', 'carbon', 'dot-scion', 'd\u043et', 'Dot', 'DOT', ' dot '])(
+    'author alias %j cannot be independent', async (author) => {
+      const f = await fixture([targetCase(author)])
+      expect(await f.challenge()).toMatchObject({ pinnedTargetedCases: 0, targetCovered: false,
+        targetImproved: false, qualificationId: null })
+    })
+
+  it('run and setup share the frozen shallow export receiver, not later top-level export mutations', async () => {
+    const f = await fixture([targetCase()])
+    expect(f.captures[0]!.receiver).not.toBe(f.captures[0]!.exported)
+    f.captures[0]!.exported.value = 'replaced'
+    const expected = { frozen: true, sameSetup: true, value: 'verified' }
+    expect(await f.challenge('seed-pearl', { inspectReceiver: true })).toEqual(expected)
+    expect(await f.tool('seed_pearl').execute({ action: 'challenge', inspectReceiver: true })).toEqual(expected)
+  })
+
+
+  it('a live-only peer cannot enter isolated pinned build membership and manufacture improvement', async () => {
+    const incumbent = `module.exports = { name: 'seed-target', async run(args, ctx) {
+      try { await ctx.organs.call('seed-extra', {}); return { ok: true, value: 0 } }
+      catch { return { ok: true, value: 42 } }
+    } }`
+    const extra = { id: 'extra-peer', author: 'auma', args: { organ: 'seed-extra', fixture: 'empty', input: {}, pick: [] },
+      expect: { ok: true } }
+    const pinned = [targetCase()]
+    const f = await fixture(pinned, [extra, ...pinned], 'baseline', { disabled: false }, {
+      'seed-target': incumbent, 'seed-extra': "module.exports = { name: 'seed-extra', run() { return { ok: true } } }",
+    })
+    expect(await f.challenge()).toMatchObject({ trialOk: true, pinnedTargetedCases: 1,
+      targetImproved: false, qualifiedForPromotion: false, qualificationId: null })
+  })
+
+  it('requires every eligible isolated candidate row to pass, even after a genuine improvement', async () => {
+    const incumbent = `module.exports = { name: 'seed-target', run(args) {
+      return { ok: true, value: args.mode === 'improve' ? 1 : 0 }
+    } }`
+    const candidateSource = `module.exports = { name: 'seed-target', run(args) {
+      return { ok: true, value: args.mode === 'improve' ? 0 : Date.now() }
+    } }`
+    const pinned = ['improve', 'regress'].map(mode => ({ id: mode, author: 'dot',
+      args: { organ: 'seed-target', fixture: 'empty', input: { mode }, pick: ['value'] }, expect: { ok: true, value: 0 } }))
+    const extra = { id: 'warmup', author: 'auma', args: { organ: 'seed-poison', fixture: 'empty', input: {}, pick: [] },
+      expect: { ok: true } }
+    const f = await fixture(pinned, [extra, ...pinned], 'baseline', { disabled: false }, {
+      'seed-target': incumbent, 'seed-poison': "module.exports = { name: 'seed-poison', run() { Date.now = () => 0; return { ok: true } } }",
+    })
+    expect(await f.challenge('seed-pearl', { candidateSource })).toMatchObject({ trialOk: true,
+      pinnedTargetedCases: 2, qualifiedForPromotion: false, qualificationId: null })
+  })
+
+
+  it.each(['incomplete', 'suite-change', 'caller-disposed'])('refuses isolated comparison invalidated by %s', async (fault) => {
+    const f = await fixture([targetCase()])
+    const run = scionGrowth.trialScionRetention
+    let calls = 0
+    vi.spyOn(scionGrowth, 'trialScionRetention').mockImplementation(async (build, suite) => {
+      const result = await run(build, suite)
+      if (++calls === 5) {
+        if (fault === 'suite-change') f.vfs.writeFileSync(suitePath, JSON.stringify({ ...f.suite, fixedNow: 2000 }))
+        if (fault === 'caller-disposed') await f.pearlFiber.dispose()
+        if (fault === 'incomplete') return { ...result, results: [] }
+      }
+      return result
+    })
+    const result = await f.challenge()
+    expect(calls).toBe(6)
+    expect(result).toMatchObject({ qualificationId: null })
+    if (fault !== 'caller-disposed') expect(result).toMatchObject({ comparisonComplete: false, targetImproved: false })
+  })
+
+  it('normalizes an approved author before exact allowlist matching', async () => {
+    const f = await fixture([targetCase('ｄｏ\u200bｔ')])
+    expectToken(await f.challenge())
+  })
+
+  it.each(['other-author', 'other-organ'])('an unpinned warm-up cannot repair a pinned %s regression', async (kind) => {
+    const pinned = [targetCase(), { id: 'regression', author: 'auma',
+      args: { organ: kind === 'other-organ' ? 'seed-peer' : 'seed-target', fixture: 'empty', input: { clock: true }, pick: ['value'] },
+      expect: { ok: true, value: 0 } }]
+    const extra = { id: 'warmup', author: 'auma', args: { organ: 'seed-poison', fixture: 'empty', input: {}, pick: [] },
+      expect: { ok: true } }
+    const f = await fixture(pinned, [extra, ...pinned], 'baseline', { disabled: false }, {
+      'seed-target': "module.exports = { name: 'seed-target', run(args) { return { ok: true, value: args.clock ? 0 : args.value + 1 } } }",
+      'seed-peer': "module.exports = { name: 'seed-peer', run(args, ctx) { return ctx.organs.call('seed-target', args) } }",
+      'seed-poison': "module.exports = { name: 'seed-poison', run() { Date.now = () => 0; return { ok: true } } }",
+    })
+    const candidateSource = "module.exports = { name: 'seed-target', run(args) { return { ok: true, value: args.clock ? Date.now() : args.value } } }"
+    expect(await f.challenge('seed-pearl', { candidateSource })).toMatchObject({ trialOk: true,
+      pinnedTargetedCases: 1, targetImproved: true, pinnedOnlyPassed: false,
+      admissionError: 'PEARL_SUITE_PINNED_ONLY_FAILED', qualifiedForPromotion: false, qualificationId: null,
+      winnerId: null, decidedBy: 'refused' })
+  })
+
+  it('full-live counts cannot veto an isolated pinned improvement by repairing the incumbent', async () => {
+    const incumbent = "module.exports = { name: 'seed-target', run() { return { ok: true, value: Date.now() } } }"
+    const pinned = [{ ...targetCase(), expect: { ok: true, value: 0 } }]
+    const extra = { id: 'warmup', author: 'auma', args: { organ: 'seed-poison', fixture: 'empty', input: {}, pick: [] },
+      expect: { ok: true } }
+    const f = await fixture(pinned, [extra, ...pinned], 'baseline', { disabled: false }, {
+      'seed-target': incumbent,
+      'seed-poison': "module.exports = { name: 'seed-poison', run() { Date.now = () => 0; return { ok: true } } }",
+    })
+    const result = await f.challenge('seed-pearl', {
+      candidateSource: "module.exports = { name: 'seed-target', run() { return { ok: true, value: 0 } } }",
+    })
+    expect(result).toMatchObject({ passedCases: 2, baselineResult: { passedCases: 2 }, targetImproved: true,
+      pinnedOnlyPassed: true, winnerId: 'candidate', qualifiedForPromotion: true })
+    expectToken(result)
+  })
+
+  it('an incumbent missing an isolated HEAD helper is incomplete, not improvement', async () => {
+    const incumbent = "module.exports = { name: 'seed-target', async run(args, ctx) { return ctx.organs.call('seed-helper', args) } }"
+    const extra = { id: 'helper', author: 'auma', args: { organ: 'seed-helper', fixture: 'empty', input: { value: 42 }, pick: ['value'] },
+      expect: { ok: true, value: 42 } }
+    const f = await fixture([targetCase()], [extra, targetCase()], 'baseline', { disabled: false }, {
+      'seed-target': incumbent,
+      'seed-helper': "module.exports = { name: 'seed-helper', run(args) { return { ok: true, value: args.value } } }",
+    })
+    expect(await f.challenge()).toMatchObject({ trialOk: true, comparisonComplete: false, targetImproved: false,
+      qualifiedForPromotion: false, qualificationId: null, winnerId: null, decidedBy: 'refused',
+      admissionError: 'PEARL_SUITE_PINNED_ONLY_INCOMPLETE' })
+  })
+
+  it('reports live must-pass refusal separately from a pinned-only failure', async () => {
+    const extra = { ...targetCase(), id: 'live-only', author: 'auma', expect: { ok: true, value: -1 } }
+    const f = await fixture([targetCase()], [targetCase(), extra])
+    expect(await f.challenge()).toMatchObject({ trialOk: false, qualifiedForPromotion: false, qualificationId: null,
+      winnerId: null, decidedBy: 'refused', admissionError: 'PEARL_SUITE_LIVE_FAILED' })
+  })
+
+  it('reports an incomplete pinned-only run without calling it a failed pinned case', async () => {
+    const f = await fixture([targetCase()])
+    const run = scionGrowth.trialScionRetention
+    let calls = 0
+    vi.spyOn(scionGrowth, 'trialScionRetention').mockImplementation(async (build, suite) => {
+      const result = await run(build, suite)
+      return ++calls === 3 ? { ...result, results: [] } : result
+    })
+    expect(await f.challenge()).toMatchObject({ comparisonComplete: false, qualifiedForPromotion: false,
+      winnerId: null, decidedBy: 'refused', admissionError: 'PEARL_SUITE_PINNED_ONLY_INCOMPLETE' })
+  })
+
+  it('late normalization replacement cannot turn an unapproved pinned author into dot', async () => {
+    const f = await fixture([targetCase('auma')])
+    const normalize = vi.spyOn(String.prototype, 'normalize').mockReturnValue('dot')
+    try {
+      expect(await f.challenge()).toMatchObject({ pinnedTargetedCases: 0, targetImproved: false, qualificationId: null })
+    } finally { normalize.mockRestore() }
+  })
+
+  it.each(['catch', 'wrap'])('a %s around an isolated missing peer cannot manufacture improvement', async (mode) => {
+    const incumbent = `module.exports = { name: 'seed-target', async run(args, ctx) {
+      try { return await ctx.organs.call('seed-helper', args) }
+      catch (error) { ${mode === 'catch' ? 'return {ok:true,value:-1}' : "throw new Error('ORDINARY_REFUSAL')"} }
+    } }`
+    const extra = { id: 'helper', author: 'auma', args: { organ: 'seed-helper', fixture: 'empty', input: { value: 42 }, pick: ['value'] },
+      expect: { ok: true, value: 42 } }
+    const f = await fixture([targetCase()], [extra, targetCase()], 'baseline', { disabled: false }, {
+      'seed-target': incumbent,
+      'seed-helper': "module.exports = { name: 'seed-helper', run(args) { return { ok: true, value: args.value } } }",
+    })
+    expect(await f.challenge()).toMatchObject({ comparisonComplete: false, targetImproved: false,
+      qualifiedForPromotion: false, qualificationId: null, winnerId: null, admissionError: 'PEARL_SUITE_PINNED_ONLY_INCOMPLETE' })
+  })
+
+  it('a blocked import containing the expected refusal code cannot qualify a broken target', async () => {
+    const pinned = [{ id: 'target', author: 'dot', args: targetCase().args, expectError: 'UNKNOWN_ACTION' }]
+    const f = await fixture(pinned)
+    const result = await f.challenge('seed-pearl', {
+      candidateSource: "module.exports = { name: 'seed-target', run() { require('UNKNOWN_ACTION') } }",
+    })
+    expect(result).toMatchObject({ trialOk: false, qualifiedForPromotion: false, qualificationId: null,
+      winnerId: null, decidedBy: 'refused', admissionError: 'PEARL_SUITE_LIVE_FAILED' })
+  })
+
+  it('an isolated row without a harness infrastructure record is incomplete', async () => {
+    const f = await fixture([targetCase()])
+    const run = scionGrowth.trialScionRetention
+    let calls = 0
+    vi.spyOn(scionGrowth, 'trialScionRetention').mockImplementation(async (build, suite) => {
+      const result = await run(build, suite)
+      if (++calls === 5) for (const row of result.results) Reflect.deleteProperty(row, 'infrastructure')
+      return result
+    })
+    expect(await f.challenge()).toMatchObject({ comparisonComplete: false, qualifiedForPromotion: false,
+      qualificationId: null, admissionError: 'PEARL_SUITE_COMPARISON_INCOMPLETE' })
+  })
+
+  it('does not turn a swallowed own mount error and correct answer into improvement (H1)', async () => {
+    const row = { ...targetCase(), args: { ...targetCase().args, tool: 'self_probe' }, expect: { ok: true, value: 42 } }
+    const f = await fixture([row], undefined, 'baseline', { disabled: false }, {
+      'seed-target': `module.exports={apply(ctx){ctx.tools.register('self_probe', {description:'test',
+        parameters:{type:'object',properties:{}}, async execute(){
+          try {await ctx.organs.call('seed-target',{})} catch {}
+          return {ok:true,value:42}
+        }})}}`,
+    })
+    expect(await f.challenge('seed-pearl', { candidateSource: 'module.exports={apply(ctx){ctx.tools.register(\'self_probe\', {description:\'test\', parameters:{type:\'object\',properties:{}},execute(){return {ok:true,value:42}}})}}' }))
+      .toMatchObject({ qualificationId: null, comparisonComplete: false })
+  })
+
+  it.each([
+    'ctx.snapshots.list()', 'ctx.tools.invoke("missing",{})',
+    'ctx.fs.lstatSync("/missing")', 'ctx.organs.list()',
+    'require("missing")',
+  ])('unchanged non-target infrastructure does not freeze a repair: %s', async (statement) => {
+    const pinned = [targetCase(), peerCase('peer')]
+    const f = await fixture(pinned, undefined, 'baseline', { disabled: false }, {
+      'seed-peer': `module.exports={name:'seed-peer',run(args,ctx){try {${statement}} catch {} return {ok:true,value:7}}}`,
+    })
+    expectToken(await f.challenge())
+  })
+
+  it('an unrelated row calling the broken target counts the target mount failure', async () => {
+    const f = await fixture([targetCase(), peerCase('peer')], undefined, 'baseline', { disabled: false }, {
+      'seed-target': "module.exports={name:'seed-target',setup(){throw Error('broken')},run(){return {ok:true,value:42}}}",
+      'seed-peer': "module.exports={name:'seed-peer',run(args,ctx){return ctx.organs.call('seed-target',args)}}",
+    })
+    expectToken(await f.challenge())
+  })
+
+  it.each(['candidate', 'incumbent'])('reports unsupported exports per %s arm without throwing', async (arm) => {
+    const unsupported = "export default {name:'seed-target',run(){return {ok:true,value:42}}}"
+    const f = await fixture([targetCase()], undefined, 'baseline', { disabled: false },
+      arm === 'incumbent' ? { 'seed-target': unsupported } : {})
+    expect(await f.challenge('seed-pearl', arm === 'candidate' ? { candidateSource: unsupported } : {}))
+      .toMatchObject({ qualificationId: null, comparisonComplete: false })
+  })
+
+  it('refuses an admitted candidate whose live mount has a different form before moving HEAD', async () => {
+    const f = await fixture([targetCase()])
+    const candidateSource = "module.exports=Date.now()===1000?{name:'seed-target',run(args){return {ok:true,value:args.value}}}:{apply(){}}"
+    const admission = await f.challenge('seed-pearl', { candidateSource })
+    expectToken(admission)
+    const before = f.runtime.status().ballId
+    const savedHead = f.vfs.readFileSync('/dsh/home/balls/HEAD.json', 'utf8')
+    const module = await f.runtime.ballPut({ code: candidateSource, name: 'seed-target' })
+    if (typeof admission.qualificationId !== 'string') throw Error('Missing fixture qualification')
+    await expect(f.runtime.treePatch({ id: 'seed-target', specifier: module.specifier,
+      qualificationId: admission.qualificationId })).rejects.toThrow('PEARL_ADMITTED_MOUNT_SHA_MISMATCH')
+    expect(f.runtime.status().ballId).toBe(before)
+    expect(f.vfs.readFileSync('/dsh/home/balls/HEAD.json', 'utf8')).toBe(savedHead)
+  })
+
+  it('reports a complete isolated candidate failure with its dedicated error', async () => {
+    const pinned = ['warm', 'cold'].map(mode => ({ id: mode, author: 'dot',
+      args: { organ: 'seed-target', fixture: 'empty', input: { mode }, pick: ['value'] }, expect: { ok:true,value:0 } }))
+    const f = await fixture(pinned, undefined, 'baseline', { disabled: false }, {
+      'seed-target': "module.exports={name:'seed-target',run(args){return {ok:true,value:args.mode==='warm'?1:0}}}",
+    })
+    const candidateSource = "module.exports={name:'seed-target',run(args){if(args.mode==='warm')Date.now=()=>0;return {ok:true,value:Date.now()}}}"
+    expect(await f.challenge('seed-pearl', { candidateSource })).toMatchObject({
+      admissionError: 'PEARL_SUITE_ISOLATED_FAILED', qualificationId: null,
+    })
+  })
+
 })
