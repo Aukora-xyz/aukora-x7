@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for OPEN-SOURCE-READINESS.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/OPEN-SOURCE-READINESS.md
+/open-source-readiness:
+  en: bc5455f32833c00e
+  zh: 5dbf76fe0198992e
+/open-source-readiness/the-gaps-in-priority-order:
+  en: bcbd1c637a51874d
+  zh: 6f9b3cb6fe76d144
+/open-source-readiness/the-gaps-in-priority-order/1-24-of-the-25-wasm-cells-cannot-be-rebuilt:
+  en: a8e239536f588b31
+  zh: 67189f93ac8bc61d
+/open-source-readiness/the-gaps-in-priority-order/2-pentora36-wasm-has-no-licence:
+  en: 0c527100c17eb305
+  zh: e73c5a9a0a0c1a4d
+/open-source-readiness/the-gaps-in-priority-order/3-dakini-code-ships-as-a-built-bundle-without-source:
+  en: 5d9cfcaa0a27f6be
+  zh: 7af84e771f018f8c
+/open-source-readiness/the-gaps-in-priority-order/4-no-named-copyright-holder-and-no-contribution-terms:
+  en: 950e362eed0dd914
+  zh: df677998e457fcd6
+/open-source-readiness/the-gaps-in-priority-order/5-terms-the-tree-cannot-show:
+  en: ecccb352e34996e2
+  zh: 3f4b41c027a8e884
+/open-source-readiness/the-gaps-in-priority-order/6-no-reproducible-build-is-recorded:
+  en: e8785abeab7abd57
+  zh: cacf0096088e9bea
+/open-source-readiness/the-gaps-in-priority-order/7-checkpoint-signers-are-synthetic:
+  en: d59e7c058788195e
+  zh: 3241703a003dbcda
+/open-source-readiness/the-gaps-in-priority-order/8-deployment-values-are-placeholders-written-into-code:
+  en: 3242cb5e53796c68
+  zh: 8d625442e50559ee
+/open-source-readiness/the-gaps-in-priority-order/9-sources-that-live-elsewhere:
+  en: 69d940a5e9f58a09
+  zh: ec32013265e71e6f
+/open-source-readiness/what-must-be-published-rebuilt-or-licensed:
+  en: 7d58ca32f6dc9a39
+  zh: 77d280c670bb96b3
+/open-source-readiness/what-a-reader-can-reproduce-today:
+  en: f6463eb201777371
+  zh: d5c553c1ef306ce9
+/open-source-readiness/what-a-reader-cannot-reproduce-today:
+  en: 63f7049ced4d2c46
+  zh: ca7940bdafb92a68

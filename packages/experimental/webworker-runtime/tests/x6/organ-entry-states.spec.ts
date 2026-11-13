@@ -8,7 +8,7 @@
  * running, and SHE fixes them by staging corrected organs; this job makes the cause visible, with both names.
  *
  * Every spec here mounts her runtime into a REAL Cordis Context with DSH's REAL ToolsService (and the real
- * `@deepseek-ai/dsh-tools` defineTool), as her worker does; the stand-ins of jobs 3-4 proved the wrong thing.
+ * `@deepseek-ai/dsh-tools` defineTool), as her worker does; earlier stand-ins proved the wrong thing.
  * Every answer is local (reserved `.invalid` origin, fake socket); no provider, owner approval or live DO is touched.
  */
 import { readFileSync } from 'node:fs'

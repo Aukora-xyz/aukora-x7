@@ -1,0 +1,49 @@
+# Bilingual-pair consistency record for WHAT-IS-BUILT.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/WHAT-IS-BUILT.md
+/what-is-built:
+  en: db08e1b7183194b6
+  zh: a43e7280cc90785e
+/what-is-built/summary:
+  en: b4faa72879352d72
+  zh: 8763e67437be8c93
+/what-is-built/what-is-built:
+  en: ab12da168302cee0
+  zh: edaf7b8873eaa0c2
+/what-is-built/what-is-built/authority-aumlok-and-the-owner-s-passkey:
+  en: a025d2a0447e220c
+  zh: b2c3ee771c7fcfc1
+/what-is-built/what-is-built/the-organism-organs-balls-the-scion-and-pearl:
+  en: 103dadd7cad088fe
+  zh: a91afff8a8d3f256
+/what-is-built/what-is-built/the-edge-one-worker-head-and-mirror:
+  en: 9951629327517282
+  zh: ba37efa33828d2ed
+/what-is-built/what-is-built/the-app-spatial:
+  en: bbd14478c821548e
+  zh: a532093ee63b7c29
+/what-is-built/check-it-yourself:
+  en: 540619a03b8426b5
+  zh: fa7e3e8c20951cb1
+/what-is-built/the-names-in-plain-words:
+  en: a09f325a54ff2039
+  zh: 1618b679dcdccc91
+/what-is-built/read-this-then-this:
+  en: 1899f05cdb5fb8c5
+  zh: 464da6871ce918cf
+/what-is-built/what-is-not-here-and-what-is-not-proven:
+  en: ff4514958212f24b
+  zh: 97fc0b1aa5a2bfdb
+/what-is-built/run-it:
+  en: a609385c39a54716
+  zh: 00d7d10455f3f92a
+/what-is-built/where-it-is-going:
+  en: b9b993e358e7463e
+  zh: d9ef3c834db1d187
+/what-is-built/licence-and-what-this-tree-does-not-hold:
+  en: 4c00799beb6eff8a
+  zh: 305c0089d182d2e5
+/what-is-built/claim-source-test-evidence:
+  en: 4b6a548ae50de0b4
+  zh: aeb42fe23288749c

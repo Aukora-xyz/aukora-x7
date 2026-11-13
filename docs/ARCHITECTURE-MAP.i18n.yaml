@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for ARCHITECTURE-MAP.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/ARCHITECTURE-MAP.md
+/architecture-map:
+  en: 0646f7cd843940c2
+  zh: b3c2b8e6b41eb43e
+/architecture-map/the-picture:
+  en: f0c49b3789360b60
+  zh: edcfd8a28a2b3a3c
+/architecture-map/the-life-of-one-self-change:
+  en: 2c20426e7bafabdd
+  zh: 85a92c5268ddbc02
+/architecture-map/trust-boundaries:
+  en: d9a425120eac1be1
+  zh: a88c94980e5f889f
+/architecture-map/where-each-layer-comes-from:
+  en: 02d52acfaa2fcc73
+  zh: b591e1c9c06618b5

@@ -1,4 +1,4 @@
-/** Round 36: the staged outward request is offered only when it is exactly the GitHub post the card describes. */
+/** The staged outward request is offered only when it is exactly the GitHub post the card describes. */
 import { describe, expect, it } from 'vitest'
 import { outwardWords, parseStagedOutward, STAGED_OUTWARD_SCHEMA } from '../src/client/spatial/aumlok/outward-class3.ts'
 
@@ -7,7 +7,7 @@ const file = (body: unknown, more: Record<string, unknown> = {}) => JSON.stringi
 const issue = { action: 'api', method: 'POST', endpoint: 'repos/your_org_x/your-node/issues', body: { title: 'T', body: 'B' } }
 const comment = { action: 'api', method: 'POST', endpoint: 'repos/your_org_x/your-node/issues/42/comments', body: { body: 'C' } }
 
-describe('Round 36: the staged outward request', () => {
+describe('the staged outward request', () => {
   it('offers an issue or a comment on this repository, and says which', () => {
     expect(outwardWords(parseStagedOutward(file(issue))!).summary).toBe('GitHub: a new issue in your_org_x/your-node')
     expect(outwardWords(parseStagedOutward(file(comment))!).summary).toBe('GitHub: a comment on issue #42 in your_org_x/your-node')

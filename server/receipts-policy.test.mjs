@@ -87,7 +87,7 @@ function assertUnanchored(result) {
   assert.equal(result.checkpointPolicyError, 'CHECKPOINT_SIGNER_POLICY_UNAVAILABLE')
 }
 
-test('Round27 policy outages do not block appending after checkpoint fifteen and expose unanchored status', async () => {
+test('policy outages do not block appending after checkpoint fifteen and expose unanchored status', async () => {
   for (const [label, reader] of unavailableReaders) {
     const f = await fixture()
     let reads = 0
@@ -113,7 +113,7 @@ test('Round27 policy outages do not block appending after checkpoint fifteen and
   }
 })
 
-test('Round27 policy outages still refuse checkpoint signing at fifteen and sixteen without mutations', async () => {
+test('policy outages still refuse checkpoint signing at fifteen and sixteen without mutations', async () => {
   for (const count of [14, 15]) for (const [, reader] of unavailableReaders) {
     const f = await fixture(count), before = new Map(f.files)
     const result = await f.run({ action: 'checkpoint' }, reader(() => {}))
@@ -125,7 +125,7 @@ test('Round27 policy outages still refuse checkpoint signing at fifteen and sixt
   }
 })
 
-test('Round27 policy outages cannot bypass late-checkpoint cryptographic or chain failures', async () => {
+test('policy outages cannot bypass late-checkpoint cryptographic or chain failures', async () => {
   const mutations = [
     ['receipt-chain', async f => { f.receipts[14].data = { changed: true }; f.files.set(RECEIPTS, jsonl(f.receipts)) }],
     ['checkpoint-hash', async f => { f.checkpoints[14].checkpointHash = '0'.repeat(64) }],
@@ -152,7 +152,7 @@ test('Round27 policy outages cannot bypass late-checkpoint cryptographic or chai
   }
 })
 
-test('Round27 malformed, mismatched, expired and hybrid policies still refuse late-checkpoint append', async () => {
+test('malformed, mismatched, expired and hybrid policies still refuse late-checkpoint append', async () => {
   const f = await fixture(), range = f.policy.ranges[0], before = new Map(f.files)
   for (const [policy, error] of [
     [null, 'CHECKPOINT_SIGNER_POLICY_INVALID'],

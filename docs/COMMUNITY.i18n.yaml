@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for COMMUNITY.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/COMMUNITY.md
+/community:
+  en: e7d0d8a7e1d47980
+  zh: bec4e83ad5f4b97d
+/community/who-this-is-for:
+  en: f47f778e52479c10
+  zh: 83d836430b3e5e75
+/community/how-the-work-is-governed-today:
+  en: 047159d7b7db11aa
+  zh: 566ff122b69ba828
+/community/where-you-can-have-the-most-effect:
+  en: 32ee721999467aeb
+  zh: ed7ad27d678bb8c1
+/community/where-you-can-have-the-most-effect/security-researchers:
+  en: 65bbc233c82cd7a4
+  zh: ab716e2a65397c9c
+/community/where-you-can-have-the-most-effect/rust-and-wasm-engineers:
+  en: 67457d1bc4b85f27
+  zh: 28a798d93ce9b89b
+/community/where-you-can-have-the-most-effect/agent-engineers:
+  en: b5d115364a776b54
+  zh: 134e9c1f78685cec
+/community/where-you-can-have-the-most-effect/distributed-systems-engineers:
+  en: 524cf533acbcec2d
+  zh: 9a8c940e036e9a95
+/community/where-you-can-have-the-most-effect/interface-designers:
+  en: ae0fd9be469115cb
+  zh: 7a3c868685cc5d75
+/community/where-you-can-have-the-most-effect/documentation-and-translation:
+  en: e4cea02d2ebd764d
+  zh: 8926cc519daccded
+/community/where-you-can-have-the-most-effect/research:
+  en: b8b8a681907e4802
+  zh: 4c4cf5dd11bdce76
+/community/expected-behaviour:
+  en: 9dc77d4f8188cd26
+  zh: 8526e73ae6ce1945

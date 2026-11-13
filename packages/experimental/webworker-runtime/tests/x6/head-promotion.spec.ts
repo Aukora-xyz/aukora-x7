@@ -102,7 +102,7 @@ async function mountedFixture(id = 'seed-pearl', config: Record<string, unknown>
     get activations() { return activations } }
 }
 
-describe('Round 24 inert governance review serialization', () => {
+describe('inert governance review serialization', () => {
   it('preserves the exact candidate and CAS fields, excluding leases, approvals and qualification claims', () => {
     const { previous, input } = fixture()
     const text = serializeStagedHeadPromotion(previous, { ...input, writerLease: { ownerPeerId: 'expired', generation: 42 },
@@ -158,7 +158,7 @@ describe('Round 24 inert governance review serialization', () => {
   })
 })
 
-describe('Round 29 canonical manifest compatibility', () => {
+describe('canonical manifest compatibility', () => {
   it.each(['legacy', 'canonical'] as const)('snapshots a %s selected head without changing restore or Class 1 authority', async (encoding) => {
     const value = await mountedFixture('seed-calculator', {}, encoding)
     const headText = value.vfs.readFileSync('/dsh/home/balls/HEAD.json', 'utf8')
@@ -242,7 +242,7 @@ describe('Round 29 canonical manifest compatibility', () => {
   })
 })
 
-describe('Round 24 runtime governance classification', () => {
+describe('runtime governance classification', () => {
   it('classifies all eight fixed organs and every selected entry explicitly', () => {
     for (const id of ['seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura', 'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map']) {
       expect(classifyEntryGovernance(id, { config: { governance: false } })).toBe(3)
@@ -267,7 +267,7 @@ describe('Round 24 runtime governance classification', () => {
   })
 })
 
-describe('Round 24 mounted review writer', () => {
+describe('mounted review writer', () => {
   it('writes through the registered inert tool without activating, selecting, publishing or claiming persistence', async () => {
     const value = await mountedFixture()
     const headText = value.vfs.readFileSync('/dsh/home/balls/HEAD.json', 'utf8')
@@ -382,7 +382,7 @@ describe('Round 24 mounted review writer', () => {
   })
 })
 
-describe('Round 36: outward Class 3 requests wait for the owner\'s passkey', () => {
+describe('outward Class 3 requests wait for the owner\'s passkey', () => {
   it('stages the exact GitHub post the edge refused without the passkey; repository writes stay refused in the worker', async () => {
     const value = await mountedFixture()
     const sent: Array<{ path: string; body: unknown }> = []
@@ -406,7 +406,7 @@ describe('Round 36: outward Class 3 requests wait for the owner\'s passkey', () 
   })
 })
 
-describe('Round 37: Auma runs her Wasm cells through x6_cell', () => {
+describe('Auma runs her Wasm cells through x6_cell', () => {
   it('lists the 24 pinned cells and computes with one, fetched same-origin and admitted in her runtime', async () => {
     const value = await mountedFixture()
     const { readFile } = await import('node:fs/promises')
@@ -434,7 +434,7 @@ describe('Round 37: Auma runs her Wasm cells through x6_cell', () => {
 
 
 
-describe('Wave 3 promotion transport and classification', () => {
+describe('promotion transport and classification', () => {
   it.each(['write', 'edit', 'commit'])('exempts only documentation filenames from history classification for %s', (action) => {
     for (const path of ['docs/receipts.md', 'docs/architecture/dag-history.md', 'NORTH-STAR-checkpoint.md']) {
       expect(classifyActionIrreversibility({ tool: 'x6_repo', action, path })).toBe(1)

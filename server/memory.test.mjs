@@ -81,7 +81,7 @@ function fixture() {
   return { files, events, fault, ctx, run, dag, seed, node, head }
 }
 
-for (const mode of ['write', 'rename']) test('Round26: DAG ' + mode + ' failure is partial, preserves stored memory and is visible in verification', async () => {
+for (const mode of ['write', 'rename']) test('DAG ' + mode + ' failure is partial, preserves stored memory and is visible in verification', async () => {
   const f = fixture()
   if (mode === 'write') f.fault.write = file => file.startsWith(DAG + '/') && file !== HEAD + '.tmp'
   else f.fault.rename = file => file === HEAD
@@ -102,7 +102,7 @@ for (const mode of ['write', 'rename']) test('Round26: DAG ' + mode + ' failure 
   assert.equal(f.events.filter(([event, file]) => event === 'unlink' && !file.includes('.tmp')).length, 0)
 })
 
-for (const mode of ['reject', 'throw', 'unavailable']) test('Round26: receipt ' + mode + ' cannot return successful remember', async () => {
+for (const mode of ['reject', 'throw', 'unavailable']) test('receipt ' + mode + ' cannot return successful remember', async () => {
   const f = fixture(); f.fault.receipt = mode
   if (mode === 'unavailable') delete f.ctx.organs
   const result = await f.run({ action: 'remember', fact: 'Synthetic receipt gap' })
@@ -117,7 +117,7 @@ for (const mode of ['reject', 'throw', 'unavailable']) test('Round26: receipt ' 
   assert.equal(JSON.parse(f.files.get(STORE)).facts.length, 1)
 })
 
-test('Round26: successful store reports acknowledged memory, DAG and receipt effects', async () => {
+test('successful store reports acknowledged memory, DAG and receipt effects', async () => {
   const f = fixture(), result = await f.run({ action: 'remember', fact: 'Synthetic success' })
   assert.equal(result.ok, true)
   assert.equal(result.memorySaved, true)
@@ -127,7 +127,7 @@ test('Round26: successful store reports acknowledged memory, DAG and receipt eff
   assert.equal((await f.dag({ action: 'dag_verify' })).ok, true)
 })
 
-test('Round26: a flush error never claims local durability after partial DAG failure', async () => {
+test('a flush error never claims local durability after partial DAG failure', async () => {
   const f = fixture(); f.fault.receipt = 'reject'; f.fault.flush = true
   const result = await f.run({ action: 'remember', fact: 'Synthetic unflushed fact' })
   assert.equal(result.ok, false)
@@ -137,7 +137,7 @@ test('Round26: a flush error never claims local durability after partial DAG fai
   assert.equal(result.saveError, 'FLUSH_FAILED')
 })
 
-test('Round26: valid explicit roots and parents alias retain lineage and count mismatch detection', async () => {
+test('valid explicit roots and parents alias retain lineage and count mismatch detection', async () => {
   const f = fixture(), root = f.node({ content: 'Synthetic root', parentIds: [] })
   const child = f.node({ content: 'Synthetic alias child', parents: [root.id] })
   f.head([child], 2)
@@ -151,7 +151,7 @@ test('Round26: valid explicit roots and parents alias retain lineage and count m
 })
 
 for (const parents of [{}, { parents: null }, { parentIds: 'bad' }, { parentIds: [], parents: ['a'.repeat(64)] }, { parentIds: [], parents: null }, { parents: ['invalid'] }]) {
-  test('Round26: unreadable parent schema fails both walkers: ' + JSON.stringify(parents), async () => {
+  test('unreadable parent schema fails both walkers: ' + JSON.stringify(parents), async () => {
     const f = fixture(), root = f.node({ content: 'Synthetic invalid schema', ...parents }); f.head([root])
     const result = await f.dag({ action: 'dag_verify' })
     assert.equal(result.ok, false)
@@ -163,7 +163,7 @@ for (const parents of [{}, { parents: null }, { parentIds: 'bad' }, { parentIds:
 }
 
 for (const head of ['{', 'null', '{}', '{"heads":[],"count":-1}', '{"heads":["invalid"],"count":1}']) {
-  test('Round26: invalid HEAD is not an empty successful DAG: ' + head, async () => {
+  test('invalid HEAD is not an empty successful DAG: ' + head, async () => {
     const f = fixture(); f.files.set(HEAD, head)
     const verification = await f.dag({ action: 'dag_verify' })
     assert.equal(verification.ok, false)
@@ -175,24 +175,24 @@ for (const head of ['{', 'null', '{}', '{"heads":[],"count":-1}', '{"heads":["in
   })
 }
 
-test('Round26: unreadable HEAD is distinct from absent HEAD', async () => {
+test('unreadable HEAD is distinct from absent HEAD', async () => {
   const f = fixture(); f.head([]); f.fault.read = file => file === HEAD
   assert.equal((await f.dag({ action: 'dag_verify' })).error, 'DAG_HEAD_UNREADABLE')
 })
 
-for (const dagParents of [['invalid'], 'invalid', null]) test('Round26: explicit invalid DAG parents are rejected, not filtered: ' + JSON.stringify(dagParents), async () => {
+for (const dagParents of [['invalid'], 'invalid', null]) test('explicit invalid DAG parents are rejected, not filtered: ' + JSON.stringify(dagParents), async () => {
   const f = fixture(), result = await f.dag({ action: 'dag_write', fact: 'Synthetic invalid parents', dagParents })
   assert.equal(result.ok, false)
   assert.equal(f.events.filter(([event]) => event === 'write').length, 0)
 })
 
-test('Round26: a node outside HEAD is reported even if the declared count matches reachable nodes', async () => {
+test('a node outside HEAD is reported even if the declared count matches reachable nodes', async () => {
   const f = fixture(), root = f.node({ content: 'Synthetic reachable', parentIds: [] })
   f.node({ content: 'Synthetic orphan', parentIds: [] }); f.head([root])
   assert.ok((await f.dag({ action: 'dag_verify' })).errors.some(error => error.error === 'DAG_UNREACHABLE_ORPHANS'))
 })
 
-test('Round26: unreadable recall sources retain partial hits and explicit coverage counts', () => {
+test('unreadable recall sources retain partial hits and explicit coverage counts', () => {
   const f = fixture(); SOURCES.forEach(file => f.files.set(file, ''))
   f.files.set(SOURCES[0], 'Synthetic needle line\n'); f.fault.read = file => file === SOURCES[1]
   const result = f.seed.run({ action: 'recall', query: 'needle' })
@@ -209,7 +209,7 @@ test('Round26: unreadable recall sources retain partial hits and explicit covera
   assert.equal(stats.status, 'UNDETERMINED')
 })
 
-test('Round34: an unreadable source does not consume the readable recall match limit', () => {
+test('an unreadable source does not consume the readable recall match limit', () => {
   const f = fixture(), limit = 3
   SOURCES.forEach(file => f.files.set(file, ''))
   f.files.set(SOURCES[0], 'Synthetic unrelated text\n')
@@ -231,7 +231,7 @@ test('Round34: an unreadable source does not consume the readable recall match l
   assert.deepEqual(f.events, [])
 })
 
-test('Round26: unreadable empty and readable empty recall remain distinct', () => {
+test('unreadable empty and readable empty recall remain distinct', () => {
   const f = fixture()
   const missing = f.seed.run({ action: 'recall', query: 'needle' })
   assert.equal(missing.status, 'UNDETERMINED')
@@ -245,7 +245,7 @@ test('Round26: unreadable empty and readable empty recall remain distinct', () =
 })
 
 
-test('Round26: a rejected memory-store write stops DAG and receipt work', async () => {
+test('a rejected memory-store write stops DAG and receipt work', async () => {
   const f = fixture(); f.fault.write = file => file.startsWith(STORE + '.tmp-')
   const result = await f.run({ action: 'remember', fact: 'Synthetic rejected store' })
   assert.equal(result.ok, false)
@@ -256,7 +256,7 @@ test('Round26: a rejected memory-store write stops DAG and receipt work', async 
   assert.equal(f.events.some(([event, file]) => event === 'receipt' || event === 'write' && file.startsWith(DAG)), false)
 })
 
-for (const target of ['node', 'head', 'store']) test('Round26: thrown-after-write ' + target + ' reports uncertainty and preserves bytes', async () => {
+for (const target of ['node', 'head', 'store']) test('thrown-after-write ' + target + ' reports uncertainty and preserves bytes', async () => {
   const f = fixture()
   if (target === 'node') f.fault.writeAfter = file => file.startsWith(DAG + '/') && file !== HEAD + '.tmp'
   else f.fault.renameAfter = file => file === (target === 'head' ? HEAD : STORE)
@@ -276,7 +276,7 @@ for (const target of ['node', 'head', 'store']) test('Round26: thrown-after-writ
   }
 })
 
-test('Round26: a later DAG failure preserves every prior record and node byte', async () => {
+test('a later DAG failure preserves every prior record and node byte', async () => {
   const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic original memory', key: 'original' })
   const originalRecord = JSON.parse(f.files.get(STORE)).facts[0]
   const originalDag = new Map([...f.files].filter(([file]) => file.startsWith(DAG + '/')))
@@ -290,7 +290,7 @@ test('Round26: a later DAG failure preserves every prior record and node byte', 
   assert.equal(verification.memoryWithoutDag.includes(first.entry.memoryId), false)
 })
 
-test('Round26: repeated tombstone remains idempotent in both store and DAG', async () => {
+test('repeated tombstone remains idempotent in both store and DAG', async () => {
   const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic deletable memory' })
   const args = { action: 'tombstone', memoryId: first.entry.memoryId }
   assert.equal((await f.run(args)).ok, true)
@@ -299,7 +299,7 @@ test('Round26: repeated tombstone remains idempotent in both store and DAG', asy
   assert.deepEqual(f.files, before)
 })
 
-test('Round26: explicit DAG roots and matching aliases remain valid; direct writes retain anchor compatibility', async () => {
+test('explicit DAG roots and matching aliases remain valid; direct writes retain anchor compatibility', async () => {
   const f = fixture(), result = await f.dag({ action: 'dag_write', fact: 'Synthetic explicit root', dagParents: [] })
   assert.equal(result.ok, true)
   assert.equal(result.anchor.ok, true)
@@ -311,7 +311,7 @@ test('Round26: explicit DAG roots and matching aliases remain valid; direct writ
   assert.equal((await f.dag({ action: 'dag_verify' })).ok, true)
 })
 
-for (const value of ['{', '{}']) test('Round26: unreadable prior receipt head stops append without pretending an empty ledger: ' + value, async () => {
+for (const value of ['{', '{}']) test('unreadable prior receipt head stops append without pretending an empty ledger: ' + value, async () => {
   const f = fixture(); f.files.set(RECEIPTS, value)
   const result = await f.run({ action: 'remember', fact: 'Synthetic receipt history gap' })
   assert.equal(result.error, 'DAG_APPEND_FAILED')
@@ -328,7 +328,7 @@ function addSession(f) {
   f.files.set('/dsh/home/sessions/synthetic/session.v4.jsonl', JSON.stringify(header) + '\n' + JSON.stringify(event) + '\n')
 }
 
-test('Round26: distill stops dependent DAG/receipt work after a partial multi-fact failure', async () => {
+test('distill stops dependent DAG/receipt work after a partial multi-fact failure', async () => {
   const f = fixture(); addSession(f)
   let writes = 0
   f.fault.write = file => /^.*\/[a-f0-9]{64}\.json$/.test(file) && ++writes === 2
@@ -346,7 +346,7 @@ test('Round26: distill stops dependent DAG/receipt work after a partial multi-fa
   assert.equal((await f.dag({ action: 'dag_verify' })).memoryWithoutDag.length, 2)
 })
 
-test('Round26: malformed receipt acknowledgement is never accepted as a confirmed anchor', async () => {
+test('malformed receipt acknowledgement is never accepted as a confirmed anchor', async () => {
   const f = fixture(); f.ctx.organs.call = async () => ({ ok: true, receipt: {} })
   const result = await f.run({ action: 'remember', fact: 'Synthetic bad acknowledgement' })
   assert.equal(result.error, 'DAG_APPEND_FAILED')
@@ -356,7 +356,7 @@ test('Round26: malformed receipt acknowledgement is never accepted as a confirme
 
 
 for (const action of ['tombstone', 'forget']) for (const mode of ['node', 'head', 'receipt']) {
-  test('Round26 review: retry ' + action + ' after ' + mode + ' failure retains the incomplete result without duplicate writes', async () => {
+  test('retry ' + action + ' after ' + mode + ' failure retains the incomplete result without duplicate writes', async () => {
     const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic retry target' })
     if (mode === 'node') f.fault.write = file => file.startsWith(DAG + '/')
     if (mode === 'head') f.fault.rename = file => file === HEAD
@@ -377,7 +377,7 @@ for (const action of ['tombstone', 'forget']) for (const mode of ['node', 'head'
   })
 }
 
-for (const action of ['tombstone', 'forget']) test('Round26 review: successful ' + action + ' repeat verifies existing receipt without reappending', async () => {
+for (const action of ['tombstone', 'forget']) test('successful ' + action + ' repeat verifies existing receipt without reappending', async () => {
   const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic verified retry target' })
   const args = { action, memoryId: first.entry.memoryId }, initial = await f.run(args)
   assert.equal(initial.ok, true)
@@ -392,7 +392,7 @@ for (const action of ['tombstone', 'forget']) test('Round26 review: successful '
   assert.equal(f.events.slice(eventCount).some(([event]) => ['write', 'rename', 'unlink', 'receipt'].includes(event)), false)
 })
 
-test('Round26 review: receipt written before lost acknowledgement can be confirmed on retry without another append', async () => {
+test('receipt written before lost acknowledgement can be confirmed on retry without another append', async () => {
   const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic uncertain receipt target' })
   const args = { action: 'forget', memoryId: first.entry.memoryId }
   f.fault.receipt = 'throw-after'
@@ -406,7 +406,7 @@ test('Round26 review: receipt written before lost acknowledgement can be confirm
   assert.equal(f.events.slice(eventCount).some(([event]) => ['write', 'rename', 'unlink', 'receipt'].includes(event)), false)
 })
 
-for (const action of ['remember', 'distill']) test('Round26 review: ' + action + ' reports candidate IDs after uncertain store rename', async () => {
+for (const action of ['remember', 'distill']) test('' + action + ' reports candidate IDs after uncertain store rename', async () => {
   const f = fixture(); f.fault.renameAfter = file => file === STORE
   if (action === 'distill') addSession(f)
   const result = await f.run(action === 'remember' ? { action, fact: 'Synthetic uncertain candidate' }
@@ -418,7 +418,7 @@ for (const action of ['remember', 'distill']) test('Round26 review: ' + action +
 })
 
 for (const mode of ['missing', 'unreadable', 'truncated', 'invalid-json', 'broken-chain', 'wrong-payload']) {
-  test('Round26 review: repeat refuses ' + mode + ' persisted receipt evidence without rewriting it', async () => {
+  test('repeat refuses ' + mode + ' persisted receipt evidence without rewriting it', async () => {
     const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic receipt evidence target' })
     const args = { action: 'forget', memoryId: first.entry.memoryId }
     assert.equal((await f.run(args)).ok, true)
@@ -445,7 +445,7 @@ for (const mode of ['missing', 'unreadable', 'truncated', 'invalid-json', 'broke
   })
 }
 
-test('Round26 review: a reachable node with the same memory ID but different content cannot confirm a repeat', async () => {
+test('a reachable node with the same memory ID but different content cannot confirm a repeat', async () => {
   const f = fixture(), first = await f.run({ action: 'remember', fact: 'Synthetic node evidence target' })
   const args = { action: 'tombstone', memoryId: first.entry.memoryId }
   const initial = await f.run(args), nodeId = initial.dagWrites[0].nodeId

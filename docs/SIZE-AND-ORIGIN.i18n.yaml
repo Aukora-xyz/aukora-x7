@@ -1,0 +1,25 @@
+# Bilingual-pair consistency record for SIZE-AND-ORIGIN.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/SIZE-AND-ORIGIN.md
+/size-and-origin:
+  en: 21225bc68095cc20
+  zh: 6e16cc28712b69d8
+/size-and-origin/the-short-answer:
+  en: 43c0d63b278a5827
+  zh: 46d0135dbb331e4e
+/size-and-origin/where-this-project-s-own-layer-lives:
+  en: d8a64a2f7eec853c
+  zh: 95aa9d5cf2258a9c
+/size-and-origin/binary-files-without-source:
+  en: e62b7b4faabeff3f
+  zh: 1fa7c668c0c9a395
+/size-and-origin/by-folder:
+  en: 88c4b3e3950b99ba
+  zh: 74f1e923c0d9ae4b
+/size-and-origin/how-it-was-counted:
+  en: 612eb905ce40cbfb
+  zh: c24df25a6ab2edcb
+/size-and-origin/what-you-can-reproduce:
+  en: d9aa8488b430172d
+  zh: bb3ebc45ff2afa43

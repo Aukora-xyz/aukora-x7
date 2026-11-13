@@ -1,4 +1,4 @@
-/** Round26 prediction regressions use source code and in-memory files only. */
+/** Prediction regressions use source code and in-memory files only. */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

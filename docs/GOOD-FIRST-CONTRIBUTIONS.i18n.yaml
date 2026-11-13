@@ -1,0 +1,40 @@
+# Bilingual-pair consistency record for GOOD-FIRST-CONTRIBUTIONS.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/GOOD-FIRST-CONTRIBUTIONS.md
+/good-first-contributions:
+  en: c123f68709d98740
+  zh: 20c2e0d81ba17230
+/good-first-contributions/1-run-the-suites-on-a-second-machine:
+  en: 00d89a4336c97a4f
+  zh: d44736583df5aa4c
+/good-first-contributions/2-make-server-read-limits-test-mjs-load:
+  en: 06ce603472713b4a
+  zh: b01de768c109a761
+/good-first-contributions/3-find-out-why-node-stubs-spec-ts-fails:
+  en: 9a78193ef80a9f3a
+  zh: cda2cc067b0ca1c7
+/good-first-contributions/4-diagnose-the-receipt-and-prediction-tests:
+  en: 4d597730b56981f9
+  zh: f830fd10a6496baf
+/good-first-contributions/5-one-cause-or-many-server-recall-test-mjs:
+  en: 25d2b8e105e3ba89
+  zh: 0895a25f04f38602
+/good-first-contributions/6-assert-the-shipped-head-not-a-long-running-one:
+  en: 5a93269a85ad39e4
+  zh: 1a2b5956904be3a6
+/good-first-contributions/7-give-the-superagent-tests-a-synthetic-home:
+  en: 0116ee7688688a97
+  zh: faa6a970068b4566
+/good-first-contributions/8-make-the-workflow-trigger-tests-fit-a-repository-with-triggers-off:
+  en: bf80080d12ac0893
+  zh: 94d68d119529709e
+/good-first-contributions/9-one-source-for-deployment-values:
+  en: 2c00586bfcc12532
+  zh: 1ae264f3a786847b
+/good-first-contributions/10-stop-the-build-from-touching-a-running-host-by-default:
+  en: 99eae99a900c625e
+  zh: 85a7fdddcf9dd5c0
+/good-first-contributions/more-candidates-not-counted-above:
+  en: 8e1f7df443caeed2
+  zh: 04da3d593aaf167a

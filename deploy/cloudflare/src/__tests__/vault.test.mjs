@@ -197,7 +197,8 @@ test('budget refusals 507 WORLD_FULL and 429 DAY_ALLOWANCE are returned and noth
 
 test('a put that throws after the charge is 503, count is never called, and the reservation is released (totals unchanged)', async () => {
   const bucket = createVaultBucket({ intercept: { put: () => { throw new Error('r2 down') } } })
-  const h = harness({ bucket })
+  // The budget's day comes from its own clock: pin it to the harness's day, or this test fails on every other date.
+  const h = harness({ bucket, budget: createVaultBudget({ now: () => Date.UTC(2026, 10, 12, 13, 0, 0) }) })
   const { bytes, hash } = await piece('put fails')
   const res = await h.call('PUT', `/_vault/blob/${hash}`, { body: bytes })
   assert.equal(res.status, 503)

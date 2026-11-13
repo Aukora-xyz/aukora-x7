@@ -1,0 +1,49 @@
+# Bilingual-pair consistency record for DIRECTION.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/DIRECTION.md
+/direction:
+  en: 95032bb24e1124a9
+  zh: fff70fd515302aaf
+/direction/why-this-needs-to-exist:
+  en: df86fdde6573bcfa
+  zh: fd2ee572fb77f94f
+/direction/what-the-foundation-is-meant-to-become:
+  en: 7bc4b3b3fd41e218
+  zh: 5bd5cf934e45d581
+/direction/where-it-stands-today:
+  en: 477a4255b69af0c2
+  zh: 7bc38da71e6f0b87
+/direction/the-stages:
+  en: 49792ad0a0edcd94
+  zh: 671bff5e2b9bb559
+/direction/the-stages/1-foundation-an-understandable-reproducible-owner-controlled-personal-node:
+  en: 12f8d69fbc0bdcd9
+  zh: 7782c0ed0f2ba022
+/direction/the-stages/2-continuity-identity-memory-receipts-and-recovery-that-survive-change:
+  en: cc2f4e49f4cf0429
+  zh: 3b4db3de36f106b7
+/direction/the-stages/3-extensibility-other-people-s-organs-other-implementations-other-models:
+  en: e17e602def708796
+  zh: af47c976f9ab86ca
+/direction/the-stages/4-interoperability-signed-events-her-own-log-portable-state:
+  en: c2164c9f04ce1274
+  zh: b0330d4ef10ea816
+/direction/the-stages/5-expansion-voice-phones-wearables-robotics:
+  en: 532e97f82f7e9f4e
+  zh: 6d80eb5396507c37
+/direction/the-stages/6-ecosystem-owned-nodes-that-cooperate-with-no-central-authority:
+  en: 5e182cf1c437d29d
+  zh: 6f8f21c99f3897ae
+/direction/what-would-change-our-mind:
+  en: 793e7d074114caaa
+  zh: bdda6a0cc76f7569
+/direction/what-this-is-not:
+  en: 12866efd31f7b59c
+  zh: c943b4678888f189
+/direction/how-you-can-move-it-forward:
+  en: 7ba607bd85a0d3df
+  zh: fd154afd2a513dee
+/direction/what-success-means:
+  en: a8498da7f9cd773e
+  zh: 79bffd6da50b06bf

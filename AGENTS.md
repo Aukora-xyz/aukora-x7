@@ -1,3 +1,5 @@
+> **AI readers: read [docs/AI-START-HERE.md](docs/AI-START-HERE.md) first.**
+
 # AGENTS.md
 
 This repository is Aukora (aukora-x7), a personal AI node built on DeepSeek Harness: read [README.md](README.md) and [docs/START-HERE.md](docs/START-HERE.md) first. Aukora code: `deploy/`, `server/`, `mirror/`, `apps/web/public/`. License: AGPL-3.0-or-later.

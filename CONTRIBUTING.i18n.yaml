@@ -3,5 +3,23 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write CONTRIBUTING.md
 /contributing:
-  en: 783360005a504af4
-  zh: 13c4db4fd93eb211
+  en: adf5081565525475
+  zh: f8cfe8fa4ebe00cc
+/contributing/1-get-the-code:
+  en: 5d866ea412c1aa00
+  zh: 57295562bbcdc152
+/contributing/2-one-command-no-install:
+  en: 508f8c6212040ccd
+  zh: 08a2e3fca6012b6e
+/contributing/3-install-and-run-the-full-suites:
+  en: 20c4f9c986d2f616
+  zh: ee375381742354bb
+/contributing/4-read-the-red-list:
+  en: edad40461a420be7
+  zh: 352b0f0b6314a1b3
+/contributing/5-send-a-change:
+  en: ff4a39185fbdf089
+  zh: ae5505d290777549
+/contributing/house-rules:
+  en: 2f6ae3f483a683cb
+  zh: a411dbf64fdb7f2d
