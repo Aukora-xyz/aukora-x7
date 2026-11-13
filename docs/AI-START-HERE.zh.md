@@ -57,11 +57,11 @@
 
 ## 4. 阅读顺序，附以行数计的阅读预算
 
-**约 240 行。** 本页（134），然后是属于较早的一棵树的记录 `docs/RUN-RECORD.md`（56）和 `docs/KNOWN-RED-TESTS.md`（46）。你现在知道了规则、证据和失败之处。
+**约 240 行。** 本页（134），然后是属于较早的一棵树的记录 `docs/RUN-RECORD.md`（56）和 `docs/KNOWN-RED-TESTS.md`（48）。你现在知道了规则、证据和失败之处。
 
-**约 1,470 行。** 加上 `README.md`（150，前页）、`docs/WHAT-IS-BUILT.md`（237：声明、文件、测试、标签）、`docs/ARCHITECTURE-MAP.md`（133）、`docs/GLOSSARY.md`（23）、`server/ball-transition.mjs`（125）、`deploy/cloudflare/src/proof-failure-rule.mjs`（250）、`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`（232）和 `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`（88）。
+**约 1,480 行。** 加上 `README.md`（150，前页）、`docs/WHAT-IS-BUILT.md`（240：声明、文件、测试、标签）、`docs/ARCHITECTURE-MAP.md`（133）、`docs/GLOSSARY.md`（23）、`server/ball-transition.mjs`（125）、`deploy/cloudflare/src/proof-failure-rule.mjs`（250）、`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`（232）和 `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`（88）。
 
-**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（3,000）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（167）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（915）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/DIRECTION.md` 和 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（7,465）按符号读，不要整个读。
+**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（3,000）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（167）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（915）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/DIRECTION.md` 和 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（7,957）按符号读，不要整个读。
 
 **论证。** `docs/WHITEPAPER.md`（885，只有英文）是本项目的完整论证。它的 Book V 和 Book VI 已对照这棵树核对过：读了代码，没有运行。
 
@@ -94,7 +94,7 @@
 
 ## 7. 代码的每一部分来自哪里
 
-按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 11.6%，以及代码行的 14.3%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
+按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 11.8%，以及代码行的 14.7%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
 
 - **Aukora 的一层：** `deploy/`（边缘端和部署门禁）、`server/`（本地宿主、ball 规则）、`mirror/`（创世 head 和 organ）、`packages/experimental/webworker-runtime/src/x6/`（loader、scion、单元）、`packages/client/ui-layout/src/client/spatial/`（应用），以及 `apps/web/public/` 的一部分。
 - **继承来的 DeepSeek Harness：** `packages/` 的大部分，外加 `python/`、`native/`、`benchmarks/`、`snapshots/`、`.agents/` 和 `.github/workflows/` 的大部分。MIT 声明在 `LICENSES/MIT-DeepSeek-Harness.txt`。Aukora 与 DeepSeek 没有隶属关系。

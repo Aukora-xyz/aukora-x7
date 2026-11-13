@@ -240,6 +240,7 @@ const live = await import(pathToFileURL(livePath ?? 'apps/web/public/app/genesis
   }
   VOICE_PROVENANCE: string
   VOICE_PROVENANCE_UNJOURNALED: string
+  ROSTER_HEAD: string
 }
 
 /** Her session as the transport sees it: a follow stream the test drives, and the RPCs it records. */
@@ -248,6 +249,10 @@ const fakeSession = (options: { queueHolds?: boolean } = {}) => {
   const streams: Array<{ args: unknown; push: (frame: unknown) => void; end: () => void; signal: AbortSignal }> = []
   const transport = {
     fetch: async (path: string, init: { body: string }) => {
+      // Look-only voice (genesis-live.js): a spoken turn first finds her voice home ('s1' here) and has the
+      // worker confirm it look-only. Those reads are answered here and kept out of `rpcs`, which records what is sent.
+      if (path === '/api/__x6__/voice-mark') return json({ ok: true, code: 'VOICE_LOOK_ONLY', lookOnly: true })
+      if (path === '/api/session/list') return json({ result: { ok: true, value: { items: [{ sessionId: 's1', title: '[voice] Auma Live' }] } } })
       const method = path.replace('/api/', '')
       const args = (JSON.parse(init.body) as { payload: { args: Record<string, unknown> } }).payload.args
       rpcs.push({ method, args })
@@ -387,8 +392,10 @@ describe('Auma Live: a spoken turn is journaled as voice before she sees it, and
     const turnId = String(v.calls[0]?.turnId)
     const requestId = (rpcs[0]?.args.request as { requestId: string }).requestId
     expect(turnId).toBe(`auma-live:${requestId}`)
+    // (The roster of her other threads rides after the provenance part, which stays first.)
     expect((rpcs[0]?.args.request as { content: unknown }).content).toEqual([
-      { type: 'text', text: live.VOICE_PROVENANCE }, { type: 'text', text: 'stage epoch sixty eight' }])
+      { type: 'text', text: live.VOICE_PROVENANCE }, { type: 'text', text: `${live.ROSTER_HEAD}\n(no other threads listed)` },
+      { type: 'text', text: 'stage epoch sixty eight' }])
     expect(live.VOICE_PROVENANCE).toContain('voice carries no owner authority')
     // The owner speaks over her: the journaled turn is marked cancelled on the edge too.
     streams[0]?.push({ type: 'event', event: { type: 'user/message', data: { turn: 3, source: { rpcId: requestId } } } })

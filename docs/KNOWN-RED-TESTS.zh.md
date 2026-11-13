@@ -18,6 +18,8 @@
 | `apps/web/src/spatial/superagent/read.spec.ts` | 50 个中 8 个（第 9 个 "exactly 256 referenced nodes fit the file and concurrency budgets" 对时间敏感，机器繁忙时可能失败） | 同样的原因。 | 未运行 |
 | `deploy/cloudflare/src/__tests__/world-holder.test.mjs` | 59 个中 6 个 | 需要私有的提交历史；公开的树只随附一份快照。这六个用例用 `git show` 与两个较早的提交比较，而这些提交不在本仓库中。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/ci/frozen-paths.test.mjs` | 17 个中 2 个 | 一个用例断言冻结清单上的每个文件都在树中；清单列出了她在 `mirror/home/auma/seed/` 下的收据文件，而本仓库不随附它（只提交了 genesis 种子）。另一个用例断言 `proposal-checks.yml` 的自动触发器，而它在这里和其他工作流一样被注释掉了。请在 git 检出中运行它：另有四个用例会调用 `git ls-files`。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `deploy/cloudflare/src/__tests__/pubfix-t1-publish.test.mjs` | 3 个中 2 个 | 它向一个长期运行节点的 head 发布，并断言该 head 发布前后的纪元。本仓库提供的是创世 head，纪元 1。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `packages/experimental/webworker-runtime/tests/x6/voice-organ-readonly.spec.ts` | 14 个中 7 个 | 它在一个长期运行节点的 head 的 organ 字节上证明语音可调用的 organ 操作是只读的，并用这些字节核对 `voice-organ-pins.ts` 中的钉值。本仓库提供的是创世 head，其 organ 是另外的字节，所以这些钉值在这里匹配不到任何东西，语音会拒绝这些工具。 | 在记录的运行（属于较早的一棵树）之后加入 |
 
 要让它们通过：基于创世种子或合成的 home 重写它们；在本仓库有自己的运行器后再打开触发器。
 

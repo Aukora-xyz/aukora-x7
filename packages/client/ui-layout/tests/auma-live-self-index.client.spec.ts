@@ -228,7 +228,7 @@ describe('the transcript holds everything the voice says is there', () => {
     expect(mod.renderSelfAnswer(untitled, 'spoken')).not.toContain('in the transcript.' + ' That')
   })
 
-  it.each([Infinity, -Infinity, Number.NaN, 1e309, -1, 1.5, Number.MAX_SAFE_INTEGER + 2])('an epoch of %s is never spoken: the turn passes', (epoch) => {
+  it.each([Infinity, -Infinity, Number.NaN, 1e309, -1, 1.5, Number.MAX_SAFE_INTEGER + 2])('an epoch of %s is never spoken: the turn passes (case %#)', (epoch) => {
     const answer = mod.answerSelfQuestion({ topic: 'epoch' }, { index: { ...index(), epoch } })
     expect(answer).toMatchObject({ status: 'pass' })
     expect(mod.renderSelfAnswer(answer, 'spoken')).not.toMatch(/Infinity|NaN/)

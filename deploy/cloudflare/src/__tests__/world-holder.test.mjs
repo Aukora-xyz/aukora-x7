@@ -27,7 +27,7 @@ import { X61HeadDurableObject, bootstrapPackage, digest, manifestIdCanon } from 
 import { AUMLOK_STORAGE_KEY, aumlokClass3Binding } from '../aumlok.mjs'
 
 const { HOLDER_WORDS, WORLD_HOLDER, WORLD_HOLDER_LOG, WORLD_SEALED, holderProofMessage, holderProofValid, holderWord, logMark, logMarkOf, needsList } = holder
-const BASE = 'be552705'
+const BASE = '6f86a35c'
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -220,7 +220,7 @@ function withSeededRandom(t) {
   return seed => { next = rng(seed) }
 }
 
-test('rule 1 + SHOULD 1 (+ SHOULD 2, sid; job 4 R1e: started as MIRROR starts it, one read): with no holder ever claimed, 3,000 random lease calls (some with the Worker\'s sid, some over a malformed lease row) make the same storage operations, answers and storage as be552705', async t => {
+test('rule 1 + SHOULD 1 (+ SHOULD 2, sid; job 4 R1e: started as MIRROR starts it, one read): with no holder ever claimed, 3,000 random lease calls (some with the Worker\'s sid, some over a malformed lease row) make the same storage operations, answers and storage as 6f86a35c', async t => {
   const base = await loadBase(t)
   const reseed = withSeededRandom(t)
   const rand = rng(7)
@@ -267,7 +267,7 @@ test('rule 1 + SHOULD 1 (+ SHOULD 2, sid; job 4 R1e: started as MIRROR starts it
       const was = await oldStore.transaction(async tx => base.home.worldStatus(tx, { lease: await base.lease.leaseSummary(tx, now), freeze }))
       const is = await newStore.transaction(async tx => worldStatus(tx, { lease: await leaseSummary(tx, now), freeze }))
       assert.equal(JSON.stringify(is), JSON.stringify(was))
-      assert.deepEqual(newOps, oldOps, 'the index reads exactly what be552705 reads')
+      assert.deepEqual(newOps, oldOps, 'the index reads exactly what 6f86a35c reads')
       assert.deepEqual(Object.keys(is.home), ['pending', 'rescue', 'freeze'])
       counted.index++
     }
@@ -1328,8 +1328,8 @@ async function signedInput(id, fields, device = devices[id]) {
 }
 const holderShown = (generation = 1, since = T0, label = 'Chrome on the Mac') => ({ label, since, generation })
 
-test('MUST 1, his sequence: claim, acquire, the lease row rewritten the way e728dce2 writes it, MIRROR restarted: B\'s acquire without a proof is 423 again', async t => {
-  const old = await loadAt(t, 'e728dce2', ['deploy/cloudflare/src/world-lease.mjs'])
+test('MUST 1, his sequence: claim, acquire, the lease row rewritten the way d1a0969c writes it, MIRROR restarted: B\'s acquire without a proof is 423 again', async t => {
+  const old = await loadAt(t, 'd1a0969c', ['deploy/cloudflare/src/world-lease.mjs'])
   t.mock.method(Date, 'now', () => clock.now)
   const storage = fresh(seededMirrorRows())
   const first = new MirrorDO({ storage }, {})
@@ -1664,8 +1664,8 @@ test('MUST 4, his sequence with main\'s own request shape: a passkey-approved ta
   assert.equal(rig.asked.length, asked + 1)
 })
 
-test('MUST 4 + job 4 R1e + review MUST 2: with no holder row, take through the Worker answers byte for byte as on be552705 and stores the same; with an approval header it adds exactly one unapproved MIRROR call that only reads, and asks the passkey only when that call says it is needed; the start-up read is the one other extra', async t => {
-  const base = await loadAt(t, 'be552705', ['deploy/cloudflare/src/thread-mount.mjs', 'deploy/cloudflare/src/world-lease.mjs'])
+test('MUST 4 + job 4 R1e + review MUST 2: with no holder row, take through the Worker answers byte for byte as on 6f86a35c and stores the same; with an approval header it adds exactly one unapproved MIRROR call that only reads, and asks the passkey only when that call says it is needed; the start-up read is the one other extra', async t => {
+  const base = await loadAt(t, '6f86a35c', ['deploy/cloudflare/src/thread-mount.mjs', 'deploy/cloudflare/src/world-lease.mjs'])
   const reseed = withSeededRandom(t)
   const side = (mountModule, leaseModule, initial, homeFreeze, start = null) => {
     const ops = []
@@ -1945,7 +1945,7 @@ async function appendInput(storage, ref, text, threadPath = PATH) {
  * UNMARKED one on its typed id. Returns the storage (no MIRROR object running on it) and B's stolen lease reference.
  */
 async function rolledBack(t) {
-  const old = await loadAt(t, 'e728dce2', ['deploy/cloudflare/src/world-lease.mjs'])
+  const old = await loadAt(t, 'd1a0969c', ['deploy/cloudflare/src/world-lease.mjs'])
   const storage = fresh(seededMirrorRows())
   const first = new MirrorDO({ storage }, {})
   const reserved = await mirrorLease(first, await signedInput(A, { action: 'reserve', expect: 0, checkpoint: null, log: await markOf(storage), accept: [], key: devices[A].key }))
@@ -2042,8 +2042,8 @@ test('job 4 R1a: the start-up read has a 1 s deadline: a read that never answers
   assert.deepEqual(seen, { status: 423, body: { ok: false, code: 'HOLDER_ELSEWHERE', holder: holderShown(1, T0 - 20) } })
 })
 
-test('job 4 R1e: an unclaimed world, started as MIRROR starts it: thread appends (and their final lease check), the index and slot retirement make exactly be552705\'s storage operations and answers', async t => {
-  const base = await loadAt(t, 'be552705', ['deploy/cloudflare/src/world-lease.mjs', 'deploy/cloudflare/src/mirror-client-slots.mjs', 'deploy/cloudflare/src/world-home.mjs'])
+test('job 4 R1e: an unclaimed world, started as MIRROR starts it: thread appends (and their final lease check), the index and slot retirement make exactly 6f86a35c\'s storage operations and answers', async t => {
+  const base = await loadAt(t, '6f86a35c', ['deploy/cloudflare/src/world-lease.mjs', 'deploy/cloudflare/src/mirror-client-slots.mjs', 'deploy/cloudflare/src/world-home.mjs'])
   const DAY = 86400000
   const LINEAGE = '12345678-1234-4234-8234-123456789abc'
   const idOf = i => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`

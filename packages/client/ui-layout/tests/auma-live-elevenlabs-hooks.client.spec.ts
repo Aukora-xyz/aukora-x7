@@ -129,6 +129,13 @@ const fakeDsh = (items: Array<{ sessionId: string; title?: string }>, selectMode
       rpcs.push({ method, args })
       if (method === 'session/list') return json({ result: { ok: true, value: { items } } })
       if (method === 'session/create') { items.push({ sessionId: 's-new' }); return json({ result: { ok: true, value: { sessionId: 's-new' } } }) }
+      // As DSH does: a rename is seen by the next list. The page adopts only a thread titled as the voice home.
+      if (method === 'session/rename') {
+        const request = args.request as { sessionId: string; title: string }
+        const target = items.find(item => item.sessionId === request.sessionId)
+        if (target) target.title = request.title
+        return json({ result: { ok: true, value: {} } })
+      }
       if (method === 'session/selectModel') return await selectModel()
       return json({ result: { ok: true, value: {} } })
     },

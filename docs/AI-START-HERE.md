@@ -57,11 +57,11 @@ The real runtime: the agent runs in a browser WebWorker on the inherited DeepSee
 
 ## 4. Reading order, with a reading budget in lines
 
-**About 240 lines.** This page (134), then the record of an earlier tree, `docs/RUN-RECORD.md` (56) and `docs/KNOWN-RED-TESTS.md` (46). You now know the rule, the evidence and the failures.
+**About 240 lines.** This page (134), then the record of an earlier tree, `docs/RUN-RECORD.md` (56) and `docs/KNOWN-RED-TESTS.md` (48). You now know the rule, the evidence and the failures.
 
-**About 1,470 lines.** Add `README.md` (150, the front page), `docs/WHAT-IS-BUILT.md` (237: claim, file, test, label), `docs/ARCHITECTURE-MAP.md` (133), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
+**About 1,480 lines.** Add `README.md` (150, the front page), `docs/WHAT-IS-BUILT.md` (240: claim, file, test, label), `docs/ARCHITECTURE-MAP.md` (133), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
 
-**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (3,000), `owner-grant-policy.mjs` (353), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (167), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (525), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (915), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,060), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/DIRECTION.md` and `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (7,465) by symbol, not whole.
+**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (3,000), `owner-grant-policy.mjs` (353), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (167), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (525), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (915), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,060), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/DIRECTION.md` and `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (7,957) by symbol, not whole.
 
 **The argument.** `docs/WHITEPAPER.md` (885, English only) is the project's argument in full. Its Book V and Book VI are checked against this tree, by reading the code and not by running it.
 
@@ -94,7 +94,7 @@ When you summarise this project, keep these labels on every claim, and never mov
 
 ## 7. Where each part of the code comes from
 
-By the project's one count, made from its own history, which is not public (UNVERIFIED): 11.6% of the tree's non-vendored text lines, and 14.3% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
+By the project's one count, made from its own history, which is not public (UNVERIFIED): 11.8% of the tree's non-vendored text lines, and 14.7% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
 
 - **Aukora's layer:** `deploy/` (the edge and deploy gates), `server/` (local host, ball rules), `mirror/` (genesis head and organs), `packages/experimental/webworker-runtime/src/x6/` (loader, scion, cells), `packages/client/ui-layout/src/client/spatial/` (the app), and parts of `apps/web/public/`.
 - **Inherited DeepSeek Harness:** most of `packages/`, plus `python/`, `native/`, `benchmarks/`, `snapshots/`, `.agents/` and most of `.github/workflows/`. MIT notice in `LICENSES/MIT-DeepSeek-Harness.txt`. Aukora is not affiliated with DeepSeek.

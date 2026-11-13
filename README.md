@@ -106,7 +106,7 @@ node scripts/verify-lite.mjs
 - **One file has no licence.** `pentora36.wasm` ships with no licence granted yet. [`LICENSE.binaries`](apps/web/public/seed-library/pentora/LICENSE.binaries)
 - **The rollback gap.** Restoring a whole stored snapshot can re-enable a spent approval. The tree has a test that reproduces it, with ten todo cases beside it that name what a fix must show. No fix is in the tree.
 - **Not run.** No end-to-end, owner-approved self-change is recorded as run from this tree. A cloud deployment from this tree into a fresh account is UNVERIFIED: deployment values are placeholders, some of them written into code.
-- **Most of this tree is inherited.** Most of `packages/` is the inherited DeepSeek Harness runtime, and the plugin framework that organs are built on is Cordis, in `vendor/`. By the project's one count, made from its own history, which is not public, 11.6% of the text lines and 14.3% of the code lines are Aukora's own. UNVERIFIED. [docs/SIZE-AND-ORIGIN.md](docs/SIZE-AND-ORIGIN.md)
+- **Most of this tree is inherited.** Most of `packages/` is the inherited DeepSeek Harness runtime, and the plugin framework that organs are built on is Cordis, in `vendor/`. By the project's one count, made from its own history, which is not public, 11.8% of the text lines and 14.7% of the code lines are Aukora's own. UNVERIFIED. [docs/SIZE-AND-ORIGIN.md](docs/SIZE-AND-ORIGIN.md)
 
 There has been no security audit ([SAFETY.md](SAFETY.md)). Nothing here is INDEPENDENTLY VERIFIED. More gaps, in order of weight: [docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md). Security claims the project does not make: [SECURITY.md](SECURITY.md).
 

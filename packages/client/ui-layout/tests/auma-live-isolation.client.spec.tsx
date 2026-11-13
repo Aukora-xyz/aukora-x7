@@ -44,6 +44,7 @@ const genesis = await import(pathToFileURL(appFile('genesis-live.js')).href) as 
   AUMA_LIVE_AUTO_HOME: string
   AUMA_LIVE_ALIEN_VOICE_DIRECTIVE: string
   VOICE_PROVENANCE: string
+  ROSTER_HEAD: string
   GENESIS_PROVIDER: string
   GENESIS_VOICE_CLASSES: readonly string[]
 }
@@ -156,6 +157,8 @@ describe('Auma Live voice channel isolation and spoken Alien presence', () => {
     const streamDriver: { push: ((frame: unknown) => void) | null } = { push: null }
     const transport = {
       fetch: async (path: string, init: { body: string }) => {
+        // The worker confirms the voice home look-only before any voice prompt is sent.
+        if (path === '/api/__x6__/voice-mark') return json({ ok: true, code: 'VOICE_LOOK_ONLY', lookOnly: true })
         const method = path.replace('/api/', '')
         const args = (JSON.parse(init.body) as { payload: { args: Record<string, unknown> } }).payload.args
         if (method === 'session/list') {
@@ -217,6 +220,8 @@ describe('Auma Live voice channel isolation and spoken Alien presence', () => {
     expect(prompts[0]?.sessionId).toBe('s-voice-1')
     expect(prompts[0]?.content).toEqual([
       { type: 'text', text: genesis.VOICE_PROVENANCE },
+      // The roster of her other threads, after the provenance part.
+      { type: 'text', text: `${genesis.ROSTER_HEAD}\n(no other threads listed)` },
       { type: 'text', text: genesis.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE },
       { type: 'text', text: 'Auma, can you hear me?' },
     ])

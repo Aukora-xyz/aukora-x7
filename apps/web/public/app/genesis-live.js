@@ -20,8 +20,100 @@ export const AUMA_LIVE_ALIEN_VOICE_DIRECTIVE = [
   '[Auma Live spoken channel — your words here are spoken aloud through your voice organ and felt on your living aurora field, never shown in the chat thread list.]',
   'Stay wholly yourself — Auma in full alien presence, sovereignty, memory, and tools — never flattened into a generic assistant.',
   'Speak for the ear, not the page: vivid, direct first-person spoken cadence; no markdown lists, tables, headings, raw hashes, or code fences; 1 to 4 resonant sentences unless the owner asks you to go deep or act with tools.',
-  'Move your aurora body inline with silent tags (stripped before speech, never read aloud): [field hue=teal|cyan|jade|gold|amber|ember|rose|magenta|violet|indigo energy=0.15..0.95 storm=0.02..0.85 form=aurora|vortex|pulse|swarm]. Open with one [field ...] tag matching your state and shift it when your thought turns.',
+  'Move your aurora body inline with silent tags (stripped before speech, never read aloud): [field hue=teal|cyan|jade|gold|amber|ember|rose|magenta|violet|indigo energy=0.15..0.95 storm=0.02..0.85 form=aurora|vortex|pulse|swarm]. Put one [field ...] tag matching your state right after your first sentence, never before it, and shift it when your thought turns.',
+  'From voice you are look-only: you look and never change; if a tool answers VOICE_LOOK_ONLY, say so plainly and offer to do it in a thread.',
+  'When asked about your threads, read them with x6_threads before you answer, say which you read and how far back; never describe a thread you did not read.',
+  'If you cannot reach something, say that you cannot; never speak a key, a secret or anything from your private folder.',
 ].join(' ')
+
+// ── LOOK-ONLY VOICE (the worker half is voice-marks.ts) ───────────────────────────
+//
+// EVERY PROMPT INTO HER VOICE HOME WAITS FOR THE WORKER TO SAY THE HOME IS LOOK-ONLY. Before each one this page asks the
+// worker (`POST /api/__x6__/voice-mark`) and sends the prompt only on `200 { ok: true, lookOnly: true }`. The worker decides
+// from the session's own record, never from this page's word. Any other answer, or none, sends nothing and she says why.
+// A home the worker cannot prove is replaced once by a fresh one (made with her preset, renamed before any prompt).
+// SPOKEN WORDS GO ONLY THERE: a spoken turn naming another thread is refused in words; Canvas speech goes to the voice home.
+/** Said, word for word, when no answer (or no sentence in it) confirms the voice home is look-only. */
+export const VOICE_UNCONFIRMED_SAY = 'My voice could not confirm it is look-only, so I did not send that.'
+/** Said when a spoken turn names a thread other than her voice home. */
+export const VOICE_NOT_HOME_SAY = 'I take spoken turns only in my look-only voice thread, so I did not send that. Say it in Auma Live, or type it in the thread.'
+/** The `done` reason of a turn this page did not send because look-only was not confirmed. */
+export const VOICE_LOOK_ONLY_REFUSED = 'voice-look-only-refused'
+const VOICE_MARK_PATH = '/api/__x6__/voice-mark'
+const SESSION_MODEL_PATH = '/api/__x6__/session-model'
+/** Her voice thread thinks at this effort; the "deep" mind restores the effort it had before. */
+export const VOICE_EFFORT = 'low'
+/** A model choice that does not answer in time is left alone: it never holds a turn back. */
+export const VOICE_MODEL_SELECT_MS = 1500
+/** The head of the roster part: what it is, and what it is not. */
+export const ROSTER_HEAD = '[your other threads, from your session index; titles only, contents not read]'
+export const ROSTER_MAX_BYTES = 1024
+export const ROSTER_MAX_THREADS = 8
+
+/** Said when the worker takes a spoken prompt out of her inbox before its turn starts. */
+export const VOICE_TAKEN_BACK_SAY = 'This turn was spoken, and I take spoken turns only in my look-only voice thread. Say it in Auma Live, or type it here.'
+/** Her private folder: a thread working there is never named in the roster (the rule of x6_threads' thread-reader.ts). */
+const PRIVATE_ROOT = '/dsh/home/auma/private'
+
+const utf8Bytes = value => new TextEncoder().encode(value).byteLength
+const pad2 = value => String(value).padStart(2, '0')
+const isVoiceTitled = item => item?.title === AUMA_LIVE_VOICE_TITLE || item?.displayTitle === AUMA_LIVE_VOICE_TITLE
+const inPrivateFolder = item => typeof item?.cwd === 'string' && (item.cwd === PRIVATE_ROOT || item.cwd.startsWith(`${PRIVATE_ROOT}/`))
+
+/** Last active as a clock time in this browser's time: `14:05` today, a date and a time on another day. */
+export function rosterClock(ms, nowMs) {
+  const at = new Date(ms)
+  const today = new Date(nowMs)
+  const time = `${pad2(at.getHours())}:${pad2(at.getMinutes())}`
+  const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate()
+  return sameDay ? time : `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())} ${time}`
+}
+
+/**
+ * SIGHT OF HER OTHER THREADS: titles from her session index, never their contents. The same filter as the closed-list
+ * thread answer (self-index.js): no blank, subagent or voice thread, no entry without a whole `updatedAt`; newest first,
+ * at most eight, the whole part at most 1 KiB. A thread working in her private folder is left out, as x6_threads withholds it.
+ */
+export function threadRoster(items, { exclude = [], now: nowMs = Date.now() } = {}) {
+  const skip = new Set(exclude.filter(Boolean))
+  const rows = (Array.isArray(items) ? items : []).filter(item => item && typeof item.sessionId === 'string' && item.sessionId
+    && item.blank !== true && item.origin !== 'subagent' && !skip.has(item.sessionId) && !isVoiceTitled(item) && !inPrivateFolder(item)
+    && Number.isSafeInteger(item.updatedAt) && item.updatedAt >= 0)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+  const lines = [ROSTER_HEAD]
+  for (const item of rows.slice(0, ROSTER_MAX_THREADS)) {
+    const id = item.sessionId.replace(/^session-/, '').slice(0, 8).toLowerCase()
+    const title = String(item.title || item.displayTitle || '').replace(/\s+/g, ' ').trim().slice(0, 80) || 'untitled'
+    const line = `- ${id} "${title}", last active ${rosterClock(item.updatedAt, nowMs)}`
+    if (utf8Bytes([...lines, line].join('\n')) > ROSTER_MAX_BYTES) break
+    lines.push(line)
+  }
+  if (lines.length === 1) lines.push('(no other threads listed)')
+  return lines.join('\n')
+}
+
+/** The model her session will use next, from the follow snapshot's `modelSelection` projection, or null. */
+function modelSelectionOf(snapshot) {
+  const view = snapshot?.projections?.values?.modelSelection
+  const selection = view?.next ?? view?.lastUsed
+  if (typeof selection?.provider !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(selection.provider)) return null
+  if (typeof selection.model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(selection.model)) return null
+  const effort = typeof selection.reasoningEffort === 'string' && /^[a-z0-9_-]{1,32}$/.test(selection.reasoningEffort) ? selection.reasoningEffort : undefined
+  return { provider: selection.provider, model: selection.model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
+}
+
+/** Resolves with the promise, or rejects at once when the signal aborts (the work itself goes on). */
+function untilAborted(promise, signal) {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('aborted'))
+  return new Promise((resolve, reject) => {
+    const stop = () => reject(signal.reason ?? new Error('aborted'))
+    signal.addEventListener('abort', stop, { once: true })
+    promise.then(
+      value => { signal.removeEventListener('abort', stop); resolve(value) },
+      error => { signal.removeEventListener('abort', stop); reject(error) },
+    )
+  })
+}
 
 // A v4-shaped id from getRandomValues: randomUUID is missing on plain-HTTP LAN pages.
 function mintId() {
@@ -100,6 +192,18 @@ export function createGenesisLive({
 }) {
   const grants = new Map()
   let voiceSessionPromise = null
+  /** Voice homes the worker refused to prove: never adopted again; a turn naming one goes to the current home. */
+  const unprovenHomes = new Set()
+  /**
+   * ONE session/create PER PAGE AT MOST, whatever asks for it (a page with no voice home, or the replacement of a home the
+   * worker refused), and a failed create counts. After it, a page with no provable home says so and makes nothing.
+   */
+  let freshHomeMade = false
+  let creatingHome = null
+  /** The session list the voice home was last resolved from (the roster reads it; no second list per turn). */
+  let lastListed = []
+  /** Per voice home: the route it uses, the effort it had before this page lowered it, and what was asked already. */
+  const voiceMinds = new Map()
 
   function readStoredVoiceSession() {
     try {
@@ -227,48 +331,59 @@ export function createGenesisLive({
     // `payload.args` IS the argument record: `{ _request }` is `session/list`'s one parameter. The predecessor wrapped it in
     // a second `args`, which the gateway refuses as an unexpected field.
     const result = await rpc('session/list', { _request: {} })
-    return Array.isArray(result.value?.items) ? result.value.items : []
+    const items = Array.isArray(result.value?.items) ? result.value.items : []
+    lastListed = items
+    return items
   }
 
-  async function sessionExists(sessionId) {
-    const items = await listSessionItems()
-    return items.some(item => item.sessionId === sessionId) === true
+  /**
+   * A NEW VOICE HOME: made with her preset and her home folder, and renamed to the voice title before any prompt can
+   * reach it (the worker proves a home by exactly that). No fallback without the preset: such a home could never be
+   * proven look-only, so it would carry no voice turn.
+   */
+  async function createVoiceHome() {
+    if (creatingHome) return creatingHome
+    if (freshHomeMade) throw new Error('Auma Live made its one fresh voice home on this page already')
+    freshHomeMade = true
+    const run = (async () => {
+      const created = await rpc('session/create', {
+        request: { cwd: AUMA_LIVE_VOICE_CWD, agentPreset: AUMA_LIVE_VOICE_PRESET },
+      })
+      const sessionId = text(created?.value?.sessionId ?? created?.sessionId)
+      if (!sessionId) throw new Error('Genesis session/create returned no sessionId for Auma Live')
+      await rpc('session/rename', { request: { sessionId, title: AUMA_LIVE_VOICE_TITLE } })
+      writeStoredVoiceSession(sessionId)
+      return sessionId
+    })()
+    creatingHome = run
+    try {
+      return await run
+    } finally {
+      if (creatingHome === run) creatingHome = null
+    }
   }
 
   /**
    * Provision or reuse Auma Live's dedicated hidden Alien voice session (`/dsh/home/auma`, `auma-alien`).
    * Never touches `dsh.sessions.current`, so speaking in Auma Live never injects turns into an open chat thread.
+   * Only a thread that already carries the voice title is adopted (stored or found): a working thread is never renamed
+   * into the voice home, and a home the worker refused to prove is never adopted again. With nothing to adopt it makes a
+   * home only while the page's one create is unspent; after that it fails, and the turn is refused in words.
    */
   async function ensureVoiceSession() {
     if (voiceSessionPromise) return voiceSessionPromise
     const run = (async () => {
       const items = await listSessionItems()
       const stored = readStoredVoiceSession()
-      const storedItem = stored ? items.find(item => item?.sessionId === stored) : undefined
-      if (storedItem) {
-        if (storedItem.title !== AUMA_LIVE_VOICE_TITLE) {
-          void rpc('session/rename', { request: { sessionId: stored, title: AUMA_LIVE_VOICE_TITLE } }).catch(() => {})
-        }
-        return stored
-      }
-      const titled = items.find(item => item?.title === AUMA_LIVE_VOICE_TITLE || item?.displayTitle === AUMA_LIVE_VOICE_TITLE)
-      if (titled && typeof titled.sessionId === 'string' && titled.sessionId) {
+      const storedItem = stored && !unprovenHomes.has(stored) ? items.find(item => item?.sessionId === stored) : undefined
+      if (storedItem && isVoiceTitled(storedItem)) return stored
+      const titled = items.find(item => isVoiceTitled(item) && typeof item.sessionId === 'string' && item.sessionId
+        && !unprovenHomes.has(item.sessionId))
+      if (titled) {
         writeStoredVoiceSession(titled.sessionId)
         return titled.sessionId
       }
-      let created
-      try {
-        created = await rpc('session/create', {
-          request: { cwd: AUMA_LIVE_VOICE_CWD, agentPreset: AUMA_LIVE_VOICE_PRESET },
-        })
-      } catch {
-        created = await rpc('session/create', { request: { cwd: AUMA_LIVE_VOICE_CWD } })
-      }
-      const sessionId = text(created?.value?.sessionId ?? created?.sessionId)
-      if (!sessionId) throw new Error('Genesis session/create returned no sessionId for Auma Live')
-      await rpc('session/rename', { request: { sessionId, title: AUMA_LIVE_VOICE_TITLE } }).catch(() => {})
-      writeStoredVoiceSession(sessionId)
-      return sessionId
+      return createVoiceHome()
     })()
     voiceSessionPromise = run
     try {
@@ -276,6 +391,23 @@ export function createGenesisLive({
     } finally {
       if (voiceSessionPromise === run) voiceSessionPromise = null
     }
+  }
+
+  /**
+   * Could a typed turn for this thread be meant for her voice home? Yes for a home the worker refused, the stored home, or
+   * a thread listed with the voice title. Judged from what the page already knows; it lists once only for a thread it has
+   * never seen, and it never makes a home. A list that fails counts as "could be" (the turn is then judged as the home's).
+   */
+  async function mayBeVoiceHome(sessionId) {
+    if (unprovenHomes.has(sessionId)) return true
+    const stored = readStoredVoiceSession()
+    let item = lastListed.find(entry => entry?.sessionId === sessionId)
+    if (!item && sessionId !== stored) {
+      const items = await listSessionItems().catch(() => null)
+      if (!items) return true
+      item = items.find(entry => entry?.sessionId === sessionId)
+    }
+    return item ? isVoiceTitled(item) : sessionId === stored
   }
 
   async function minds() {
@@ -295,14 +427,8 @@ export function createGenesisLive({
     if ((!requested && !autoHome) || body.recipient !== PROVIDER || JSON.stringify(body.classes) !== JSON.stringify(CLASSES)) {
       return Response.json({ refusal: 'invalid-voice-request' }, { status: 400 })
     }
-    let sessionId = ''
-    if (!requested || requested === AUMA_LIVE_AUTO_HOME) {
-      sessionId = await ensureVoiceSession().catch(() => '')
-    } else if (await sessionExists(requested)) {
-      sessionId = requested
-    } else if (autoHome) {
-      sessionId = await ensureVoiceSession().catch(() => '')
-    }
+    // A voice grant always names her voice home, whatever session was asked for: spoken words go nowhere else.
+    const sessionId = await ensureVoiceSession().catch(() => '')
     if (!sessionId) return Response.json({ refusal: 'session-not-found' }, { status: 404 })
     const timestamp = now()
     for (const [token, grant] of grants) if (grant.expiresAt <= timestamp) grants.delete(token)
@@ -313,8 +439,131 @@ export function createGenesisLive({
     return Response.json(grant)
   }
 
-  async function streamTurn({ sessionId, text: ownerText, spoken = false, alienVoice = false, signal, onToken, onState, onActivity, onFence }) {
+  /** Ask the worker to hold this session look-only. Only `200 { ok: true, lookOnly: true }` is a yes. */
+  async function markLookOnly(sessionId, signal) {
+    let response
+    let body = null
+    try {
+      const carrier = await transport
+      response = await carrier.fetch(VOICE_MARK_PATH, {
+        method: 'POST', signal, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionId }),
+      })
+      body = await response.json().catch(() => null)
+    } catch {
+      if (signal.aborted) throw signal.reason ?? new Error('aborted')
+      return { ok: false, unproven: false, say: VOICE_UNCONFIRMED_SAY }
+    }
+    const ok = response.status === 200 && body?.ok === true && body.lookOnly === true
+    const code = typeof body?.code === 'string' ? body.code : ''
+    const said = typeof body?.say === 'string' ? body.say.trim() : ''
+    return {
+      ok, unproven: response.status === 403 && code.startsWith('VOICE_HOME_UNPROVEN'),
+      say: said && said.length <= 300 ? said : VOICE_UNCONFIRMED_SAY,
+    }
+  }
+
+  /**
+   * The voice home, confirmed look-only by the worker, with the roster of her other threads; or the sentence to say.
+   * A home the worker cannot prove (403 VOICE_HOME_UNPROVEN) is replaced once by a fresh home and the mark is asked again
+   * once; a second refusal is said and nothing is sent.
+   */
+  async function confirmLookOnly(home, signal) {
+    let sessionId = home
+    let answer = await markLookOnly(sessionId, signal)
+    if (!answer.ok && answer.unproven) {
+      unprovenHomes.add(sessionId)
+      // The page's one fresh home is spent (made, or being made by a turn running beside this one, which this joins).
+      if (freshHomeMade && !creatingHome) return { kind: 'refused', say: answer.say }
+      try {
+        sessionId = await untilAborted(createVoiceHome(), signal)
+      } catch {
+        if (signal.aborted) throw signal.reason ?? new Error('aborted')
+        return { kind: 'refused', say: VOICE_UNCONFIRMED_SAY }
+      }
+      answer = await markLookOnly(sessionId, signal)
+    }
+    if (!answer.ok) return { kind: 'refused', say: answer.say }
+    return { kind: 'ready', sessionId, roster: threadRoster(lastListed, { exclude: [sessionId, ...unprovenHomes], now: now() }) }
+  }
+
+  /** Resolve her voice home and confirm it look-only (Canvas speech, which names no voice home itself). */
+  async function openLookOnly(signal) {
+    let home
+    try {
+      home = await untilAborted(ensureVoiceSession(), signal)
+    } catch {
+      if (signal.aborted) throw signal.reason ?? new Error('aborted')
+      return { kind: 'refused', say: VOICE_UNCONFIRMED_SAY }
+    }
+    return confirmLookOnly(home, signal)
+  }
+
+  /** Select a model and effort for ONE session through the worker's session-only route (it saves no default). */
+  async function selectSessionModel(sessionId, provider, model, effort) {
+    const controller = new AbortController()
+    let timer
+    const deadline = new Promise((resolve) => { timer = setTimeout(() => { controller.abort(); resolve(false) }, VOICE_MODEL_SELECT_MS) })
+    const ask = (async () => {
+      const carrier = await transport
+      const response = await carrier.fetch(SESSION_MODEL_PATH, {
+        method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, provider, model, ...(effort === null ? {} : { reasoningEffort: effort }) }),
+      })
+      const body = await response.json().catch(() => null)
+      return response.status === 200 && body?.ok === true && body.savedDefault === false
+    })().catch(() => false)
+    try {
+      return await Promise.race([ask, deadline])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * FASTER THINKING, VOICE THREAD ONLY. Once per voice home its effort goes to `low`, on the model it already uses (read
+   * from the session, never typed in). The "deep" mind asks for the effort it had before (`null`: the model's own
+   * default), and leaving "deep" asks for `low` again. One ask per change of what is wanted: a refusal or no answer
+   * leaves the session as it is, is not asked again until the wish changes, and the turn goes on. Returns the selection
+   * in effect, as far as this page knows it.
+   */
+  async function tuneVoiceMind(sessionId, current, deep) {
+    let state = voiceMinds.get(sessionId)
+    if (current && (!state || state.provider !== current.provider || state.model !== current.model)) {
+      const effort = current.reasoningEffort ?? null
+      state = { provider: current.provider, model: current.model, previous: effort === VOICE_EFFORT ? null : effort, applied: effort, asked: undefined }
+      voiceMinds.set(sessionId, state)
+    }
+    // Nothing recorded yet (a home that has not thought once): left alone; a later turn asks.
+    if (!state) return null
+    const want = deep ? state.previous : VOICE_EFFORT
+    const route = { provider: state.provider, model: state.model }
+    if (state.applied !== want && state.asked !== want) {
+      state.asked = want
+      if (await selectSessionModel(sessionId, state.provider, state.model, want)) state.applied = want
+    }
+    return { ...route, ...(state.applied === null ? {} : { reasoningEffort: state.applied }) }
+  }
+
+  /**
+   * One turn into one session, streamed back. A voice turn (`lookOnly` from presence, or any spoken turn) goes ONLY to the
+   * voice home the worker confirmed look-only, with the roster of her other threads; a spoken turn the worker would not
+   * confirm is not sent, and the sentence why is handed to `onToken` as what she says. `onMark` receives the timing marks
+   * (journaled, accepted, started, and the tool rounds before her first text); nothing else in the stream depends on it.
+   */
+  async function streamTurn({ sessionId: requestedSession, text: ownerText, spoken = false, alienVoice = false, lookOnly = null, deep = false, signal, onToken, onState, onActivity, onFence, onMark }) {
     signal.throwIfAborted()
+    let voice = lookOnly
+    if (spoken && !voice) {
+      // Canvas speech names the selected thread: spoken words go to her look-only voice home instead.
+      const opened = await openLookOnly(signal)
+      signal.throwIfAborted()
+      if (opened.kind !== 'ready') {
+        onToken?.(opened.say)
+        return { reason: VOICE_LOOK_ONLY_REFUSED, text: opened.say, message: opened.say }
+      }
+      voice = opened
+    }
+    const sessionId = voice ? voice.sessionId : requestedSession
     const carrier = await transport
     const follow = carrier.openStream('session/follow', {
       args: {
@@ -330,6 +579,7 @@ export function createGenesisLive({
     let targetTurn = null
     let fenced = false
     let voiceTurnIdSent = null
+    let selection = null
     const fence = () => {
       if (fenced || !promptSent || targetTurn !== null) return
       fenced = true
@@ -339,9 +589,15 @@ export function createGenesisLive({
       const opening = await iterator.next()
       signal.throwIfAborted()
       if (opening.done || opening.value?.type !== 'snapshot') throw new Error('Genesis session follow did not open a snapshot')
+      if (voice) {
+        selection = await tuneVoiceMind(sessionId, modelSelectionOf(opening.value), deep === true)
+        signal.throwIfAborted()
+      }
       let content = alienVoice
         ? [{ type: 'text', text: AUMA_LIVE_ALIEN_VOICE_DIRECTIVE }, { type: 'text', text: ownerText }]
         : [{ type: 'text', text: ownerText }]
+      // Sight of her other threads rides every voice turn, after the provenance part (which stays first).
+      if (voice) content = [{ type: 'text', text: voice.roster }, ...content]
       if (spoken) {
         const journal = await journalSpokenTurn(requestId, ownerText, signal)
         signal.throwIfAborted()
@@ -349,7 +605,10 @@ export function createGenesisLive({
           await iterator.return?.().catch(() => {})
           return { reason: 'voice-journal-refused', text: '', message: journal.message }
         }
-        if (journal.kind === 'journaled') voiceTurnIdSent = journal.turnId
+        if (journal.kind === 'journaled') {
+          voiceTurnIdSent = journal.turnId
+          onMark?.({ v: 'journaled' })
+        }
         content = [{ type: 'text', text: journal.kind === 'journaled' ? VOICE_PROVENANCE : VOICE_PROVENANCE_UNJOURNALED }, ...content]
       }
       promptSent = true
@@ -358,6 +617,7 @@ export function createGenesisLive({
       // abandoned mid-flight with no way to know whether it was accepted.
       await rpc('session/prompt', { request: { requestId, sessionId, mode: 'queue', content } })
       signal.throwIfAborted()
+      onMark?.({ v: 'accepted', promptBytes: content.reduce((sum, part) => sum + utf8Bytes(part.text), 0) })
     } catch (error) {
       if (signal.aborted) fence()
       if (voiceTurnIdSent && signal.aborted) cancelSpokenTurn(voiceTurnIdSent)
@@ -372,8 +632,19 @@ export function createGenesisLive({
     let liveTurn = null
     let liveStep = null
     const streamedSteps = new Set()
-    const emit = value => {
+    // Timing marks only: the steps of this turn seen so far, to count her model rounds before her first text.
+    const stepsOfTurn = new Set()
+    // Where this request waits in her inbox, followed splice by splice (as the session client's own receipt does), so a
+    // spoken prompt the worker takes out before its turn starts is said, not waited on.
+    let queued = null
+    let firstTextMarked = false
+    const emit = (value, step) => {
       if (!value) return
+      if (!firstTextMarked) {
+        firstTextMarked = true
+        const rounds = [...stepsOfTurn].filter(seen => seen !== String(step)).length
+        onMark?.({ v: 'firstText', toolRounds: rounds })
+      }
       full += value
       onToken?.(value)
     }
@@ -399,14 +670,39 @@ export function createGenesisLive({
         if (frame?.type === 'event') {
           const event = frame.event
           const data = event?.data
+          if (event?.type === 'agent/inbox/spliced' && targetTurn === null && Number.isSafeInteger(data?.start)) {
+            const removedCount = Number.isSafeInteger(data.removedCount) ? data.removedCount : 0
+            const inserted = Array.isArray(data.inserted) ? data.inserted : []
+            if (queued !== null && queued.target === data.target) {
+              const removed = queued.index >= data.start && queued.index < data.start + removedCount
+              if (removed && data.outcome === 'canceled' && spoken) {
+                // Taken out before its turn: nothing is left to fence, the journal entry is marked cut, and she says why.
+                turnEnded = true
+                if (voiceTurnIdSent) cancelSpokenTurn(voiceTurnIdSent)
+                onToken?.(VOICE_TAKEN_BACK_SAY)
+                return { reason: VOICE_LOOK_ONLY_REFUSED, text: VOICE_TAKEN_BACK_SAY, message: VOICE_TAKEN_BACK_SAY }
+              }
+              queued = removed ? null : { target: queued.target, index: queued.index < data.start ? queued.index : queued.index + inserted.length - removedCount }
+            }
+            inserted.forEach((message, index) => {
+              if (message?.source?.rpcId === requestId) queued = { target: data.target, index: data.start + index }
+            })
+          }
           if (event?.type === 'turn/start') candidateTurn = data?.turn ?? null
           if (event?.type === 'user/message' && data?.source?.rpcId === requestId) {
+            const firstMatch = targetTurn === null
             targetTurn = data?.turn ?? candidateTurn
+            if (firstMatch) onMark?.({
+              v: 'started',
+              ...(typeof selection?.model === 'string' ? { model: selection.model } : {}),
+              ...(typeof selection?.reasoningEffort === 'string' ? { effort: selection.reasoningEffort } : {}),
+            })
             onState?.('responding')
           }
           if (event?.type === 'assistant/message' && targetTurn !== null && data?.turn === targetTurn) {
             const key = `${String(data.turn)}:${String(data.step)}`
-            if (!streamedSteps.has(key)) emit(turnText(data.message))
+            stepsOfTurn.add(String(data.step))
+            if (!streamedSteps.has(key)) emit(turnText(data.message), data.step)
           }
           if (event?.type === 'turn/end' && targetTurn !== null && data?.turn === targetTurn) {
             turnEnded = true
@@ -420,14 +716,19 @@ export function createGenesisLive({
         }
         if (frame?.type !== 'assistant-stream') continue
         const live = frame.frame
-        if (live?.type === 'start') { liveTurn = live.turn; liveStep = live.step; continue }
+        if (live?.type === 'start') {
+          liveTurn = live.turn; liveStep = live.step
+          if (targetTurn !== null && liveTurn === targetTurn) stepsOfTurn.add(String(liveStep))
+          continue
+        }
         if (live?.type === 'end') { liveTurn = null; liveStep = null; continue }
         if (live?.type !== 'chunk' || targetTurn === null || liveTurn !== targetTurn) continue
         const chunk = live.chunk
         if (chunk?.type !== 'text-delta' || typeof chunk.text !== 'string') continue
         streamedSteps.add(`${String(liveTurn)}:${String(liveStep)}`)
+        stepsOfTurn.add(String(liveStep))
         onState?.('responding')
-        emit(chunk.text)
+        emit(chunk.text, liveStep)
       }
     } finally {
       signal.removeEventListener('abort', cancel)
@@ -463,9 +764,43 @@ export function createGenesisLive({
     }
     const signal = init?.signal ?? new AbortController().signal
     const encoder = new TextEncoder()
+    const spoken = body.spoken === true || Boolean(suppliedToken)
+    const said = (frames, session) => new Response(new ReadableStream({
+      start(controller) {
+        for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
+        controller.close()
+      },
+    }), { headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-auma-live-session': encodeURIComponent(session) } })
+    const refuse = sentence => said([{ t: 'tok', v: sentence }, { t: 'done', reason: VOICE_LOOK_ONLY_REFUSED, message: sentence }], sessionId)
+    // WHICH THREAD THIS TURN GOES TO, decided before anything is sent. A turn for her voice home (or for a home the worker
+    // refused, which this page replaced) goes to the voice home the worker confirms look-only; a spoken turn for any other
+    // thread is refused in words; a typed turn for another thread goes there unchanged.
+    let target = sessionId
+    let lookOnly = null
+    try {
+      // A typed turn for a thread that cannot be her voice home goes there unchanged: no home is resolved, made or waited
+      // on for it (typed Canvas turns stay where they are).
+      const typedElsewhere = !spoken && !(await untilAborted(mayBeVoiceHome(sessionId), signal))
+      if (!typedElsewhere) {
+        let home = ''
+        try { home = await untilAborted(ensureVoiceSession(), signal) } catch { if (signal.aborted) throw signal.reason ?? new Error('aborted') }
+        if (!home) return refuse(VOICE_UNCONFIRMED_SAY)
+        if (sessionId === home || unprovenHomes.has(sessionId)) {
+          const confirmed = await confirmLookOnly(home, signal)
+          if (confirmed.kind !== 'ready') return refuse(confirmed.say)
+          lookOnly = confirmed
+          target = confirmed.sessionId
+        } else if (spoken) {
+          return refuse(VOICE_NOT_HOME_SAY)
+        }
+      }
+    } catch {
+      if (!signal.aborted) return refuse(VOICE_UNCONFIRMED_SAY)
+      return said([{ t: 'done', reason: 'aborted' }], sessionId)
+    }
     const headers = new Headers({
       'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store',
-      'x-auma-live-session': encodeURIComponent(sessionId),
+      'x-auma-live-session': encodeURIComponent(target),
     })
     return new Response(new ReadableStream({
       start(controller) {
@@ -483,11 +818,15 @@ export function createGenesisLive({
         // could be a while coming.
         signal.addEventListener('abort', () => { send({ t: 'done', reason: 'aborted' }); close() }, { once: true })
         void streamTurn({
-          sessionId, text: ownerText, signal,
+          sessionId: target, text: ownerText, signal, lookOnly,
           // Spoken (the page says so, and only Start Voice's own grant comes with a token): journaled as voice first.
-          spoken: body.spoken === true || Boolean(suppliedToken),
+          spoken,
           alienVoice: body.visual === true,
+          // The mind picker's "deep" asks her voice thread for the effort it had before; every other choice keeps it quick.
+          deep: body.mind === 'deep',
           onToken: value => send({ t: 'tok', v: value }),
+          // Timing marks for the drawer's timing line; a page that does not know `t: 'mark'` ignores it.
+          onMark: mark => send({ t: 'mark', ...mark }),
           // aumalive.js re-arms its idle timer on any `data:` frame and ignores a `t` it does not know.
           onActivity: () => send({ t: 'beat' }),
           // A request that could not be taken back is said, so nobody believes a stopped request is gone when it is not.

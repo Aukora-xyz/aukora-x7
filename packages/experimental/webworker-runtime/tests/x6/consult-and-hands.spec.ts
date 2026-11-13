@@ -72,7 +72,8 @@ describe('x6_consult: one model or a council, through the host doors', () => {
     expect(result.answers?.[0]).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5', ok: true, status: 200, text: 'Hello the owner', code: null })
     expect(calls[0]?.url).toBe(`${ORIGIN}/door/anthropic/v1/messages`)
     expect(calls[0]?.init?.credentials).toBe('same-origin')
-    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ model: 'claude-opus-5-5', max_tokens: 2048, system: 'Be brief.',
+    // The Anthropic default cap moved from 2048 to 16000 and every consult now streams.
+    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ model: 'claude-opus-5-5', max_tokens: 16_000, stream: true, system: 'Be brief.',
       messages: [{ role: 'user', content: 'Review this.' }] })
   })
   it('takes the composer pill names: each picks its door and the exact id the pill runs; a raw id still needs its provider', async () => {
@@ -135,12 +136,16 @@ describe('x6_consult: one model or a council, through the host doors', () => {
       [{ provider: 'anthropic', model: 'm', prompt: '' }, 'CONSULT_PROMPT_INVALID'],
       [{ provider: 'mystery', model: 'm', prompt: 'p' }, 'CONSULT_PROVIDER_UNKNOWN'],
       [{ provider: 'openai', model: 'bad model!', prompt: 'p' }, 'CONSULT_MODEL_INVALID'],
-      [{ provider: 'openai', model: 'm', prompt: 'p', maxTokens: 999_999 }, 'CONSULT_MAX_TOKENS_INVALID'],
-      [{ provider: 'openai', model: 'm', prompt: 'p', timeoutMs: 10 }, 'CONSULT_TIMEOUT_INVALID'],
       [{ targets: Array.from({ length: 7 }, () => ({ provider: 'openai', model: 'm' })), prompt: 'p' }, 'CONSULT_TARGETS_INVALID'],
       [{ provider: 'openai', model: 'm', prompt: 'x'.repeat(CONSULT_LIMITS.promptChars + 1) }, 'CONSULT_PROMPT_INVALID'],
     ] as const
     for (const [input, code] of bad) expect(await consultProviders(input, { origin: ORIGIN, fetchImpl })).toEqual({ ok: false, code })
+    // An out-of-range cap now also says the ceiling in a sentence; the code is unchanged.
+    expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', maxTokens: 999_999 }, { origin: ORIGIN, fetchImpl })).toEqual({
+      ok: false, code: 'CONSULT_MAX_TOKENS_INVALID',
+      reason: 'maxTokens is a whole number from 1 to 64000 per target (the ceiling); leave it out for 16000 on anthropic and 8000 elsewhere.' })
+    expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', timeoutMs: 10 }, { origin: ORIGIN, fetchImpl })).toEqual({
+      ok: false, code: 'CONSULT_TIMEOUT_INVALID', reason: 'timeoutMs is a whole number from 1000 to 600000 per target (default 180000).' })
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p' }, { origin: undefined, fetchImpl })).toEqual({ ok: false, code: 'CONSULT_ORIGIN_UNAVAILABLE' })
     expect(asked).toBe(0)
     const long = await consultProviders({ provider: 'openai', model: 'gpt-x', prompt: 'p' }, { origin: ORIGIN, fetchImpl })

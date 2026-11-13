@@ -5,6 +5,7 @@
  * Replaces an earlier 2,010-line `organ-host.ts` and `floor-guard` with native Cordis
  * plugin lifecycle over `hostCtx` and `WorkerModuleLoader`.
  */
+import { migrateRetentionSuiteAtBoot } from './retention-suite-boot.ts'
 import { createHeadSocketTracker } from './head-socket-telemetry.ts'
 import type { MemoryVfs } from '../storage/memory.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
@@ -29,6 +30,10 @@ import { createCapabilityIndex, type CapabilityIndex } from './capability-index.
 import { hostFactsToolSpec } from './host-facts.ts'
 import { idleFetch } from '../idle-fetch.ts'
 import { inspectBrowserEstate, type EstateCordisView } from './browser-estate.ts'
+import { registerThreadTools } from './thread-reader.ts'
+// Voice hook: look-only voice (the guard every tool call passes, the voice-home mark, the session-only model route).
+import { createVoiceLookOnly, indexedDbVoiceMarkStore, VOICE_PROBE_REFUSAL, VOICE_PROBE_SESSION, type VoiceMarkStore } from './voice-marks.ts'
+import { isSpokenUserMessage, VOICE_SPOKEN_ELSEWHERE_REFUSAL, type VoiceHomeRecord, type VoiceToolOrigin } from './voice-read-only.ts'
 import {
   createTransitionContext,
   isTransitionKind,
@@ -488,6 +493,8 @@ export function classifyActionIrreversibility(action: string | Record<string, un
     || /seed[-_ ]?phrase|recovery[-_ ]?phrase|biometric|secret[-_ ]?export/.test(label)) return 4
   if (name === 'x6-repo' && operation === 'merge-proposal') return 3
   if (name === 'x6-repo' && operation === 'compare-files') return 0
+  // x6_threads (thread-reader.ts) only reads; its action is required, so the name list below never sees its name.
+  if (name === 'x6-threads' && ['list', 'tail', 'search'].includes(operation)) return 0
   if (name === 'x6-repo' && operation === 'draft-discard') return 1
   if (['x6-facts', 'ball-status', 'self-facts', 'ball-put', 'pearl-put', 'compile-organ', 'trial-candidate', 'trial-retention-candidate', 'stage-head-promotion',
     'stage-organ-promotion', 'x6-browser-estate'].includes(operation || name)
@@ -634,9 +641,39 @@ function publicFacts(value: unknown): Record<string, unknown> {
 export const CONSULT_PROVIDERS: Readonly<Record<string, 'anthropic' | 'openai'>> = Object.freeze({
   anthropic: 'anthropic', openrouter: 'openai', deepseek: 'openai', openai: 'openai', xai: 'openai', moonshot: 'openai', 'moonshot-cn': 'openai',
 })
-export const CONSULT_LIMITS = Object.freeze({ targets: 6, promptChars: 64 * 1024, systemChars: 16 * 1024, maxTokens: 16_384,
-  defaultMaxTokens: 2048, timeoutMs: 120_000, defaultTimeoutMs: 60_000, answerChars: 32 * 1024 })
+/**
+ * A consult's bounds. The output cap counts thinking
+ * too, so a thinking model gets room by default; a provider whose own model limit is smaller says so in its refusal and
+ * the consult retries ONCE with the number it names. Answers stream from the provider (through the edge door, which
+ * passes the stream through untouched), so a long answer arrives as it is written instead of hitting an HTTP timeout.
+ * Time: an edge request has no hard wall-clock limit while this page stays connected (Workers platform limits), so a
+ * long answer is bounded here by `timeoutMs`, by the characters of answer and thinking a stream carries, and by the
+ * answer characters she gets back. Reaching any bound CUTS the answer (its text so far, `truncated: true`): the paid
+ * output already spent is never thrown away. The clock too: a stream still running at `timeoutMs` is
+ * cut there (`consult_timeout_cap`); only when no answer text has arrived yet is it `CONSULT_TIMEOUT`, and a caller's
+ * cancel is always `CONSULT_CANCELLED`.
+ */
+export const CONSULT_LIMITS = Object.freeze({ targets: 6, promptChars: 64 * 1024, systemChars: 16 * 1024,
+  /** Output ceiling per target, thinking included. */
+  maxTokens: 64_000,
+  /** Default output cap per target when none is given: Anthropic models think inside it, so they get twice the room. */
+  defaultMaxTokens: 8_000, anthropicDefaultMaxTokens: 16_000,
+  timeoutMs: 600_000, defaultTimeoutMs: 180_000,
+  /** Answer text returned per target, at most (characters): ~2x a 64,000-token answer; past it the answer is cut and says so. */
+  answerChars: 512 * 1024,
+  /**
+   * Characters of decoded answer text AND thinking one provider stream may carry, at most (~8x a 64,000-token answer).
+   * Event framing is not counted: on the OpenAI-shaped wire (OpenRouter) framing is about 250-350 bytes per token, so an
+   * honest 64,000-token answer is ~20 MB of stream while its text is a few hundred thousand characters.
+   */
+  streamChars: 2 * 1024 * 1024,
+  /** One pending line or event of the stream, at most (characters): a stream that never ends a line is cut here. */
+  streamEventChars: 1024 * 1024,
+  /** Backstop on raw stream bytes, framing included (~5x a 64,000-token OpenRouter-framed answer); past it the answer is cut. */
+  streamBytes: 128 * 1024 * 1024 })
 export interface ConsultTarget { readonly provider: string; readonly model: string; readonly role: string | null }
+/** What the provider reported it used, when it said (input and output tokens). */
+export interface ConsultUsage { readonly inputTokens: number | null; readonly outputTokens: number | null }
 export interface ConsultAnswer {
   readonly provider: string
   readonly model: string
@@ -649,6 +686,228 @@ export interface ConsultAnswer {
   readonly code: string | null
   /** The provider's own short reason for a refusal (its error type and message, bounded, key-like strings masked). */
   readonly detail?: string | null
+  /** Why the provider stopped (`end_turn`, `max_tokens`, `stop`, `length`, ...), or `consult_answer_cap` /
+   *  `consult_stream_cap` / `consult_timeout_cap` when cut here (the answer text cap / a stream bound / `timeoutMs`). */
+  readonly stopReason?: string | null
+  /** The output cap this answer was asked with (after a provider's one named lower limit, if it named one). */
+  readonly maxTokens?: number | null
+  readonly usage?: ConsultUsage | null
+  /** When an answer was cut: what to do to get the rest, in one sentence. */
+  readonly next?: string | null
+}
+/** One provider answer read off the wire (a stream or a single JSON body), before it becomes a `ConsultAnswer`. */
+interface ConsultRead {
+  readonly text: string | null
+  readonly stopReason: string | null
+  readonly hitLength: boolean
+  readonly hasReasoning: boolean
+  readonly usage: ConsultUsage | null
+  /** The answer was cut here, by a bound of this page. */
+  readonly cut: boolean
+  /** Which bound cut it (null when not cut): each says its own way forward in `next`. */
+  readonly bound: ConsultBound | null
+}
+/** The bounds that cut an answer here: answer text, text and thinking (`streamChars`), one event, raw bytes, the clock. */
+type ConsultBound = 'answer' | 'chars' | 'event' | 'bytes' | 'time'
+interface ConsultReadFailure { readonly failure: string; readonly detail?: string | null }
+/** What a stream has said so far, as its events arrive. */
+interface ConsultStreamState {
+  text: string
+  sawText: boolean
+  complete: boolean
+  cut: boolean
+  /** Which bound cut it: the answer text cap, a stream bound (payload characters, one event, raw bytes), or the clock. */
+  cap: ConsultBound | null
+  /** Characters of answer text and thinking read so far (counted toward `streamChars`). */
+  payload: number
+  hasReasoning: boolean
+  stopReason: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+  failure: ConsultReadFailure | null
+}
+const consultCount = (value: unknown): number | null => Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : null
+const consultUsage = (value: unknown): ConsultUsage | null => {
+  if (!record(value)) return null
+  const inputTokens = consultCount(value.input_tokens ?? value.prompt_tokens)
+  const outputTokens = consultCount(value.output_tokens ?? value.completion_tokens)
+  return inputTokens === null && outputTokens === null ? null : { inputTokens, outputTokens }
+}
+/**
+ * The largest output limit a provider's refusal names, below the cap asked for (e.g. "max_tokens: 64000 > 32000, which
+ * is the maximum", "the valid range of max_tokens is [1, 8192]", "supports at most 16384 completion tokens"). Null when
+ * the refusal is not about the output limit or names no usable number: then the refusal is reported as it is.
+ */
+export const consultProviderOutputLimit = (parsed: unknown, asked: number): number | null => {
+  const error = record(parsed) && record(parsed.error) ? parsed.error : record(parsed) ? parsed : null
+  const message = error !== null && typeof error.message === 'string' ? error.message.slice(0, 2000) : ''
+  if (!/max_tokens|max_completion_tokens|max_output_tokens|output tokens|completion tokens/i.test(message)) return null
+  const named = (message.replace(/(\d),(?=\d{3}\b)/g, '$1').match(/\d+/g) ?? []).map(Number)
+    .filter(value => Number.isSafeInteger(value) && value >= 1024 && value < asked)
+  return named.length === 0 ? null : Math.max(...named)
+}
+/**
+ * Read one provider answer: a server-sent event stream (Anthropic Messages or OpenAI-style chat chunks) when the reply
+ * is `text/event-stream`, else one JSON body. A stream counts as whole only when the provider closes it properly
+ * (`message_stop`, a `finish_reason`, or `[DONE]`); one that ends before that or errors is a failure, never a partial
+ * answer marked complete. Reaching a bound is not a failure: past `answerChars` of text the answer is cut
+ * (`consult_answer_cap`); past `streamChars` of text and thinking, one event past `streamEventChars`, or the raw
+ * `streamBytes` backstop, it is cut too (`consult_stream_cap`). Either way the text read so far comes back. When the
+ * signal aborts and `timedOut()` says it was the consult's own clock, a stream with answer text read is cut there too
+ * (`consult_timeout_cap`); with no answer text yet, or on a caller's cancel, the abort is thrown as before.
+ */
+async function readConsultAnswer(response: Response, wire: 'anthropic' | 'openai', signal: AbortSignal,
+  timedOut: () => boolean = () => false): Promise<ConsultRead | ConsultReadFailure> {
+  if (!/^text\/event-stream\b/i.test(response.headers.get('content-type') ?? '')) {
+    let parsed: unknown = null
+    try { parsed = await response.json() } catch { parsed = null }
+    signal.throwIfAborted()
+    const text = !record(parsed) ? null : wire === 'anthropic'
+      ? Array.isArray(parsed.content) ? parsed.content.filter(part => record(part) && part.type === 'text' && typeof part.text === 'string')
+        .map(part => (part as { text: string }).text).join('') : null
+      : Array.isArray(parsed.choices) && record(parsed.choices[0]) && record(parsed.choices[0].message)
+        && typeof parsed.choices[0].message.content === 'string' ? parsed.choices[0].message.content : null
+    const firstChoice = record(parsed) && Array.isArray(parsed.choices) && record(parsed.choices[0]) ? parsed.choices[0] : null
+    const firstMsg = firstChoice && record(firstChoice.message) ? firstChoice.message : null
+    const hasReasoning = Boolean(firstMsg && ((typeof firstMsg.reasoning === 'string' && firstMsg.reasoning.trim() !== '')
+      || (typeof firstMsg.reasoning_content === 'string' && firstMsg.reasoning_content.trim() !== '')))
+    const stopReason = record(parsed) && typeof parsed.stop_reason === 'string' ? parsed.stop_reason
+      : firstChoice && typeof firstChoice.finish_reason === 'string' ? firstChoice.finish_reason : null
+    const cut = text !== null && text.length > CONSULT_LIMITS.answerChars
+    return { text: cut ? text.slice(0, CONSULT_LIMITS.answerChars) : text, stopReason,
+      hitLength: stopReason === 'max_tokens' || stopReason === 'length', hasReasoning, usage: record(parsed) ? consultUsage(parsed.usage) : null, cut,
+      bound: cut ? 'answer' : null }
+  }
+  const reader = response.body?.getReader()
+  if (!reader) return { failure: 'CONSULT_STREAM_INTERRUPTED' }
+  let rejectAbort: (reason: unknown) => void = () => {}
+  const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject })
+  void aborted.catch(() => {})
+  const onAbort = (): void => { rejectAbort(signal.reason ?? new DOMException('The consult was aborted.', 'AbortError')) }
+  signal.addEventListener('abort', onAbort, { once: true })
+  const decoder = new TextDecoder()
+  // One mutable record (not loose lets): the event handlers below write it, and the read loop then judges it.
+  const seen: ConsultStreamState = { text: '', sawText: false, complete: false, cut: false, cap: null, payload: 0, hasReasoning: false,
+    stopReason: null, inputTokens: null, outputTokens: null, failure: null }
+  let partial = '', bytes = 0, finished = false, dataChars = 0
+  let data: string[] = []
+  const capAt = (cap: ConsultBound): void => { seen.cut = true; seen.cap = cap }
+  // An abort stops the read. The consult's own clock with answer text already read CUTS it (true: the text comes back);
+  // a caller's cancel, or the clock before any answer text, throws the abort as before.
+  const stopAtAbort = (): boolean => {
+    if (!signal.aborted) return false
+    if (seen.text.trim() === '' || !timedOut()) signal.throwIfAborted()
+    capAt('time')
+    return true
+  }
+  // Only decoded answer text and thinking count toward the stream bound, never the event framing around them.
+  const append = (value: unknown): void => {
+    if (typeof value !== 'string' || seen.cut) return
+    seen.sawText = true
+    const answerRoom = CONSULT_LIMITS.answerChars - seen.text.length, streamRoom = CONSULT_LIMITS.streamChars - seen.payload
+    const kept = value.length <= Math.min(answerRoom, streamRoom) ? value : value.slice(0, Math.min(answerRoom, streamRoom))
+    seen.text += kept
+    seen.payload += kept.length
+    if (kept.length < value.length) capAt(answerRoom <= streamRoom ? 'answer' : 'chars')
+  }
+  const think = (value: unknown): void => {
+    if (typeof value !== 'string' || value === '' || seen.cut) return
+    seen.hasReasoning = true
+    seen.payload += value.length
+    if (seen.payload > CONSULT_LIMITS.streamChars) capAt('chars')
+  }
+  const count = (value: unknown): void => {
+    const usage = consultUsage(value)
+    seen.inputTokens = usage?.inputTokens ?? seen.inputTokens
+    seen.outputTokens = usage?.outputTokens ?? seen.outputTokens
+  }
+  const onEvent = (raw: string): void => {
+    if (raw === '[DONE]') { seen.complete = true; return }
+    let event: unknown
+    try { event = JSON.parse(raw) } catch { seen.failure = { failure: 'CONSULT_STREAM_UNREADABLE' }; return }
+    if (!record(event)) return
+    if (event.type === 'error' || record(event.error)) { seen.failure = { failure: 'CONSULT_PROVIDER_STREAM_ERROR', detail: providerDetail(event) }; return }
+    if (wire === 'anthropic') {
+      if (event.type === 'message_start' && record(event.message)) count(event.message.usage)
+      else if (event.type === 'content_block_start' && record(event.content_block)) {
+        if (event.content_block.type === 'thinking' || event.content_block.type === 'redacted_thinking') {
+          seen.hasReasoning = true
+          think(event.content_block.type === 'thinking' ? event.content_block.thinking : event.content_block.data)
+        }
+        if (event.content_block.type === 'text' && typeof event.content_block.text === 'string' && event.content_block.text !== '') append(event.content_block.text)
+      } else if (event.type === 'content_block_delta' && record(event.delta)) {
+        if (event.delta.type === 'text_delta') append(event.delta.text)
+        else if (event.delta.type === 'thinking_delta') { seen.hasReasoning = true; think(event.delta.thinking) }
+      } else if (event.type === 'message_delta') {
+        if (record(event.delta) && typeof event.delta.stop_reason === 'string') seen.stopReason = event.delta.stop_reason
+        count(event.usage)
+      } else if (event.type === 'message_stop') seen.complete = true
+      return
+    }
+    const choice = Array.isArray(event.choices) && record(event.choices[0]) ? event.choices[0] : null
+    const delta = choice && record(choice.delta) ? choice.delta : null
+    if (delta) {
+      append(delta.content)
+      think(delta.reasoning)
+      think(delta.reasoning_content)
+    }
+    if (choice && typeof choice.finish_reason === 'string') { seen.stopReason = choice.finish_reason; seen.complete = true }
+    count(event.usage)
+  }
+  const onLine = (line: string): void => {
+    const clean = line.endsWith('\r') ? line.slice(0, -1) : line
+    if (clean === '') { if (data.length) onEvent(data.join('\n')); data = []; dataChars = 0; return }
+    if (!clean.startsWith('data:')) return
+    const value = clean.slice(5).replace(/^ /, '')
+    dataChars += value.length
+    // One event past its bound is cut here, before it is parsed: the text already read comes back.
+    if (dataChars > CONSULT_LIMITS.streamEventChars) { capAt('event'); data = []; return }
+    data.push(value)
+  }
+  try {
+    for (;;) {
+      if (stopAtAbort()) break
+      let part: ReadableStreamReadResult<Uint8Array>
+      try { part = await Promise.race([reader.read(), aborted]) } catch {
+        if (stopAtAbort()) break
+        return { failure: 'CONSULT_STREAM_INTERRUPTED' }
+      }
+      if (part.done) {
+        finished = true
+        partial += decoder.decode()
+        for (const line of partial.split('\n')) {
+          onLine(line)
+          if (seen.failure !== null || seen.cut) break
+        }
+        if (seen.failure === null && !seen.cut) onLine('')
+        break
+      }
+      bytes += part.value.byteLength
+      // The raw backstop (framing included) cuts the answer; it never throws away the text already read.
+      if (bytes > CONSULT_LIMITS.streamBytes) { capAt('bytes'); break }
+      partial += decoder.decode(part.value, { stream: true })
+      const lines = partial.split('\n')
+      partial = lines.pop() ?? ''
+      for (const line of lines) {
+        onLine(line)
+        if (seen.failure !== null || seen.cut) break
+      }
+      if (seen.failure === null && !seen.cut && partial.length > CONSULT_LIMITS.streamEventChars) capAt('event')
+      if (seen.failure !== null || seen.cut) break
+    }
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+    if (!finished) void reader.cancel().catch(() => {})
+  }
+  if (seen.cap !== 'time') signal.throwIfAborted()
+  if (seen.failure !== null) return seen.failure
+  if (!seen.cut && !seen.complete) return { failure: 'CONSULT_STREAM_INTERRUPTED' }
+  const stopReason = seen.cap === 'time' ? 'consult_timeout_cap'
+    : seen.cap === 'chars' || seen.cap === 'event' || seen.cap === 'bytes' ? 'consult_stream_cap'
+      : seen.cut && seen.stopReason === null ? 'consult_answer_cap' : seen.stopReason
+  return { text: seen.sawText ? seen.text : null, stopReason, hitLength: stopReason === 'max_tokens' || stopReason === 'length',
+    hasReasoning: seen.hasReasoning, usage: seen.inputTokens === null && seen.outputTokens === null ? null
+      : { inputTokens: seen.inputTokens, outputTokens: seen.outputTokens }, cut: seen.cut, bound: seen.cap }
 }
 /** A provider error, said in its own words but bounded, with anything shaped like a key masked. */
 const providerDetail = (parsed: unknown): string | null => {
@@ -697,7 +956,8 @@ const CONSULT_ROLE = /^[A-Za-z0-9][^\u0000-\u001f\u007f]{0,199}$/
  *   `{ targets: [{ provider, model, role? }], prompt, ... }`.
  * @param deps - Trusted origin, fetch and clock. With a parent, every attempt carries its lifecycle ID and a unique request ID;
  *   without one, this helper makes independent requests. Mounted tools require an acknowledged parent and caller cancellation.
- * @returns `{ ok, answers }` (ok when at least one target answered), or `{ ok: false, code }` for a malformed request.
+ * @returns `{ ok, answers }` (ok when at least one target answered; each answer says `truncated`, `stopReason` and, when
+ *   cut, `next`), or `{ ok: false, code, reason? }` for a malformed request.
  */
 export async function consultProviders(input: unknown, deps: {
   readonly origin: string | undefined
@@ -705,7 +965,7 @@ export async function consultProviders(input: unknown, deps: {
   readonly now?: () => number
   readonly parentTurnId?: string
   readonly signal?: AbortSignal
-}): Promise<{ readonly ok: boolean; readonly code?: string; readonly answers?: readonly ConsultAnswer[] }> {
+}): Promise<{ readonly ok: boolean; readonly code?: string; readonly reason?: string; readonly answers?: readonly ConsultAnswer[] }> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch
   const now = deps.now ?? (() => Date.now())
   if (!deps.origin || deps.origin === 'null') return { ok: false, code: 'CONSULT_ORIGIN_UNAVAILABLE' }
@@ -714,10 +974,18 @@ export async function consultProviders(input: unknown, deps: {
   if (prompt.trim() === '' || prompt.length > CONSULT_LIMITS.promptChars) return { ok: false, code: 'CONSULT_PROMPT_INVALID' }
   const system = input.system === undefined || input.system === null ? null : typeof input.system === 'string' ? input.system : undefined
   if (system === undefined || (system !== null && system.length > CONSULT_LIMITS.systemChars)) return { ok: false, code: 'CONSULT_SYSTEM_INVALID' }
-  const maxTokens = input.maxTokens === undefined ? CONSULT_LIMITS.defaultMaxTokens : input.maxTokens
-  if (!Number.isSafeInteger(maxTokens) || (maxTokens as number) < 1 || (maxTokens as number) > CONSULT_LIMITS.maxTokens) return { ok: false, code: 'CONSULT_MAX_TOKENS_INVALID' }
+  // No cap named: each target gets its provider's default (Anthropic thinks inside the cap, so it gets more).
+  const askedMaxTokens = input.maxTokens === undefined ? null : input.maxTokens
+  const capInRange = Number.isSafeInteger(askedMaxTokens)
+    && (askedMaxTokens as number) >= 1 && (askedMaxTokens as number) <= CONSULT_LIMITS.maxTokens
+  if (askedMaxTokens !== null && !capInRange) {
+    return { ok: false, code: 'CONSULT_MAX_TOKENS_INVALID', reason: `maxTokens is a whole number from 1 to ${String(CONSULT_LIMITS.maxTokens)} `
+      + `per target (the ceiling); leave it out for ${String(CONSULT_LIMITS.anthropicDefaultMaxTokens)} on anthropic and ${String(CONSULT_LIMITS.defaultMaxTokens)} elsewhere.` }
+  }
   const timeoutMs = input.timeoutMs === undefined ? CONSULT_LIMITS.defaultTimeoutMs : input.timeoutMs
-  if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1000 || (timeoutMs as number) > CONSULT_LIMITS.timeoutMs) return { ok: false, code: 'CONSULT_TIMEOUT_INVALID' }
+  if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1000 || (timeoutMs as number) > CONSULT_LIMITS.timeoutMs) {
+    return { ok: false, code: 'CONSULT_TIMEOUT_INVALID', reason: `timeoutMs is a whole number from 1000 to ${String(CONSULT_LIMITS.timeoutMs)} per target (default ${String(CONSULT_LIMITS.defaultTimeoutMs)}).` }
+  }
   const single = [{ provider: input.provider, model: input.model, role: input.role }]
   const raw = Array.isArray(input.targets) ? input.targets : input.targets === undefined ? single : null
   if (raw === null || raw.length === 0 || raw.length > CONSULT_LIMITS.targets) return { ok: false, code: 'CONSULT_TARGETS_INVALID' }
@@ -736,36 +1004,84 @@ export async function consultProviders(input: unknown, deps: {
   }
   const ask = async (target: ConsultTarget): Promise<ConsultAnswer> => {
     const started = now()
-    const timeoutSignal = AbortSignal.timeout(timeoutMs as number)
+    const limitMs = timeoutMs as number
+    const timeoutSignal = AbortSignal.timeout(limitMs)
     const signal = deps.signal ? AbortSignal.any([deps.signal, timeoutSignal]) : timeoutSignal
-    // The parent identifies the lifetime; every council member and fallback has its own journal identity.
+    // The clock ran out and the caller did not cancel: a stream with answer text is then cut, not lost.
+    const timedOut = (): boolean => timeoutSignal.aborted && deps.signal?.aborted !== true
+    // The parent identifies the lifetime; every council member, retry and fallback has its own journal identity.
     const headers = () => ({ 'content-type': 'application/json',
       ...(deps.parentTurnId ? { 'x-x6-turn-id': deps.parentTurnId, 'x-x6-request-id': randomUUID() }
         : { 'x-x6-turn-id': randomUUID() }) })
-    const wire = CONSULT_PROVIDERS[target.provider]
+    const wire = CONSULT_PROVIDERS[target.provider] ?? 'openai'
+    let cap = askedMaxTokens === null ? wire === 'anthropic' ? CONSULT_LIMITS.anthropicDefaultMaxTokens : CONSULT_LIMITS.defaultMaxTokens : askedMaxTokens as number
     const persona = target.role === null ? system : `${system ?? ''}${system === null ? '' : '\n\n'}Your role in this council: ${target.role}.`
     const user = { role: 'user', content: prompt }
+    const chatMessages = [...(persona === null ? [] : [{ role: 'system', content: persona }]), user]
     // OpenAI's own API takes `max_completion_tokens` (its reasoning models refuse `max_tokens`); the other OpenAI-style doors
-    // (OpenRouter, DeepSeek, xAI, Moonshot) take `max_tokens`.
-    const cap = target.provider === 'openai' ? { max_completion_tokens: maxTokens } : { max_tokens: maxTokens }
-    const body = wire === 'anthropic'
-      ? { model: target.model, max_tokens: maxTokens, ...(persona === null ? {} : { system: persona }), messages: [user] }
-      : { model: target.model, ...cap, stream: false,
-        messages: [...(persona === null ? [] : [{ role: 'system', content: persona }]), user] }
+    // (OpenRouter, DeepSeek, xAI, Moonshot) take `max_tokens`. Every wire streams: a long answer arrives as it is written.
+    const bodyFor = (limit: number) => wire === 'anthropic'
+      ? { model: target.model, max_tokens: limit, stream: true, ...(persona === null ? {} : { system: persona }), messages: [user] }
+      : { model: target.model, ...(target.provider === 'openai' ? { max_completion_tokens: limit } : { max_tokens: limit }), stream: true, messages: chatMessages }
     const path = wire === 'anthropic' ? '/v1/messages' : '/v1/chat/completions'
     const answer = (fields: Partial<ConsultAnswer>): ConsultAnswer => ({ provider: target.provider, model: target.model, role: target.role,
       ok: false, status: null, latencyMs: Math.max(0, now() - started), text: null, truncated: false, code: null, ...fields })
-    try {
+    const post = async (provider: string, route: string, body: unknown): Promise<Response> => {
       signal.throwIfAborted()
-      const response = await fetchImpl(new URL(`/door/${target.provider}${path}`, deps.origin).href, {
-        method: 'POST', headers: headers(), body: JSON.stringify(body), credentials: 'same-origin',
-        signal,
+      return await fetchImpl(new URL(`/door/${provider}${route}`, deps.origin).href, {
+        method: 'POST', headers: headers(), body: JSON.stringify(body), credentials: 'same-origin', signal,
       })
-      let parsed: unknown = null
-      try { parsed = await response.json() } catch { parsed = null }
-      signal.throwIfAborted()
-      const code = record(parsed) && typeof parsed.code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(parsed.code) ? parsed.code : null
+    }
+    /** One read answer to what she gets back: the text so far, whether it was cut, why it stopped, and what to do next. */
+    const settle = (status: number, read: ConsultRead, limit: number): ConsultAnswer => {
+      const told = { status, stopReason: read.stopReason, maxTokens: limit, usage: read.usage }
+      const next = read.hitLength
+        ? limit < CONSULT_LIMITS.maxTokens
+          ? `The provider stopped at maxTokens ${String(limit)} (thinking included); ask again with a larger maxTokens, up to ${String(CONSULT_LIMITS.maxTokens)}.`
+          : `The provider stopped at the ${String(CONSULT_LIMITS.maxTokens)} ceiling; ask for the rest in a follow-up consult.`
+        : read.bound === 'time'
+          ? `The answer was still streaming when timeoutMs ${String(limitMs)} ran out and was cut here; ask for the rest in a follow-up consult`
+            + (limitMs < CONSULT_LIMITS.timeoutMs ? `, or ask again with a larger timeoutMs (up to ${String(CONSULT_LIMITS.timeoutMs)}).` : '.')
+          : read.bound === 'chars'
+            ? `The stream passed this page's bound (${String(CONSULT_LIMITS.streamChars)} characters of answer and thinking) and was cut here; ask for the rest in a follow-up consult, or in parts.`
+            // One oversized event or the raw backstop is not a long answer: never tell her to ask for a rest that may not exist.
+            : read.bound === 'event'
+              ? `The provider sent one event larger than this page reads (${String(CONSULT_LIMITS.streamEventChars)} characters) and the stream was cut before it; the text so far is kept. Ask again; ask for the rest only if the text ends mid-thought.`
+              : read.bound === 'bytes'
+                ? `The raw stream passed this page's backstop (${String(CONSULT_LIMITS.streamBytes)} bytes, event framing included) and was cut here; almost all of it was framing, not answer. Ask again; ask for the rest only if the text ends mid-thought.`
+                : read.cut ? `The answer passed the ${String(CONSULT_LIMITS.answerChars)}-character cap here; ask for it in parts.` : null
+      // A stream cut before any answer text (a bound reached while it was still thinking) says so, never "unreadable".
+      if ((read.text === null || read.text.trim() === '') && read.cut && read.stopReason === 'consult_stream_cap') {
+        return answer({ ...told, code: 'CONSULT_STREAM_CAP', next })
+      }
+      if (read.text === null || read.text.trim() === '') {
+        const exhausted = read.hasReasoning || read.hitLength
+        return answer({ ...told, code: exhausted ? 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' : read.text === null ? 'CONSULT_ANSWER_UNREADABLE' : 'CONSULT_ANSWER_EMPTY',
+          ...(exhausted ? { next: next ?? `The thinking used the whole cap; ask again with a larger maxTokens, up to ${String(CONSULT_LIMITS.maxTokens)}.` } : {}) })
+      }
+      // The provider's own stop at the length cap is a cut-off answer too, not only this page's size cap.
+      const truncated = read.hitLength || read.cut
+      return answer({ ...told, ok: true, text: read.text, truncated, next })
+    }
+    try {
+      let response = await post(target.provider, path, bodyFor(cap))
+      let refusal: unknown = null
       if (!response.ok) {
+        try { refusal = await response.json() } catch { refusal = null }
+        signal.throwIfAborted()
+        // A provider whose model allows less than the cap says how much: ask once more with exactly that, never again.
+        const lower = response.status === 400 ? consultProviderOutputLimit(refusal, cap) : null
+        if (lower !== null) {
+          cap = lower
+          response = await post(target.provider, path, bodyFor(cap))
+          if (!response.ok) {
+            try { refusal = await response.json() } catch { refusal = null }
+            signal.throwIfAborted()
+          }
+        }
+      }
+      if (!response.ok) {
+        const code = record(refusal) && typeof refusal.code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(refusal.code) ? refusal.code : null
         if (target.provider === 'anthropic' && (response.status === 401 || response.status === 403 || response.status === 503)) {
           const orModel = target.model.includes('opus')
             ? 'anthropic/claude-opus-4.1'
@@ -776,57 +1092,23 @@ export async function consultProviders(input: unknown, deps: {
           ]
           for (const [fbProvider, fbModel] of fallbackCandidates) {
             try {
-              const fbBody = {
-                model: fbModel,
-                max_tokens: maxTokens,
-                stream: false,
-                messages: [...(persona === null ? [] : [{ role: 'system', content: persona }]), user],
-              }
-              signal.throwIfAborted()
-              const fbRes = await fetchImpl(new URL(`/door/${fbProvider}/v1/chat/completions`, deps.origin).href, {
-                method: 'POST',
-                headers: headers(),
-                body: JSON.stringify(fbBody),
-                credentials: 'same-origin',
-                signal,
-              })
+              const fbRes = await post(fbProvider, '/v1/chat/completions', { model: fbModel, max_tokens: cap, stream: true, messages: chatMessages })
               if (fbRes.ok) {
-                const fbJson: unknown = await fbRes.json().catch(() => null)
-                signal.throwIfAborted()
-                const fbText = record(fbJson) && Array.isArray(fbJson.choices) && record(fbJson.choices[0])
-                  && record(fbJson.choices[0].message) && typeof fbJson.choices[0].message.content === 'string'
-                  ? fbJson.choices[0].message.content
-                  : null
-                if (fbText !== null && fbText.trim() !== '') {
-                  const kept = fbText.length > CONSULT_LIMITS.answerChars ? fbText.slice(0, CONSULT_LIMITS.answerChars) : fbText
-                  return answer({ ok: true, status: fbRes.status, text: kept, truncated: fbText.length > CONSULT_LIMITS.answerChars })
-                }
-              }
+                const read = await readConsultAnswer(fbRes, 'openai', signal, timedOut)
+                if ('failure' in read || read.bound !== 'time') signal.throwIfAborted()
+                if (!('failure' in read) && read.text !== null && read.text.trim() !== '') return settle(fbRes.status, read, cap)
+              } else void fbRes.body?.cancel().catch(() => {})
             } catch (error) {
               if (signal.aborted) throw error
               // An unavailable fallback may try the next configured provider.
             }
           }
         }
-        return answer({ status: response.status, code: code ?? `HTTP_${String(response.status)}`, detail: providerDetail(parsed) })
+        return answer({ status: response.status, maxTokens: cap, code: code ?? `HTTP_${String(response.status)}`, detail: providerDetail(refusal) })
       }
-      const text = !record(parsed) ? null : wire === 'anthropic'
-        ? Array.isArray(parsed.content) ? parsed.content.filter(part => record(part) && part.type === 'text' && typeof part.text === 'string')
-          .map(part => (part as { text: string }).text).join('') : null
-        : Array.isArray(parsed.choices) && record(parsed.choices[0]) && record(parsed.choices[0].message)
-          && typeof parsed.choices[0].message.content === 'string' ? parsed.choices[0].message.content : null
-      const firstChoice = record(parsed) && Array.isArray(parsed.choices) && record(parsed.choices[0]) ? parsed.choices[0] : null
-      const firstMsg = firstChoice && record(firstChoice.message) ? firstChoice.message : null
-      const hasReasoning = Boolean(firstMsg && ((typeof firstMsg.reasoning === 'string' && firstMsg.reasoning.trim() !== '')
-        || (typeof firstMsg.reasoning_content === 'string' && firstMsg.reasoning_content.trim() !== '')))
-      const hitLength = Boolean((record(parsed) && parsed.stop_reason === 'max_tokens') || (firstChoice && firstChoice.finish_reason === 'length'))
-      if (text === null) return answer({ status: response.status, code: (hasReasoning || hitLength) ? 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' : 'CONSULT_ANSWER_UNREADABLE' })
-      if (text.trim() === '') return answer({ status: response.status, code: (hasReasoning || hitLength) ? 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' : 'CONSULT_ANSWER_EMPTY' })
-      // The provider's own stop at the length cap is a cut-off answer too, not only this page's size cap.
-      const stopped = hitLength
-      const truncated = stopped || text.length > CONSULT_LIMITS.answerChars
-      const kept = text.length > CONSULT_LIMITS.answerChars ? text.slice(0, CONSULT_LIMITS.answerChars) : text
-      return answer({ ok: true, status: response.status, text: kept, truncated })
+      const read = await readConsultAnswer(response, wire, signal, timedOut)
+      if ('failure' in read) return answer({ status: response.status, maxTokens: cap, code: read.failure, ...(read.detail ? { detail: read.detail } : {}) })
+      return settle(response.status, read, cap)
     } catch (error) {
       const name = error instanceof Error ? error.name : ''
       return answer({ code: deps.signal?.aborted ? 'CONSULT_CANCELLED'
@@ -838,7 +1120,7 @@ export async function consultProviders(input: unknown, deps: {
     const answer = result.status === 'fulfilled' ? result.value
       : { ...targets[index] as ConsultTarget, ok: false, status: null, latencyMs: 0, text: null, truncated: false, code: 'CONSULT_FAILED' }
     // A cancelled council must not release an earlier member's answer while later members settle.
-    return deps.signal?.aborted ? { ...answer, ok: false, text: null, truncated: false, code: 'CONSULT_CANCELLED' } : answer
+    return deps.signal?.aborted ? { ...answer, ok: false, text: null, truncated: false, code: 'CONSULT_CANCELLED', next: null } : answer
   })
   return { ok: answers.some(item => item.ok), answers }
 }
@@ -2067,6 +2349,8 @@ export async function mountX6BallRuntime(
   hostCtx: CordisContextLike,
   vfs: MemoryVfs,
   loader: WorkerModuleLoader,
+  // Voice hook: where look-only marks persist (default: the worker's own IndexedDB, outside the VFS; null: unavailable).
+  voiceOptions: { voiceMarks?: VoiceMarkStore | null } = {},
 ): Promise<X6BallRuntime> {
   // Lane E6 (G1 live): every write this runtime makes through its VFS is recorded and classified against RUNTIME_WRITE_SET.
   vfs = liveWriteSet.wrap(vfs, 'ball-loader')
@@ -2144,6 +2428,86 @@ export async function mountX6BallRuntime(
     toolsAdded: string[]
   }>()
 
+  // Voice hook: look-only voice. One deny-only guard on the GLOBAL tool registry judges every tool call of every agent
+  // (packages/core/tools/src/index.ts:384-401, pipeline.ts:195-214); the same judge is a tripwire in the execute wrapper.
+  // A session is judged by voice-read-only.ts when it is marked look-only, and every tool of a SPOKEN turn in an unmarked
+  // session is refused. Marks persist outside the VFS (voice-marks.ts) and are loaded before this runtime serves the page.
+  const voiceBuiltinNames = new Set<string>()
+  const voiceLookOnly = createVoiceLookOnly({
+    store: voiceOptions.voiceMarks === undefined ? indexedDbVoiceMarkStore() : voiceOptions.voiceMarks,
+  })
+  // The session's own header rides along: it decides "could be the voice home" while the marks are not loaded. No cwd:
+  // a relative path is refused from voice, since the tools resolve it against the LIVE working folder, not the header.
+  const voiceSessionOf = (exec: unknown): { id: string; header: unknown } | null => {
+    const agent = record(exec) ? exec.agent : undefined
+    if (!record(agent)) return null
+    const session = record(agent.session) ? agent.session : undefined
+    const id = typeof session?.id === 'string' ? session.id : typeof agent.id === 'string' ? agent.id : null
+    return id === null ? null : { id, header: session?.header }
+  }
+  const voiceToolOrigin = (name: string): VoiceToolOrigin => {
+    const folded = name.replace(/-/g, '_')
+    for (const [id, effect] of effectLedger) {
+      if (!effect.toolsAdded.some(added => added.replace(/-/g, '_') === folded)) continue
+      // The bytes of the RUNNING fiber: during an adoption the new organ is mounted before currentBall is reassigned.
+      const specifier = effect.specifier
+      return { kind: 'organ', organId: id,
+        organSha: typeof specifier === 'string' && /^ball:[a-f0-9]{64}$/.test(specifier) ? specifier.slice(5) : null }
+    }
+    return voiceBuiltinNames.has(folded) ? { kind: 'builtin' } : { kind: 'preset' }
+  }
+  /** The judge for one call: undefined, or the refusal. Any fault while judging refuses (fail closed). */
+  const voiceJudge = (name: unknown, args: unknown, exec: unknown): string | undefined => {
+    const session = voiceSessionOf(exec)
+    if (session === null) return undefined
+    try {
+      return voiceLookOnly.judge(session.id, () => {
+        const tool = typeof name === 'string' ? name : ''
+        return { tool, args, origin: voiceToolOrigin(tool),
+          githubClass: tool.replace(/-/g, '_') === 'x6_github' && record(args) ? githubApiClass(args) : null }
+      }, session.header)
+    } catch {
+      return 'VOICE_LOOK_ONLY: I could not check that call, so I did not run it.'
+    }
+  }
+  {
+    const tools = hostCtx.tools as {
+      guard?: (guard: (exec: { name: string; arguments: unknown; agent?: unknown }) => string | undefined) => () => void
+      checkGuards?: (exec: { name: string; arguments: unknown; agent?: unknown }) => string | undefined
+    } | undefined
+    try {
+      tools?.guard?.(exec => voiceJudge(exec.name, exec.arguments, exec))
+      // Prove the guard sits in the GLOBAL layer (this context carries no agent scope): a call by an agent this context
+      // has never seen must reach it. If not, nothing can be marked look-only here and voice fails closed.
+      const probe = { id: VOICE_PROBE_SESSION, session: { id: VOICE_PROBE_SESSION } }
+      if (tools?.checkGuards?.({ name: 'x6_voice_probe', arguments: {}, agent: probe }) !== VOICE_PROBE_REFUSAL) {
+        voiceLookOnly.disable('guard-not-global')
+      }
+    } catch {
+      voiceLookOnly.disable('guard-not-global')
+    }
+    hostCtx.on?.('session/event', (session: unknown, event: unknown) => {
+      if (record(session) && typeof session.id === 'string' && record(event)) voiceLookOnly.noteSessionEvent(session.id, event)
+    })
+    // R5 at intake: a spoken prompt for a session that is not look-only is taken out of its inbox as it enters
+    // (agent-loop/src/inbox.ts:228 emits this inside the splice; the removal is a durable `canceled` splice), so it never
+    // becomes a message of that thread and no later typed or woken turn sees it. The emptied wake spends no model call
+    // (agent-loop/src/agent.ts:354-356). The tool refusal above stays as the second layer.
+    hostCtx.on?.('agent/inbox/inserted', (payload: unknown) => {
+      if (!record(payload) || !isSpokenUserMessage(payload.message)) return
+      const agent = payload.agent, message = payload.message as { id?: unknown }
+      const session = voiceSessionOf({ agent })
+      if (session !== null && voiceLookOnly.admitsSpoken(session.id, session.header)) return
+      try {
+        const inbox = record(agent) && record(agent.inbox) ? agent.inbox as { remove?: (id: unknown) => boolean } : undefined
+        inbox?.remove?.(message.id)
+      } catch (error) {
+        console.warn('x6-ball: a spoken prompt outside the voice home could not be taken back; its tools stay refused', error)
+      }
+      console.warn(`x6-ball: ${VOICE_SPOKEN_ELSEWHERE_REFUSAL} (session ${session?.id ?? 'unknown'})`)
+    })
+  }
+
   // Enhance ToolsService.prototype.register so agent-authored plugins can use either
   // `defineTool(...)` OR shorthand `ctx.tools.register('my_tool', { description, inputSchema, execute })`
   // AND record Motor Memory telemetry (calls, errors, latency) on every tool invocation!
@@ -2172,6 +2536,9 @@ export async function mountX6BallRuntime(
           const origExec = defRec.execute
           if (typeof origExec === 'function') {
             defRec.execute = async function (args: unknown, exec: unknown) {
+              // Voice hook: the look-only tripwire, for any call that carries an agent (the guard already ran for model calls).
+              const voiceRefusal = voiceJudge(toolName, args, exec)
+              if (voiceRefusal !== undefined) throw new Error(voiceRefusal)
               enforceToolInvocation(toolName, args, currentBall.entries)
               const t0 = performance.now()
               const prev = motorMemory.get(toolName) ?? { calls: 0, errors: 0, totalMs: 0, avgMs: 0, lastCalledAt: 0 }
@@ -2248,6 +2615,22 @@ export async function mountX6BallRuntime(
     && /^[a-f0-9]{64}$/.test(stamp.retentionBaselineDigest) && retentionSuiteDigest(baselineSnapshot) === stamp.retentionBaselineDigest
     && retentionSuiteExtendsBaseline(baselineSnapshot, baselineSnapshot) ? baselineSnapshot : null
   const baselineDigest = admittedBaseline ? retentionSuiteDigest(admittedBaseline) : null
+  // Suite-boot hook: additive only; the embedded pin is not a mutable mirror download.
+  const retentionSuiteBoot = await migrateRetentionSuiteAtBoot({
+    read: (path) => {
+      try { return vfs.readFileSync(path, 'utf8') as string }
+      catch (error) { if (record(error) && error.code === 'ENOENT') return null; throw error }
+    },
+    write: (retentionBootPath, text) => {
+      vfs.mkdirSync('/dsh/home/auma/seed/pearl', { recursive: true })
+      vfs.writeFileSync(retentionBootPath, text)
+    },
+    writable: () => persistence.durable && !persistence.readOnly && !persistence.conflict
+      && !persistence.mirror.conflict && !persistence.mirror.reconciliationRequired && !persistence.localSave.error,
+    saved: () => persistence.localSave.pendingPaths === 0,
+    flush: () => persistence.flush(),
+  }, admittedBaseline)
+
   const suitePinAvailable = admittedBaseline !== null
   const buildSha = sourceRevision ? sourceRevision.slice(0, 8) + (stamp?.sourceDirty ? '-dirty' : '') : 'UNVERIFIED'
   const buildIdentity = Object.freeze({
@@ -3146,7 +3529,14 @@ export async function mountX6BallRuntime(
   const stageHeadPromotion = (input: unknown) => writeStagedHeadPromotion(currentBall, input, currentBall.ballId)
   /** Save one refused outward request for the owner's passkey, as the exact JSON the host was (or would be) sent. */
   const stageOutward = (tool: 'x6_github' | 'x6_repo', pathname: '/_host/github' | '/_host/repo', args: unknown,
-    answer: Record<string, unknown>): Record<string, unknown> => {
+    answer: Record<string, unknown>, exec?: unknown): Record<string, unknown> => {
+    // Voice hook: a look-only session, or any spoken turn, never stages a card for the owner.
+    const voiceSession = voiceSessionOf(exec)
+    if (voiceSession !== null
+      && (voiceLookOnly.looksOnly(voiceSession.id, voiceSession.header) || voiceLookOnly.spokenTurn(voiceSession.id))) {
+      return { ...answer, stagedForOwner: false, sent: false, code: 'VOICE_LOOK_ONLY',
+        say: 'I can look, I cannot change things from voice yet.' }
+    }
     const body: unknown = JSON.parse(JSON.stringify(args))
     const text = JSON.stringify({ schema: STAGED_OUTWARD_SCHEMA, stagedAt: Date.now(), tool, method: 'POST', pathname, body }, null, 2) + '\n'
     if (new TextEncoder().encode(text).byteLength > STAGED_OUTWARD_MAX_BYTES) return { ...answer, stagedForOwner: false, stageError: 'STAGED_OUTWARD_TOO_LARGE' }
@@ -4392,9 +4782,9 @@ export async function mountX6BallRuntime(
       entries: nextEntries,
       modules: nextModules,
     }
-    const nextBall: BallManifest = { ...nextBallBody, ballId: governance
-      ? computeCanonicalBallId(nextBallBody)
-      : computeBallId(currentBall.ballId, nextEpoch, nextEntries, nextModules) }
+    const nextBall: BallManifest = { ...nextBallBody,
+      // Publish hook: the edge admits an ordinary organ update only under the canonical id (server/ball-transition.mjs)
+      ballId: computeCanonicalBallId(nextBallBody) }
     if (governance && !t1QualifiedGovernance) {
       stageHeadPromotion({ ball: nextBall, codeBySha: collectCodeBySha(nextBall),
         expectedParentBallId: currentBall.ballId, expectedEpoch: currentBall.epoch })
@@ -4578,6 +4968,7 @@ export async function mountX6BallRuntime(
         localSave: { ...persistence.localSave },
         mirror: { ...persistence.mirror },
       },
+      retentionSuiteBoot,
       mountedOrgans: organsService.list(),
       effectLedger: Object.fromEntries(effectLedger),
       motorMemory: Object.fromEntries(motorMemory),
@@ -4682,6 +5073,7 @@ export async function mountX6BallRuntime(
         const register = () => hostCtx.tools?.register(defineTool(spec)) ?? (() => {})
         if (hostCtx.effect) hostCtx.effect(register)
         else register()
+        voiceBuiltinNames.add(spec.name.replace(/-/g, '_')) // Voice hook: only a name this runtime itself registered
       } catch (error) {
         console.error(`x6-ball: built-in tool ${spec.name} registration failed`, error)
       }
@@ -6041,7 +6433,16 @@ export async function mountX6BallRuntime(
     let consultStarts = new WeakMap<object, Promise<ConsultTurn | null>>()
     // Lane E6: leases this runtime acquired itself (never a caller-supplied x6_transcript turn). `refs` counts consults
     // and swarms running under the lease; the last one to finish normally settles it with one turn_complete.
-    type ConsultLease = { agent: object; exec: unknown; refs: number; settled: boolean; release: () => void; signal: AbortSignal }
+    type ConsultLease = {
+      agent: object
+      exec: unknown
+      refs: number
+      settled: boolean
+      release: () => void
+      signal: AbortSignal
+      /** Stops this lease's heartbeat stream (null while none runs). */
+      stopHeartbeat: (() => void) | null
+    }
     let consultLeases = new WeakMap<ConsultTurn, ConsultLease>()
     const consultLifetime = new AbortController()
     hostCtx.effect?.(() => () => {
@@ -6083,7 +6484,7 @@ export async function mountX6BallRuntime(
               }
               if (signal.aborted) { release(); return null }
               signal.addEventListener('abort', release, { once: true })
-              consultLeases.set(bound, { agent, exec, refs: 0, settled: false, release, signal })
+              consultLeases.set(bound, { agent, exec, refs: 0, settled: false, release, signal, stopHeartbeat: null })
               return bound
             } catch (_error) {
               return null
@@ -6100,11 +6501,42 @@ export async function mountX6BallRuntime(
       if (lease) {
         if (lease.settled) return null
         lease.refs += 1
+        startConsultHeartbeat(turn, lease)
       }
       const bound = turn
       let done = false
       return { parentTurnId: turn.turnId, signal: AbortSignal.any([signal, turn.lifetime.signal, consultLifetime.signal]),
         settle: () => { if (done) return; done = true; if (lease) settleConsultLease(bound, lease) } }
+    }
+    /**
+     * HEAD abandons a running turn whose heartbeat is older than 30 s as soon as any transcript
+     * transaction runs, and cancels its provider dispatches (head-do.mjs, the rule this satisfies and never changes). A
+     * consult may run for minutes, so while a lease has consults or swarms running, its parent turn gets one
+     * `turn_heartbeat` every 10 s, through the same transcript path the turn itself uses. One stream per lease however
+     * many consults share it; it stops when the lease settles, is released, or the runtime goes. A failed heartbeat is
+     * tried again on the next tick and never reaches the consult.
+     */
+    const CONSULT_HEARTBEAT_MS = 10_000
+    const startConsultHeartbeat = (turn: ConsultTurn, lease: ConsultLease): void => {
+      if (lease.stopHeartbeat !== null || turn.lifetime.signal.aborted || consultLifetime.signal.aborted) return
+      let beating = false
+      const timer = setInterval(() => {
+        if (beating || turn.lifetime.signal.aborted || consultLifetime.signal.aborted) return
+        beating = true
+        void (async () => {
+          try { await executeTranscriptOp({ subAction: 'turn_heartbeat', turn_id: turn.turnId }) } catch { /* the next tick tries again */ }
+          finally { beating = false }
+        })()
+      }, CONSULT_HEARTBEAT_MS)
+      const stop = (): void => {
+        clearInterval(timer)
+        turn.lifetime.signal.removeEventListener('abort', stop)
+        consultLifetime.signal.removeEventListener('abort', stop)
+        if (lease.stopHeartbeat === stop) lease.stopHeartbeat = null
+      }
+      lease.stopHeartbeat = stop
+      turn.lifetime.signal.addEventListener('abort', stop, { once: true })
+      consultLifetime.signal.addEventListener('abort', stop, { once: true })
     }
     /**
      * Lane E6: normal-path settlement. When the last consult/swarm under an auto-acquired lease finishes and nothing
@@ -6113,6 +6545,7 @@ export async function mountX6BallRuntime(
      */
     const settleConsultLease = (turn: ConsultTurn, lease: ConsultLease): void => {
       lease.refs = Math.max(0, lease.refs - 1)
+      if (lease.refs === 0) lease.stopHeartbeat?.()
       if (lease.refs > 0 || lease.settled) return
       if (turn.lifetime.signal.aborted || lease.signal.aborted || consultLifetime.signal.aborted) return
       lease.settled = true
@@ -6468,7 +6901,7 @@ export async function mountX6BallRuntime(
               note: 'Dry-run T2 refusal verified; outward-class3.json was not written.',
             }
           }
-          return stageOutward('x6_repo', '/_host/repo', payload, json)
+          return stageOutward('x6_repo', '/_host/repo', payload, json, exec) // Voice hook: look-only state passed in
         }
         if (args.action === 'state_diff' && filterIds) {
           if (record(json.head) && record(json.head.entries) && Array.isArray(json.head.entries.changes)) {
@@ -6834,7 +7267,7 @@ export async function mountX6BallRuntime(
         body: { type: 'json', description: 'Optional JSON body for action="api".' },
       },
       output: jsonOut,
-      async execute(args: Record<string, unknown>) {
+      async execute(args: Record<string, unknown>, exec?: unknown) {
         if (!origin || origin === 'null') throw new Error('x6_github requires a connected local host origin')
         refuseBrokerAuthorityInputs(args)
         enforceToolInvocation('x6_github', args)
@@ -6847,7 +7280,7 @@ export async function mountX6BallRuntime(
         const answer: unknown = await res.json()
         // The edge posts an issue or a comment only with the owner's passkey on these exact bytes: stage them for him.
         return res.status === 403 && record(answer) && answer.code === 'CLASS3_WEBAUTHN_REQUIRED'
-          ? stageOutward('x6_github', '/_host/github', args, answer) : answer
+          ? stageOutward('x6_github', '/_host/github', args, answer, exec) : answer // Voice hook: look-only state passed in
       },
     })
 
@@ -6899,6 +7332,9 @@ export async function mountX6BallRuntime(
         + 'Providers: anthropic (e.g. claude-opus-5-5), openrouter (e.g. x-ai/grok-4.7, google/gemini-4-argon), deepseek, openai, xai, '
         + 'moonshot. `model` may instead be a name from the composer pill (Opus 5.5, Fable 5.2, Sonnet 5.5, Kimi K3.1, GPT-6.1 Sol, '
         + 'GPT Astra, Meta Muse, GLM 5.3, Gemini Argon, Grok 4.7, DeepSeek Flash), which picks the provider too. Returns each answer with its latency, or its refusal code (e.g. PROVIDER_SECRET_NOT_CONFIGURED). '
+        + 'Answers stream from the provider, so long ones are fine: leave maxTokens out for 16000 on anthropic (its thinking counts inside '
+        + 'the cap) and 8000 elsewhere, or ask for up to 64000. Every answer says `truncated` (true when it was cut) and `stopReason`; '
+        + 'a cut answer keeps its text so far and says in `next` how to get the rest; an answer still streaming at timeoutMs is cut there, not lost. '
         + 'Answers are advice to weigh, never authority.',
       parameters: {
         provider: { type: 'string', description: 'One provider door (single target).' },
@@ -6906,8 +7342,8 @@ export async function mountX6BallRuntime(
         targets: { type: 'json', description: 'Array of { provider, model, role? } for a parallel council (instead of provider/model).' },
         prompt: { type: 'string', required: true, description: 'What to ask (at most 64 KiB).' },
         system: { type: 'string', description: 'Optional system prompt (at most 16 KiB); a council role is appended per target.' },
-        maxTokens: { type: 'number', description: 'Answer length cap per target (1..16384, default 2048).' },
-        timeoutMs: { type: 'number', description: 'Time limit per target in ms (1000..120000, default 60000).' },
+        maxTokens: { type: 'number', description: 'Answer length cap per target, thinking included (1..64000; default 16000 for anthropic, 8000 for every other provider).' },
+        timeoutMs: { type: 'number', description: 'Time limit per target in ms (1000..600000, default 180000).' },
       },
       output: jsonOut,
       async execute(args: Record<string, unknown>, exec?: unknown) {
@@ -7229,6 +7665,8 @@ export async function mountX6BallRuntime(
         return await res.json()
       },
     })
+    // Voice hook: the read-only thread reader, registered through registerBuiltin so voice knows it is her own built-in.
+    registerThreadTools(registerBuiltin, { vfs, output: jsonOut })
     for (const dir of ['/dsh/home/auma/seed/staging', '/dsh/home/auma/seed/candidates']) {
       if (!vfs.existsSync(dir)) continue
       try {
@@ -7366,6 +7804,45 @@ export async function mountX6BallRuntime(
 
   scheduleBootCatchup()
 
+  // Voice hook: the voice home's own record, from the worker's session store (never from the page's word).
+  const readVoiceHomeRecord = async (sessionId: string): Promise<VoiceHomeRecord | null> => {
+    type Observation = { header: VoiceHomeRecord['header']; events: VoiceHomeRecord['events']; [Symbol.dispose]?: () => void }
+    const query = hostCtx.get('sessionQuery') as { observeSession?: (id: string, options?: { projectionMode?: 'none' }) => Promise<Observation> } | undefined
+    if (typeof query?.observeSession !== 'function') return null
+    const observed = await query.observeSession(sessionId, { projectionMode: 'none' })
+    try { return { sessionId, header: { ...observed.header }, events: observed.events } } finally { observed[Symbol.dispose]?.() }
+  }
+  // Voice hook: select a model and effort for ONE session. Unlike session/selectModel
+  // (session-controller/src/commands.ts:162-163) it never saves the profile default: only that session's log changes.
+  const selectSessionModel = async (input: Record<string, unknown>): Promise<{ status: number; body: unknown }> => {
+    const { sessionId, provider, model, reasoningEffort } = input
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9_-]{8,128}$/.test(sessionId)
+      || typeof provider !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(provider)
+      || typeof model !== 'string' || !/^[A-Za-z0-9._:/-]{1,128}$/.test(model)
+      || (reasoningEffort !== undefined && (typeof reasoningEffort !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(reasoningEffort)))
+      || Object.keys(input).some(key => !['sessionId', 'provider', 'model', 'reasoningEffort'].includes(key))) {
+      return { status: 400, body: { ok: false, code: 'SESSION_MODEL_INVALID' } }
+    }
+    // Her voice thread thinks at least a little: never `off` there.
+    if (reasoningEffort === 'off' && voiceLookOnly.isMarked(sessionId)) return { status: 400, body: { ok: false, code: 'VOICE_EFFORT_OFF_REFUSED' } }
+    type AgentLike = { model?: { select?: (selection: Record<string, unknown>) => void } }
+    const typert = hostCtx.get('typert') as { lookups?: { get?: (key: string) => { resolve(id: string): Promise<unknown> } | undefined } } | undefined
+    const lookup = typert?.lookups?.get?.('agent')
+    let agent: AgentLike | undefined
+    try {
+      agent = (lookup ? await lookup.resolve(sessionId) : (hostCtx.get('agents') as { get?: (id: string) => unknown } | undefined)?.get?.(sessionId)) as AgentLike | undefined
+    } catch { agent = undefined }
+    if (typeof agent?.model?.select !== 'function') return { status: 404, body: { ok: false, code: 'SESSION_NOT_FOUND' } }
+    const llm = hostCtx.get('llm') as { resolveCallConfig?: (config: Record<string, unknown>) => Promise<unknown> } | undefined
+    if (typeof llm?.resolveCallConfig !== 'function') return { status: 503, body: { ok: false, code: 'SESSION_MODEL_UNAVAILABLE' } }
+    const selected = { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) }
+    try { await llm.resolveCallConfig(selected) } catch (error) {
+      return { status: 400, body: { ok: false, code: 'SESSION_MODEL_UNAVAILABLE', error: error instanceof Error ? error.message.slice(0, 200) : 'unavailable' } }
+    }
+    agent.model.select(selected)
+    return { status: 200, body: { ok: true, sessionId, selected, savedDefault: false } }
+  }
+
   const handleControlRequest = async (
     method: string,
     path: string,
@@ -7394,6 +7871,19 @@ export async function mountX6BallRuntime(
       // The global worker message channel is not private from loaded organs.
       // Do not send ceremony bearers here; rejection cannot conceal bytes already sent.
       if (sub === '/governance-approval') return { status: 403, body: { ok: false, code: 'CLASS3_PRIVATE_TRANSPORT_UNAVAILABLE' } }
+      // Voice hook: mark the voice home look-only (add-only; no route removes a mark) and select one session's model.
+      if (sub === '/voice-mark' || sub === '/session-model') {
+        let input: unknown = null
+        if (method === 'POST' && bodyText.length <= 4096) { try { input = JSON.parse(bodyText) } catch { /* refused below */ } }
+        if (!record(input)) return { status: 400, body: { ok: false, code: sub === '/voice-mark' ? 'VOICE_MARK_INVALID' : 'SESSION_MODEL_INVALID' } }
+        if (sub === '/voice-mark') {
+          const answer = await voiceLookOnly.mark(input.sessionId, readVoiceHomeRecord)
+          const status = answer.ok ? 200 : answer.code === 'VOICE_SESSION_INVALID' ? 400 : answer.code === 'VOICE_SESSION_NOT_FOUND' ? 404
+            : answer.code.startsWith('VOICE_HOME_UNPROVEN') ? 403 : 503
+          return { status, body: answer }
+        }
+        return await selectSessionModel(input)
+      }
       if (sub === '/stage-head-promotion' && new TextEncoder().encode(bodyText).byteLength > STAGED_HEAD_PROMOTION_MAX_BYTES) {
         return { status: 413, body: { ok: false, code: 'STAGED_PROMOTION_BYTE_LIMIT' } }
       }
@@ -7460,6 +7950,8 @@ export async function mountX6BallRuntime(
     capabilityIndex: () => capabilityIndex.read(),
   }
   ;(globalThis as { __X6_BALL__?: X6BallRuntime }).__X6_BALL__ = runtime
+  // Voice hook: the look-only marks are loaded (bounded at 2 s) before the page can send any turn.
+  await voiceLookOnly.ready
   console.info(`x6-ball: runtime active (peer=${peerId}, ball=${currentBall.ballId.slice(0, 12)}, epoch=${String(currentBall.epoch)}, entries=${String(Object.keys(currentBall.entries).length)})`)
   return runtime
 }

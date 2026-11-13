@@ -109,7 +109,7 @@ node scripts/verify-lite.mjs
 - **有一个文件没有许可证。** `pentora36.wasm` 以尚未授予任何许可证的状态提供。[`LICENSE.binaries`](apps/web/public/seed-library/pentora/LICENSE.binaries)
 - **回滚缺口。** 恢复一份完整的存储快照，可能让一次已用掉的批准重新生效。树里有一个测试复现了这一点，旁边有十个 todo 用例，写明修复必须证明什么。树里没有修复。
 - **没有运行过。** 没有任何端到端、由所有者批准的自我修改被记录为在这棵树上运行过。从这棵树部署到全新账户的云部署是 UNVERIFIED：部署值是占位符，其中一些写在代码里。
-- **这棵树的大部分是继承来的。** `packages/` 的大部分是继承来的 DeepSeek Harness 运行时，organ 所建立在其上的插件框架是 Cordis，位于 `vendor/`。按项目自己的一次统计，取自它并不公开的历史，文本行的 11.6% 和代码行的 14.3% 是 Aukora 自己的。UNVERIFIED。[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)
+- **这棵树的大部分是继承来的。** `packages/` 的大部分是继承来的 DeepSeek Harness 运行时，organ 所建立在其上的插件框架是 Cordis，位于 `vendor/`。按项目自己的一次统计，取自它并不公开的历史，文本行的 11.8% 和代码行的 14.7% 是 Aukora 自己的。UNVERIFIED。[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)
 
 没有做过安全审计（[SAFETY.zh.md](SAFETY.zh.md)）。这里没有任何东西是 INDEPENDENTLY VERIFIED。更多缺口，按分量排序：[docs/OPEN-SOURCE-READINESS.zh.md](docs/OPEN-SOURCE-READINESS.zh.md)。项目不作的安全声明：[SECURITY.zh.md](SECURITY.zh.md)。
 

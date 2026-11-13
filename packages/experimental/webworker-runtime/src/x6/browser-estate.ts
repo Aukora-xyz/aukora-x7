@@ -2,8 +2,9 @@
  * Lane E4: `x6_browser_estate`, a read-only view of the browser half of Auma's estate that needs neither GitHub nor
  * a local host machine: the MemoryVfs tree under /dsh/home/auma (sizes and SHA-256 digests, every sub-workspace), a cross-thread
  * session index and bounded transcript search over /dsh/home/sessions/** (including the legacy `--dsh-home-auma-one--`
- * and `--dsh-home-auma--` directories), the IndexedDB persistence queue/tombstones/conflicts, the live Cordis fibers,
- * organs, tools and services, the Wasm cell pins and memory ceilings, and a summary of the receipt/checkpoint chain.
+ * and `--dsh-home-auma--` directories; it lets out only the rows `x6_threads` lets out: his and her words and titles),
+ * the IndexedDB persistence queue/tombstones/conflicts, the live Cordis fibers, organs, tools and services, the Wasm cell
+ * pins and memory ceilings, and a summary of the receipt/checkpoint chain.
  *
  * Read-only: nothing here writes the VFS, IndexedDB, the network or a receipt. Anything under /dsh/home/auma/private/**
  * (or named like a key or credential) is listed by existence and size only: never content, never a digest of content.
@@ -13,6 +14,8 @@
 import type { MemoryVfs } from '../storage/memory.ts'
 import { sha256HexSync } from '../module-system/module-loader.ts'
 import { CELL_BROWSER_FUEL_CAP, CELL_EXECUTION_TIMEOUT_MS, CELL_MAX_MEMORY_PAGES, CELL_PINS, SKILL_MAX_FUEL, SKILL_MAX_MEMORY_PAGES, WASM_PAGE_BYTES } from './wasm-cells.ts'
+import { withholdSecrets } from './secret-shapes.ts'
+import { parseRow, rawNeedle, titleOf, WORD_ROWS, wordsOf } from './thread-rows.ts'
 
 export const ESTATE_SECTIONS = Object.freeze(['vfs', 'sessions', 'search', 'persistence', 'cordis', 'wasm', 'receipts'] as const)
 export type EstateSection = typeof ESTATE_SECTIONS[number]
@@ -29,6 +32,8 @@ export const ESTATE_LIMITS = Object.freeze({
   sessionHeaderBytes: 4096,
   searchFiles: 200,
   searchBytes: 32 * 1024 * 1024,
+  /** A file larger than what is left of searchBytes is searched in its newest part, at most this much. */
+  searchTailBytes: 4 * 1024 * 1024,
   searchHits: 20,
   maxSearchHits: 100,
   queryChars: 128,
@@ -60,6 +65,15 @@ export function decodeSessionWorkspace(dirName: string): { workspace: string | n
     return { workspace: `${AUMA_ROOT}/workspaces/${inner.slice('dsh-home-auma-workspaces-'.length)}`, form: 'auma-subworkspace', ambiguous: false }
   }
   return { workspace: '/' + inner.replace(/-/g, '/'), form: 'other', ambiguous: inner.includes('-') }
+}
+
+/**
+ * A session project folder whose name decodes to her private folder (or inside it): its threads are never opened (the
+ * same rule x6_threads keeps). A dash in a folder name decodes as `/`, so this errs towards withholding.
+ */
+export function privateProject(workspaceDir: string): boolean {
+  const workspace = decodeSessionWorkspace(workspaceDir).workspace
+  return workspace !== null && estateRedaction(workspace) === 'private'
 }
 
 export interface EstateCordisView {
@@ -103,7 +117,7 @@ function walk(vfs: MemoryVfs, root: string, limit: number): { nodes: WalkNode[];
     let stat
     try { stat = vfs.statSync(path) as { size: number; mtimeMs: number; isDirectory(): boolean } } catch { continue }
     const dir = stat.isDirectory()
-    nodes.push({ path, type: dir ? 'dir' : 'file', size: dir ? 0 : Number(stat.size), mtimeMs: Number(stat.mtimeMs) })
+    nodes.push({ path, type: dir ? 'dir' : 'file', size: dir ? 0 : stat.size, mtimeMs: stat.mtimeMs })
     if (!dir) continue
     let names: string[] = []
     try { names = vfs.readdirSync(path).map(String) } catch { continue }
@@ -188,10 +202,12 @@ function headerOf(vfs: MemoryVfs, path: string): Record<string, unknown> | null 
     const first = text.split('\n')[0] ?? ''
     const parsed: unknown = JSON.parse(first)
     if (!record(parsed)) return null
+    // A thread working inside her private folder: its title and the rest of its header stay unread here.
+    if (typeof parsed.cwd === 'string' && estateRedaction(parsed.cwd) === 'private') return { withheld: 'private' }
     const out: Record<string, unknown> = {}
     for (const key of ['type', 'version', 'id', 'sessionId', 'title', 'cwd', 'workspace', 'createdAt', 'timestamp', 'mode', 'preset']) {
       const value = parsed[key]
-      if (typeof value === 'string') out[key] = value.slice(0, 160)
+      if (typeof value === 'string') out[key] = withholdSecrets(value).slice(0, 160)
       else if (typeof value === 'number' || typeof value === 'boolean') out[key] = value
     }
     return out
@@ -205,13 +221,14 @@ function sessionsSection(vfs: MemoryVfs): Record<string, unknown> {
   const sessions = [...byDir].map(([dir, list]) => {
     const workspaceDir = list[0]?.workspaceDir ?? ''
     const decoded = decodeSessionWorkspace(workspaceDir)
-    const main = list.find(file => /session\.v\d+\.jsonl$/.test(file.path)) ?? list[0] as SessionFile
+    const main = list.find(file => /session\.v\d+\.jsonl$/.test(file.path)) ?? list[0]
     return {
       dir, workspaceDir, ...decoded, sessionId: dir.slice(dir.lastIndexOf('/') + 1),
       files: list.map(file => ({ name: file.path.slice(file.path.lastIndexOf('/') + 1), size: file.size })),
       bytes: list.reduce((total, file) => total + file.size, 0),
       mtimeMs: Math.max(...list.map(file => file.mtimeMs)),
-      header: headerOf(vfs, main.path),
+      // Her private folder's threads are listed by existence and size; the file is never opened.
+      ...(privateProject(workspaceDir) ? { header: null, withheld: 'private' } : { header: main ? headerOf(vfs, main.path) : null }),
     }
   }).sort((a, b) => b.mtimeMs - a.mtimeMs)
   const workspaces = new Map<string, { workspaceDir: string; workspace: string | null; form: string; sessions: number; bytes: number }>()
@@ -231,33 +248,82 @@ function sessionsSection(vfs: MemoryVfs): Record<string, unknown> {
   }
 }
 
+/** A thread header (its first line) that names a working folder inside her private folder. */
+function privateCwd(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, ESTATE_LIMITS.sessionHeaderBytes)
+  const end = head.indexOf(0x0a)
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(end >= 0 ? head.subarray(0, end) : head))
+    return record(parsed) && typeof parsed.cwd === 'string' && estateRedaction(parsed.cwd) === 'private'
+  } catch { return false }
+}
+
 function searchSection(vfs: MemoryVfs, request: EstateRequest): Record<string, unknown> {
   const query = typeof request.query === 'string' ? request.query : ''
   if (!query.trim() || query.length > ESTATE_LIMITS.queryChars) return { ok: false, code: 'ESTATE_QUERY_INVALID', maxChars: ESTATE_LIMITS.queryChars }
   const maxHits = int(request.maxHits, ESTATE_LIMITS.searchHits, 1, ESTATE_LIMITS.maxSearchHits)
   const needle = query.toLowerCase()
+  const escaped = rawNeedle(query)
   const { files } = sessionFiles(vfs)
   files.sort((a, b) => b.mtimeMs - a.mtimeMs)
   const hits: Array<Record<string, unknown>> = []
-  let filesScanned = 0, bytesScanned = 0, truncated = false
+  const partialFiles: Array<{ path: string; bytes: number; searchedFromByte: number }> = []
+  let filesScanned = 0, bytesScanned = 0, truncated = false, privateSkipped = 0
   for (const file of files) {
     if (hits.length >= maxHits) { truncated = true; break }
-    if (filesScanned >= ESTATE_LIMITS.searchFiles || bytesScanned + file.size > ESTATE_LIMITS.searchBytes) { truncated = true; break }
+    // Her private folder's threads are not opened at all (no read of the file).
+    if (privateProject(file.workspaceDir)) { privateSkipped += 1; continue }
+    const left = ESTATE_LIMITS.searchBytes - bytesScanned
+    if (filesScanned >= ESTATE_LIMITS.searchFiles || left <= 0) { truncated = true; break }
+    // A file that does not fit what is left is searched in its newest part only and the search goes on to older files:
+    // one large thread (her main thread is about 99 MB) never stops the rest from being searched.
+    const window = file.size <= left ? file.size : Math.min(left, ESTATE_LIMITS.searchTailBytes)
     filesScanned += 1
-    bytesScanned += file.size
+    bytesScanned += window
     let text: string
-    try { text = new TextDecoder().decode(readBytes(vfs, file.path)) } catch { continue }
-    const lower = text.toLowerCase()
-    let at = lower.indexOf(needle)
-    while (at >= 0 && hits.length < maxHits) {
-      const line = text.slice(0, at).split('\n').length
-      const start = Math.max(0, at - 80), end = Math.min(text.length, at + needle.length + 80)
-      hits.push({ path: file.path, workspaceDir: file.workspaceDir, line, snippet: text.slice(start, end).replace(/\s+/g, ' ') })
-      at = lower.indexOf(needle, at + needle.length)
+    let fromByte = 0
+    try {
+      const bytes = readBytes(vfs, file.path)
+      // A thread elsewhere whose header names a working folder inside her private folder is not searched either.
+      if (privateCwd(bytes)) { privateSkipped += 1; continue }
+      fromByte = Math.max(0, bytes.byteLength - window)
+      text = new TextDecoder().decode(bytes.subarray(fromByte))
+    } catch { continue }
+    if (fromByte > 0) {
+      truncated = true
+      partialFiles.push({ path: file.path, bytes: file.size, searchedFromByte: fromByte })
+      // The window opens mid-line: that first fragment is not searched, and line numbers count from the window.
+      const firstBreak = text.indexOf('\n')
+      text = firstBreak >= 0 ? text.slice(firstBreak + 1) : ''
+    }
+    // Line by line, and only the rows x6_threads lets out (thread-rows.ts): his words, her words and titles. A tool
+    // result, a tool call's arguments, a system prompt, an injected notice or an untyped line is never decoded into a
+    // snippet: a tool may have read her private folder into an ordinary thread. The words come out withheld WHOLE (the
+    // same filter x6_threads uses) before any snippet is cut, and the phrase is looked for in the withheld words, so a
+    // cut never leaves a piece of a key and part of a key finds nothing.
+    let line = 0
+    for (let from = 0; from <= text.length && hits.length < maxHits;) {
+      const lineEnd = text.indexOf('\n', from)
+      const raw = text.slice(from, lineEnd < 0 ? text.length : lineEnd)
+      line += 1
+      const row = raw.toLowerCase().includes(escaped) ? parseRow(raw, WORD_ROWS) : null
+      const title = row ? titleOf(row) : null
+      const words = row && title === null ? wordsOf(row) : null
+      const clean = title ?? words?.text ?? ''
+      const lower = clean.toLowerCase()
+      for (let at = lower.indexOf(needle); at >= 0 && hits.length < maxHits; at = lower.indexOf(needle, at + needle.length)) {
+        const start = Math.max(0, at - 80), end = Math.min(clean.length, at + needle.length + 80)
+        hits.push({ path: file.path, workspaceDir: file.workspaceDir, line, who: title !== null ? 'title' : words?.who,
+          ...(fromByte > 0 ? { lineFrom: 'window', windowFromByte: fromByte } : {}), snippet: clean.slice(start, end) })
+      }
+      if (lineEnd < 0) break
+      from = lineEnd + 1
     }
   }
-  return { ok: true, query, hits, filesScanned, bytesScanned, truncated,
-    limits: { files: ESTATE_LIMITS.searchFiles, bytes: ESTATE_LIMITS.searchBytes, hits: maxHits } }
+  return { ok: true, query: withholdSecrets(query), hits, filesScanned, bytesScanned, truncated, partialFiles,
+    withheld: { private: privateSkipped },
+    limits: { files: ESTATE_LIMITS.searchFiles, bytes: ESTATE_LIMITS.searchBytes, tailBytes: ESTATE_LIMITS.searchTailBytes,
+      hits: maxHits } }
 }
 
 function wasmSection(): Record<string, unknown> {
