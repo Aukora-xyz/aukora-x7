@@ -20,6 +20,7 @@
 import { createR2PartStore, handleThreadRequest, sha256Hex, threadLimits } from './thread-log.mjs'
 import { verifiedAtMs } from './world-home.mjs'
 import { WORKER_ONLY_FIELDS, descriptorOnly, holderWord } from './world-holder.mjs' // HOME hook: the Worker's word about a copy (job 4: a move's descriptor; review: MIRROR's words to the Worker alone)
+import { threadSyncOn } from './thread-sync-mode.mjs' // The tail answers a `before` inside a line only while THREAD_SYNC is exactly on
 import { aumlokClass3Binding } from './aumlok.mjs' // HOLDER hook: the exact action HEAD's approval is bound to (read only)
 
 /** The name this Worker gives her world's objects (never the seedId). */
@@ -540,6 +541,7 @@ export function createThreadMount({ deadlines, importStep } = {}) {
           approve: card => ownerApproval(request, card, authorize, now),
           // `importStep` (pieces per import step) is a test's knob; the Worker never passes it (THREAD_IMPORT_STEP).
           ...(importStep ? { importStep } : {}),
+          tailInsideLine: threadSyncOn(env), // Unset or any other value answers the tail exactly as main
           ...(threadDeadlines ? { deadlines: threadDeadlines } : {}) })
       } finally {
         if (importing && slot.holder === holder) { slot.holder = null; slot.until = 0 }

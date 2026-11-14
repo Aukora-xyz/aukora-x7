@@ -857,9 +857,10 @@ These files are served as they are. They are not npm dependencies of the workspa
 | opus-recorder, with the Opus and Speex codecs | \`apps/web/public/app/assets/\` | MIT and BSD-3-Clause | [\`OPUS-RECORDER-LICENSE.md\`](apps/web/public/app/assets/OPUS-RECORDER-LICENSE.md) |
 | PersonaPlex decoder | \`apps/web/public/app/assets/\` | MIT | [\`PERSONAPLEX-LICENSE.txt\`](apps/web/public/app/assets/PERSONAPLEX-LICENSE.txt) |
 | FortuneSheet | \`packages/client/ui-sidebar-documentpreview/\` | MIT | [\`FortuneSheet.txt\`](packages/client/ui-sidebar-documentpreview/licenses/FortuneSheet.txt) |
-| Auma Live trace module (\`aura-trace.js\`): React, ReactDOM and scheduler | \`apps/web/public/app/\` | MIT | [\`AURA-TRACE-THIRD-PARTY.txt\`](apps/web/public/app/assets/AURA-TRACE-THIRD-PARTY.txt) |
 | Dakini Code bundle: three.js, React, ReactDOM, scheduler, use-sync-external-store, Base UI, Lucide, Tailwind CSS, tailwind-merge, clsx, class-variance-authority and the Vite module preload helper | \`apps/web/public/assets/stock-apps/dakini-code/\` | MIT, ISC and Apache-2.0 | [\`THIRD_PARTY_NOTICES.txt\`](apps/web/public/assets/stock-apps/dakini-code/THIRD_PARTY_NOTICES.txt) |
 | Rust crates compiled into the Wasm cells | \`apps/web/public/cells/\` | MIT, Apache-2.0 and BSD-3-Clause | [\`THIRD-PARTY.md\`](apps/web/public/cells/THIRD-PARTY.md) |
+| Managed voice module (\`managed-voice.js\`): [\`@elevenlabs/client\`](https://github.com/elevenlabs/packages) 1.36.0 and [\`livekit-client\`](https://github.com/livekit/client-sdk-js) 2.24.0, each with its license text inside the file | \`apps/web/public/app/\` | MIT and Apache-2.0 | [\`managed-voice.js\`](apps/web/public/app/managed-voice.js) |
+| Voice capture worklet (\`eleven-raw-audio.js\`): copied by the build from the same pinned [\`@elevenlabs/client\`](https://github.com/elevenlabs/packages) 1.36.0 (MIT; that license text is inside \`managed-voice.js\`). Its header says its mu-law encoder is taken from the [wavefile library](https://github.com/rochars/wavefile). That library is under the MIT License, Copyright (c) 2017-2019 Rafael da Silva Rocha (from its own LICENSE file, not from the header); the MIT terms are in [\`LICENSES/MIT.txt\`](LICENSES/MIT.txt) | \`apps/web/public/app/\` | MIT | [\`eleven-raw-audio.js\`](apps/web/public/app/eleven-raw-audio.js) |
 
 ## First-party native packages
 

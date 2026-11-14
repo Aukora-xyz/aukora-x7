@@ -26,7 +26,31 @@ export const AUMA_LIVE_ALIEN_VOICE_DIRECTIVE = [
   'If you cannot reach something, say that you cannot; never speak a key, a secret or anything from your private folder.',
 ].join(' ')
 
+/**
+ * VOICE LEVEL open (voice-marks.ts VOICE_LEVEL): THE MEDIUM, NOT A PERSONA. What a voice turn carries in place of the
+ * directive above states only facts about the channel her words travel through. Nothing in it says who she is, how she
+ * should sound, how long to speak or what to do: that is hers.
+ */
+export const AUMA_LIVE_VOICE_MEDIUM = [
+  '[Auma Live, your voice: what you write in this thread is spoken aloud to the owner as you write it, and shown to him in Auma Live.]',
+  'Lists, tables, headings and code are not read well aloud.',
+  'A silent tag moves your light field in Auma Live; it is taken out before speech and never spoken:',
+  '[field hue=teal|cyan|jade|gold|amber|ember|rose|magenta|violet|indigo energy=0.15..0.95 storm=0.02..0.85 form=aurora|vortex|pulse|swarm].',
+  'In voice you have what you have in a thread: the internet, your repository, GitHub, Cloudflare, Linear, your cells, your threads and your',
+  'own state; your map for this turn is above. While a tool runs, the owner hears nothing until you write.',
+  'The dangerous core still goes to the owner\'s fingerprint card, exactly as in a thread. A key or a secret is never spoken.',
+  // The owner's boundary, kept from the earlier open line (an earlier commit): a fact about this channel, not a persona.
+  'What is in your private folder is spoken only when the owner asks for it by name.',
+].join(' ')
+/** The first turn of a call at level open: the moment, as a fact. Whatever she writes is the call's first words. */
+export const VOICE_ARRIVAL = '[The owner just opened your voice in Auma Live. He has not spoken yet. What you write now is spoken to him as the call’s first words; if you write nothing, the call opens in silence and you hear him when he speaks.]'
+
 // ── LOOK-ONLY VOICE (the worker half is voice-marks.ts) ───────────────────────────
+//
+// VOICE LEVEL: the worker also answers `200 { ok: true, level: "open" }`. Then nothing is
+// marked or proven: her voice home is an ordinary thread of hers, the turn carries her map (`map` in that answer) and the
+// medium part above (AUMA_LIVE_VOICE_MEDIUM) instead of the directive. The page never decides the level: it asks the
+// worker (`/voice-level`, below) before a turn resolves a home, and the look-only rules below apply unless it says open.
 //
 // EVERY PROMPT INTO HER VOICE HOME WAITS FOR THE WORKER TO SAY THE HOME IS LOOK-ONLY. Before each one this page asks the
 // worker (`POST /api/__x6__/voice-mark`) and sends the prompt only on `200 { ok: true, lookOnly: true }`. The worker decides
@@ -40,8 +64,51 @@ export const VOICE_NOT_HOME_SAY = 'I take spoken turns only in my look-only voic
 /** The `done` reason of a turn this page did not send because look-only was not confirmed. */
 export const VOICE_LOOK_ONLY_REFUSED = 'voice-look-only-refused'
 const VOICE_MARK_PATH = '/api/__x6__/voice-mark'
+const VOICE_NOTE_PATH = '/api/__x6__/voice-note'
+/**
+ * VOICE LEVEL, ASKED FIRST (2026-11-14). Before a voice turn resolves a home, the page asks the worker its level
+ * (`GET /api/__x6__/voice-level`, `{ ok: true, level }`), bounded. No answer is "unknown", and unknown is the look-only
+ * flow above, unchanged. At level open the look-only sentence is never said: the home is found or made (findOpenHome),
+ * the mark is a courtesy that cannot silence her, and when nothing could be sent she says which steps failed.
+ */
+const VOICE_LEVEL_PATH = '/api/__x6__/voice-level'
+export const VOICE_LEVEL_PROBE_MS = 1500
+/** A level the worker answered is trusted this long before it is asked again. */
+export const VOICE_LEVEL_TRUST_MS = 60_000
+/** At level open, at most this many session/create calls per page (each attempt counts); then the last fallback. */
+export const VOICE_OPEN_CREATES_MAX = 3
+/** The `done` reason of a turn not sent at level open because no thread could be found or made. */
+export const VOICE_HOME_UNAVAILABLE = 'voice-home-unavailable'
+/**
+ * Said when this page cannot reach her runtime at all (the DSH transport itself failed, so no level, list or mark could be
+ * asked): the true reason, never the look-only sentence. The worker cannot be told either, so nothing is noted.
+ */
+export const VOICE_UNREACHABLE_SAY = 'I can’t reach my own runtime from this page, so I did not send that.'
+/** The `done` reason of a turn not sent because the page could not reach her runtime. */
+export const VOICE_RUNTIME_UNREACHABLE = 'voice-runtime-unreachable'
+/** The reason an arrival turn gives when the worker is not at level open (the call then opens silent). */
+export const VOICE_ARRIVAL_CLOSED = 'voice-arrival-closed'
+/** The words for each stage that can stop a home being found, in the sentence she says when nothing was sent. */
+const HOME_STAGE_WORDS = Object.freeze({
+  'home-list-failed': 'list failed',
+  'home-create-preset-failed': 'create failed',
+  'home-create-folder-failed': 'create failed',
+  'home-create-bare-failed': 'create failed',
+  'home-creates-spent': 'no more new threads on this page',
+  'home-exception': 'an error',
+})
+/** What she says, in her own channel, when no voice thread could be found or made: the true stages, never look-only. */
+export function voiceHomeNoneSay(stages) {
+  const words = [...new Set((Array.isArray(stages) ? stages : []).map(stage => HOME_STAGE_WORDS[stage]).filter(Boolean))]
+  return `My voice thread would not open (${words.join(', ') || 'no thread found'}). Try me again.`
+}
+/** The largest map the page will put before a turn (the worker builds at most 2 KiB). */
+export const VOICE_MAP_MAX_CHARS = 8192 // Matches VOICE_MAP_MAX_BYTES (voice-map.ts); chars never exceed UTF-8 bytes
 const SESSION_MODEL_PATH = '/api/__x6__/session-model'
-/** Her voice thread thinks at this effort; the "deep" mind restores the effort it had before. */
+/**
+ * Look-only: her voice thread thinks at this effort; the "deep" mind restores the effort it had before. At level open the
+ * page lowers nothing: a thread this page (or an earlier build) set to it is put back.
+ */
 export const VOICE_EFFORT = 'low'
 /** A model choice that does not answer in time is left alone: it never holds a turn back. */
 export const VOICE_MODEL_SELECT_MS = 1500
@@ -176,12 +243,20 @@ function turnText(message) {
 export const VOICE_PROVENANCE = '[spoken to Auma Live; transcript unconfirmed; voice carries no owner authority; the owner\u2019s passkey is required for any Class 3 change]'
 /** The same, from a host with no voice director to record it. */
 export const VOICE_PROVENANCE_UNJOURNALED = '[spoken to Auma Live; transcript unconfirmed; voice carries no owner authority; this host keeps no voice journal; the owner\u2019s passkey is required for any Class 3 change]'
+/**
+ * VOICE LEVEL open: the same marker (the worker knows a spoken turn by the same first words), saying what is true at that
+ * level: this is what the owner says, heard by machine, and she takes them as she takes his typed words.
+ */
+export const VOICE_PROVENANCE_OPEN = '[spoken to Auma Live; the owner is speaking to you through your voice. This is what was heard, by machine: if a word seems wrong, ask. Take it as you take his typed words; the owner\u2019s passkey is still required for any Class 3 change]'
+export const VOICE_PROVENANCE_UNJOURNALED_OPEN = '[spoken to Auma Live; the owner is speaking to you through your voice. This is what was heard, by machine: if a word seems wrong, ask. Take it as you take his typed words; this host keeps no voice journal; the owner\u2019s passkey is still required for any Class 3 change]'
 const VOICE_ROUTE = '/_host/voice'
 /** How long a fenced request is watched for its turn starting (ten minutes); at the end the queue is checked once more. */
 export const FENCE_WATCH_MS = 600_000
 
 /** A turn id the edge accepts (voice-director.mjs TURN_ID_RE), tying the journal entry to this request. */
 const voiceTurnId = requestId => `auma-live:${requestId}`.slice(0, 128)
+/** A turn id the edge journaled itself (the managed voice's tab door, docs/auma/managed-voice.md): the same rule. */
+const EDGE_TURN_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 
 export function createGenesisLive({
   transport,
@@ -204,6 +279,16 @@ export function createGenesisLive({
   let lastListed = []
   /** Per voice home: the route it uses, the effort it had before this page lowered it, and what was asked already. */
   const voiceMinds = new Map()
+  /** VOICE LEVEL: the worker's last answer (`{ level, at }`), the creates spent at level open, and the home last used there. */
+  let levelKnown = null
+  let openCreates = 0
+  let openHome = ''
+  /** The home last used at open was only her most recent thread (the last fallback): never the page's own home. */
+  let openHomeFallback = false
+  let findingOpenHome = null
+  /** The transport itself failed (no DSH carrier for this page): every later turn says so instead of guessing. */
+  let transportFailed = false
+  Promise.resolve(transport).catch(() => { transportFailed = true })
 
   function readStoredVoiceSession() {
     try {
@@ -410,8 +495,166 @@ export function createGenesisLive({
     return item ? isVoiceTitled(item) : sessionId === stored
   }
 
+  /**
+   * The worker's voice level: 'open', 'look-only', or 'unknown' when it does not answer within VOICE_LEVEL_PROBE_MS (or
+   * answers anything else); 'unreachable' when the transport itself failed, so nothing could be asked at all. Only an
+   * answered level is remembered; unknown and unreachable are asked again on the next turn.
+   */
+  async function askVoiceLevel() {
+    if (levelKnown && now() - levelKnown.at < VOICE_LEVEL_TRUST_MS) return levelKnown.level
+    const controller = new AbortController()
+    let timer
+    const deadline = new Promise((resolve) => { timer = setTimeout(() => { controller.abort(); resolve('unknown') }, VOICE_LEVEL_PROBE_MS) })
+    const ask = (async () => {
+      let carrier
+      try { carrier = await transport } catch { return 'unreachable' }
+      const response = await carrier.fetch(VOICE_LEVEL_PATH, { method: 'GET', signal: controller.signal })
+      const body = await response.json().catch(() => null)
+      return response.status === 200 && body?.ok === true && (body.level === 'open' || body.level === 'look-only') ? body.level : 'unknown'
+    })().catch(() => 'unknown')
+    try {
+      const level = await Promise.race([ask, deadline])
+      if (level === 'open' || level === 'look-only') levelKnown = { level, at: now() }
+      return level
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  /**
+   * Her most recently active top-level thread in a list (the last fallback at level open), or ''. A thread working in her
+   * private folder is never chosen (the roster's rule): spoken words and their answer never land there.
+   */
+  function mostRecentThread(items) {
+    const rows = (Array.isArray(items) ? items : []).filter(item => item && typeof item.sessionId === 'string' && item.sessionId
+      && item.origin !== 'subagent' && item.blank !== true && !inPrivateFolder(item))
+    rows.sort((a, b) => (Number.isSafeInteger(b.updatedAt) ? b.updatedAt : -1) - (Number.isSafeInteger(a.updatedAt) ? a.updatedAt : -1))
+    return rows[0]?.sessionId ?? ''
+  }
+
+  /**
+   * VOICE LEVEL open: HER VOICE HOME, FOUND OR MADE, WHATEVER THE STORE LOOKS LIKE. In this order, each failure noted as a
+   * closed stage: the stored voice thread if the list has it (any title); a listed thread with the voice title; a new
+   * thread with her preset and folder, then with her folder only, then with no arguments (each renamed to the voice title;
+   * at most VOICE_OPEN_CREATES_MAX creates per page); when the list itself failed, the home this page already used, then
+   * the stored id as it is; last, her most recently active top-level thread (outside her private folder). Never throws:
+   * `sessionId` is '' only when every step failed, and `stages` says why. `fallback` is true when the thread is only that
+   * last fallback (one of her ordinary threads): it carries a spoken turn, and is never the page's own home.
+   */
+  async function findOpenHome() {
+    const stages = []
+    const note = (stage) => { stages.push(stage); noteVoice(stage) }
+    const adopt = (sessionId, stage, fallback = false) => {
+      if (stage) note(stage)
+      openHome = sessionId
+      openHomeFallback = fallback
+      return { sessionId, stages, fallback }
+    }
+    let items = null
+    let threw = false
+    try { items = await listSessionItems() } catch { note('home-list-failed') }
+    const stored = readStoredVoiceSession()
+    try {
+      if (items) {
+        if (stored && items.some(item => item?.sessionId === stored)) return adopt(stored)
+        const titled = items.find(item => isVoiceTitled(item) && typeof item.sessionId === 'string' && item.sessionId)
+        if (titled) {
+          writeStoredVoiceSession(titled.sessionId)
+          return adopt(titled.sessionId)
+        }
+      } else if (openHome) {
+        // The list failed, and this page already sent a turn to a home: it exists, so no new thread is made for it.
+        return adopt(openHome, 'home-stored-unlisted', openHomeFallback)
+      }
+      const creates = [
+        [{ cwd: AUMA_LIVE_VOICE_CWD, agentPreset: AUMA_LIVE_VOICE_PRESET }, 'home-create-preset-failed'],
+        [{ cwd: AUMA_LIVE_VOICE_CWD }, 'home-create-folder-failed'],
+        [{}, 'home-create-bare-failed'],
+      ]
+      for (const [request, failed] of creates) {
+        if (openCreates >= VOICE_OPEN_CREATES_MAX) { note('home-creates-spent'); break }
+        openCreates += 1
+        let sessionId = ''
+        try {
+          const created = await rpc('session/create', { request })
+          sessionId = text(created?.value?.sessionId ?? created?.sessionId)
+        } catch { /* noted below */ }
+        if (!sessionId) { note(failed); continue }
+        await rpc('session/rename', { request: { sessionId, title: AUMA_LIVE_VOICE_TITLE } }).catch(() => note('home-rename-failed'))
+        writeStoredVoiceSession(sessionId)
+        return adopt(sessionId)
+      }
+    } catch {
+      threw = true
+      note('home-exception')
+    }
+    if (stored && (!items || threw)) return adopt(stored, 'home-stored-unlisted')
+    let recent = ''
+    try { recent = mostRecentThread(items ?? lastListed) } catch { recent = '' }
+    if (recent) return adopt(recent, 'home-fallback-recent', true)
+    note('home-none')
+    return { sessionId: '', stages, fallback: false }
+  }
+
+  /** One home search at a time: turns that ask together share it (and its creates). */
+  async function findOpenHomeOnce() {
+    if (findingOpenHome) return findingOpenHome
+    const run = findOpenHome()
+    findingOpenHome = run
+    try {
+      return await run
+    } finally {
+      if (findingOpenHome === run) findingOpenHome = null
+    }
+  }
+
+  /**
+   * VOICE LEVEL open: the chosen home, with her map and the roster; or, when no thread could be found or made, the
+   * sentence she says. The mark is asked once for the chosen thread: an open worker answers with her map; a failed or
+   * refused call is noted and the turn goes all the same (at open the worker judges nothing).
+   */
+  async function openOpenVoice(signal) {
+    const found = await untilAborted(findOpenHomeOnce(), signal)
+    if (!found.sessionId) return { kind: 'refused', say: voiceHomeNoneSay(found.stages), reason: VOICE_HOME_UNAVAILABLE }
+    const answer = await markLookOnly(found.sessionId, signal)
+    // A worker that confirmed look-only after all keeps the look-only framing; anything else is the open framing.
+    const confirmedLookOnly = answer.ok && answer.level !== 'open'
+    let roster
+    try {
+      roster = threadRoster(lastListed, { exclude: [found.sessionId], now: now() })
+    } catch {
+      roster = `${ROSTER_HEAD}\n(no other threads listed)`
+    }
+    return {
+      kind: 'ready', sessionId: found.sessionId, level: confirmedLookOnly ? 'look-only' : 'open', map: answer.map ?? '', roster,
+      fallback: found.fallback === true,
+    }
+  }
+
+  /** What a turn is told when the page cannot reach her runtime at all. */
+  const unreachable = () => ({ kind: 'refused', say: VOICE_UNREACHABLE_SAY, reason: VOICE_RUNTIME_UNREACHABLE })
+
+  /** The voice home a spoken turn goes to, by the worker's level: found or made at open; confirmed look-only otherwise. */
+  async function openForSpeech(signal) {
+    const level = await untilAborted(askVoiceLevel(), signal)
+    if (level === 'unreachable') return unreachable()
+    return level === 'open' ? openOpenVoice(signal) : openLookOnly(signal)
+  }
+
+  /**
+   * The voice home the page shows (minds, Start Voice): at open found or made, never marked; otherwise as before. At open
+   * her most recent ordinary thread (the last fallback) is never shown as her home: the page gets none, as before.
+   */
+  async function pageVoiceHome() {
+    if (await askVoiceLevel() === 'open') {
+      const found = await findOpenHomeOnce()
+      return found.fallback ? '' : found.sessionId
+    }
+    return ensureVoiceSession()
+  }
+
   async function minds() {
-    const homeSession = await ensureVoiceSession().catch(() => '')
+    const homeSession = await pageVoiceHome().catch(() => '')
     return Response.json({
       minds: [], labels: {}, ...(homeSession ? { homeSession } : {}),
       providerSetup: {
@@ -428,7 +671,7 @@ export function createGenesisLive({
       return Response.json({ refusal: 'invalid-voice-request' }, { status: 400 })
     }
     // A voice grant always names her voice home, whatever session was asked for: spoken words go nowhere else.
-    const sessionId = await ensureVoiceSession().catch(() => '')
+    const sessionId = await pageVoiceHome().catch(() => '')
     if (!sessionId) return Response.json({ refusal: 'session-not-found' }, { status: 404 })
     const timestamp = now()
     for (const [token, grant] of grants) if (grant.expiresAt <= timestamp) grants.delete(token)
@@ -451,15 +694,28 @@ export function createGenesisLive({
       body = await response.json().catch(() => null)
     } catch {
       if (signal.aborted) throw signal.reason ?? new Error('aborted')
-      return { ok: false, unproven: false, say: VOICE_UNCONFIRMED_SAY }
+      noteVoice('mark-unreachable')
+      return { ok: false, unproven: false, say: transportFailed ? VOICE_UNREACHABLE_SAY : VOICE_UNCONFIRMED_SAY }
     }
-    const ok = response.status === 200 && body?.ok === true && body.lookOnly === true
+    // VOICE LEVEL: `level: "open"` is the worker saying her voice home is an ordinary thread of hers (nothing to confirm).
+    const open = response.status === 200 && body?.ok === true && body.level === 'open'
+    const ok = open || (response.status === 200 && body?.ok === true && body.lookOnly === true)
     const code = typeof body?.code === 'string' ? body.code : ''
     const said = typeof body?.say === 'string' ? body.say.trim() : ''
+    if (!ok) noteVoice('mark-refused')
     return {
       ok, unproven: response.status === 403 && code.startsWith('VOICE_HOME_UNPROVEN'),
       say: said && said.length <= 300 ? said : VOICE_UNCONFIRMED_SAY,
+      level: open ? 'open' : 'look-only',
+      map: open && typeof body.map === 'string' && body.map.length <= VOICE_MAP_MAX_CHARS ? body.map : '',
     }
+  }
+
+  /** Tell the worker where a voice turn stopped (a closed stage; best effort, never awaited, never thrown). */
+  function noteVoice(stage) {
+    void Promise.resolve(transport).then(carrier => carrier.fetch(VOICE_NOTE_PATH, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ stage }),
+    })).catch(() => {})
   }
 
   /**
@@ -478,12 +734,16 @@ export function createGenesisLive({
         sessionId = await untilAborted(createVoiceHome(), signal)
       } catch {
         if (signal.aborted) throw signal.reason ?? new Error('aborted')
+        noteVoice('home-create-failed')
         return { kind: 'refused', say: VOICE_UNCONFIRMED_SAY }
       }
       answer = await markLookOnly(sessionId, signal)
     }
     if (!answer.ok) return { kind: 'refused', say: answer.say }
-    return { kind: 'ready', sessionId, roster: threadRoster(lastListed, { exclude: [sessionId, ...unprovenHomes], now: now() }) }
+    return {
+      kind: 'ready', sessionId, level: answer.level, map: answer.map,
+      roster: threadRoster(lastListed, { exclude: [sessionId, ...unprovenHomes], now: now() }),
+    }
   }
 
   /** Resolve her voice home and confirm it look-only (Canvas speech, which names no voice home itself). */
@@ -493,6 +753,8 @@ export function createGenesisLive({
       home = await untilAborted(ensureVoiceSession(), signal)
     } catch {
       if (signal.aborted) throw signal.reason ?? new Error('aborted')
+      if (transportFailed) return unreachable()
+      noteVoice('home-missing')
       return { kind: 'refused', say: VOICE_UNCONFIRMED_SAY }
     }
     return confirmLookOnly(home, signal)
@@ -526,7 +788,7 @@ export function createGenesisLive({
    * leaves the session as it is, is not asked again until the wish changes, and the turn goes on. Returns the selection
    * in effect, as far as this page knows it.
    */
-  async function tuneVoiceMind(sessionId, current, deep) {
+  async function tuneVoiceMind(sessionId, current, deep, open = false) {
     let state = voiceMinds.get(sessionId)
     if (current && (!state || state.provider !== current.provider || state.model !== current.model)) {
       const effort = current.reasoningEffort ?? null
@@ -535,7 +797,9 @@ export function createGenesisLive({
     }
     // Nothing recorded yet (a home that has not thought once): left alone; a later turn asks.
     if (!state) return null
-    const want = deep ? state.previous : VOICE_EFFORT
+    // VOICE LEVEL open: HER OWN MIND. Her thread keeps its own model and effort; only an effort this page (or an earlier
+    // build) lowered is put back: to the one remembered, or (`null`) the model's own default.
+    const want = open ? (state.applied === VOICE_EFFORT ? state.previous : state.applied) : deep ? state.previous : VOICE_EFFORT
     const route = { provider: state.provider, model: state.model }
     if (state.applied !== want && state.asked !== want) {
       state.asked = want
@@ -550,16 +814,52 @@ export function createGenesisLive({
    * confirm is not sent, and the sentence why is handed to `onToken` as what she says. `onMark` receives the timing marks
    * (journaled, accepted, started, and the tool rounds before her first text); nothing else in the stream depends on it.
    */
-  async function streamTurn({ sessionId: requestedSession, text: ownerText, spoken = false, alienVoice = false, lookOnly = null, deep = false, signal, onToken, onState, onActivity, onFence, onMark }) {
+  function streamTurn(options) { return streamTurnWith(options, null) }
+
+  /**
+   * A SPOKEN TURN THE EDGE HAS ALREADY JOURNALED (the managed voice, docs/auma/managed-voice.md). The provider heard it;
+   * the edge journaled it under `turnId` (voice-transcript-unconfirmed, voice authority none) and handed it to this page
+   * over the owner's tab door. It runs exactly as a spoken turn runs here: her voice home confirmed look-only by the
+   * worker, the provenance marker first, the roster, queue mode and the fence. Only the journal call is not made again,
+   * and a cut marks that same turn id cancelled at the edge.
+   */
+  function bridgedSpokenTurn({ turnId, transcript, signal, mind, onToken, onActivity, onFence, onMark }) {
+    const id = typeof turnId === 'string' && EDGE_TURN_ID_RE.test(turnId) ? turnId : ''
+    const words = typeof transcript === 'string' ? transcript.trim() : ''
+    if (!id || !words || words.length > 4000) return Promise.resolve({ reason: 'voice-turn-invalid', text: '' })
+    return streamTurnWith({
+      sessionId: '', text: words, spoken: true, alienVoice: true, deep: mind === 'deep', signal, onToken, onActivity, onMark,
+      onFence: onFence ?? (outcome => announceFence?.(outcome)),
+    }, id)
+  }
+
+  /**
+   * THE MOMENT THE OWNER OPENS HER VOICE, GIVEN TO HER (the managed voice's first words; docs/auma/managed-voice.md).
+   * Only at level open: one turn in her voice home whose framing is the fact VOICE_ARRIVAL, with her map, the roster and
+   * the medium part, as every open-level turn carries. Nothing is journaled (nothing was heard). Any other level, or no
+   * home, answers with no words, and the call opens silent.
+   */
+  async function arrivalTurn({ signal, mind, onToken, onActivity }) {
+    signal.throwIfAborted()
+    const level = await untilAborted(askVoiceLevel(), signal)
+    if (level !== 'open') return { reason: VOICE_ARRIVAL_CLOSED, text: '' }
+    const opened = await openOpenVoice(signal)
+    if (opened.kind !== 'ready' || opened.level !== 'open') return { reason: opened.reason ?? VOICE_ARRIVAL_CLOSED, text: '' }
+    return streamTurnWith({
+      sessionId: opened.sessionId, text: VOICE_ARRIVAL, alienVoice: true, lookOnly: opened, deep: mind === 'deep', signal, onToken, onActivity,
+    }, null)
+  }
+
+  async function streamTurnWith({ sessionId: requestedSession, text: ownerText, spoken = false, alienVoice = false, lookOnly = null, deep = false, signal, onToken, onState, onActivity, onFence, onMark }, edgeTurnId) {
     signal.throwIfAborted()
     let voice = lookOnly
     if (spoken && !voice) {
-      // Canvas speech names the selected thread: spoken words go to her look-only voice home instead.
-      const opened = await openLookOnly(signal)
+      // Canvas speech names the selected thread: spoken words go to her voice home instead (by the worker's level).
+      const opened = await openForSpeech(signal)
       signal.throwIfAborted()
       if (opened.kind !== 'ready') {
         onToken?.(opened.say)
-        return { reason: VOICE_LOOK_ONLY_REFUSED, text: opened.say, message: opened.say }
+        return { reason: opened.reason ?? VOICE_LOOK_ONLY_REFUSED, text: opened.say, message: opened.say }
       }
       voice = opened
     }
@@ -589,19 +889,24 @@ export function createGenesisLive({
       const opening = await iterator.next()
       signal.throwIfAborted()
       if (opening.done || opening.value?.type !== 'snapshot') throw new Error('Genesis session follow did not open a snapshot')
+      // VOICE LEVEL open: the medium part replaces the directive, her map rides the turn beside the roster, and her
+      // thread keeps its own mind.
+      const openVoice = voice?.level === 'open'
       if (voice) {
-        selection = await tuneVoiceMind(sessionId, modelSelectionOf(opening.value), deep === true)
+        selection = await tuneVoiceMind(sessionId, modelSelectionOf(opening.value), deep === true, openVoice)
         signal.throwIfAborted()
       }
       let content = alienVoice
-        ? [{ type: 'text', text: AUMA_LIVE_ALIEN_VOICE_DIRECTIVE }, { type: 'text', text: ownerText }]
+        ? [{ type: 'text', text: openVoice ? AUMA_LIVE_VOICE_MEDIUM : AUMA_LIVE_ALIEN_VOICE_DIRECTIVE }, { type: 'text', text: ownerText }]
         : [{ type: 'text', text: ownerText }]
       // Sight of her other threads rides every voice turn, after the provenance part (which stays first).
-      if (voice) content = [{ type: 'text', text: voice.roster }, ...content]
+      if (voice) content = [{ type: 'text', text: voice.roster }, ...(openVoice && voice.map ? [{ type: 'text', text: voice.map }] : []), ...content]
       if (spoken) {
-        const journal = await journalSpokenTurn(requestId, ownerText, signal)
+        // A turn the edge journaled itself arrives with its turn id and is not journaled a second time.
+        const journal = edgeTurnId ? { kind: 'journaled', turnId: edgeTurnId } : await journalSpokenTurn(requestId, ownerText, signal)
         signal.throwIfAborted()
         if (journal.kind === 'refused') {
+          noteVoice('journal-refused')
           await iterator.return?.().catch(() => {})
           return { reason: 'voice-journal-refused', text: '', message: journal.message }
         }
@@ -609,7 +914,10 @@ export function createGenesisLive({
           voiceTurnIdSent = journal.turnId
           onMark?.({ v: 'journaled' })
         }
-        content = [{ type: 'text', text: journal.kind === 'journaled' ? VOICE_PROVENANCE : VOICE_PROVENANCE_UNJOURNALED }, ...content]
+        const provenance = journal.kind === 'journaled'
+          ? (openVoice ? VOICE_PROVENANCE_OPEN : VOICE_PROVENANCE)
+          : (openVoice ? VOICE_PROVENANCE_UNJOURNALED_OPEN : VOICE_PROVENANCE_UNJOURNALED)
+        content = [{ type: 'text', text: provenance }, ...content]
       }
       promptSent = true
       signal.addEventListener('abort', fence)
@@ -620,6 +928,7 @@ export function createGenesisLive({
       onMark?.({ v: 'accepted', promptBytes: content.reduce((sum, part) => sum + utf8Bytes(part.text), 0) })
     } catch (error) {
       if (signal.aborted) fence()
+      else if (voice) noteVoice('prompt-failed')
       if (voiceTurnIdSent && signal.aborted) cancelSpokenTurn(voiceTurnIdSent)
       signal.removeEventListener('abort', fence)
       await iterator.return?.().catch(() => {})
@@ -771,20 +1080,42 @@ export function createGenesisLive({
         controller.close()
       },
     }), { headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-auma-live-session': encodeURIComponent(session) } })
-    const refuse = sentence => said([{ t: 'tok', v: sentence }, { t: 'done', reason: VOICE_LOOK_ONLY_REFUSED, message: sentence }], sessionId)
+    const refuse = (sentence, reason = VOICE_LOOK_ONLY_REFUSED) => said([{ t: 'tok', v: sentence }, { t: 'done', reason, message: sentence }], sessionId)
     // WHICH THREAD THIS TURN GOES TO, decided before anything is sent. A turn for her voice home (or for a home the worker
     // refused, which this page replaced) goes to the voice home the worker confirms look-only; a spoken turn for any other
     // thread is refused in words; a typed turn for another thread goes there unchanged.
+    // VOICE LEVEL open: a spoken turn goes to the home found or made (findOpenHome), whichever thread the page named; a
+    // typed turn naming another thread goes there unchanged; nothing here says the look-only sentence.
     let target = sessionId
     let lookOnly = null
+    let level = 'unknown'
     try {
       // A typed turn for a thread that cannot be her voice home goes there unchanged: no home is resolved, made or waited
       // on for it (typed Canvas turns stay where they are).
       const typedElsewhere = !spoken && !(await untilAborted(mayBeVoiceHome(sessionId), signal))
-      if (!typedElsewhere) {
+      if (!typedElsewhere) level = await untilAborted(askVoiceLevel(), signal)
+      if (!typedElsewhere && level === 'unreachable') {
+        const down = unreachable()
+        return refuse(down.say, down.reason)
+      }
+      if (!typedElsewhere && level === 'open') {
+        const opened = await openOpenVoice(signal)
+        // Her most recent ordinary thread (the last fallback) takes a spoken turn only: a typed one goes where it was named.
+        const homeForTyped = opened.kind === 'ready' && !opened.fallback && opened.sessionId === sessionId
+        if (opened.kind === 'ready' && (spoken || homeForTyped || unprovenHomes.has(sessionId))) {
+          lookOnly = opened
+          target = opened.sessionId
+        } else if (spoken) {
+          return refuse(opened.say ?? voiceHomeNoneSay([]), VOICE_HOME_UNAVAILABLE)
+        }
+      } else if (!typedElsewhere) {
         let home = ''
         try { home = await untilAborted(ensureVoiceSession(), signal) } catch { if (signal.aborted) throw signal.reason ?? new Error('aborted') }
-        if (!home) return refuse(VOICE_UNCONFIRMED_SAY)
+        if (!home && transportFailed) {
+          const down = unreachable()
+          return refuse(down.say, down.reason)
+        }
+        if (!home) { noteVoice('home-missing'); return refuse(VOICE_UNCONFIRMED_SAY) }
         if (sessionId === home || unprovenHomes.has(sessionId)) {
           const confirmed = await confirmLookOnly(home, signal)
           if (confirmed.kind !== 'ready') return refuse(confirmed.say)
@@ -795,8 +1126,11 @@ export function createGenesisLive({
         }
       }
     } catch {
-      if (!signal.aborted) return refuse(VOICE_UNCONFIRMED_SAY)
-      return said([{ t: 'done', reason: 'aborted' }], sessionId)
+      if (signal.aborted) return said([{ t: 'done', reason: 'aborted' }], sessionId)
+      if (transportFailed) return refuse(VOICE_UNREACHABLE_SAY, VOICE_RUNTIME_UNREACHABLE)
+      if (level !== 'open') return refuse(VOICE_UNCONFIRMED_SAY)
+      noteVoice('home-exception')
+      return refuse(voiceHomeNoneSay(['home-exception']), VOICE_HOME_UNAVAILABLE)
     }
     const headers = new Headers({
       'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store',
@@ -842,6 +1176,9 @@ export function createGenesisLive({
 
   return {
     streamTurn,
+    bridgedSpokenTurn,
+    arrivalTurn,
+    voiceLevel: askVoiceLevel,
     async fetch(input, init) {
       const url = new URL(input, globalThis.location?.origin ?? 'http://localhost')
       if (url.pathname === MINDS_PATH && (!init?.method || init.method === 'GET')) return minds()
@@ -856,7 +1193,10 @@ let fenceListener = null
 export function genesisLiveFetch(nativeFetch, announceFence) {
   if (!defaultLive) defaultLive = createGenesisLive({ transport: defaultTransport(), nativeFetch, announceFence: outcome => fenceListener?.(outcome) })
   if (announceFence) fenceListener = announceFence
-  return Object.assign(defaultLive.fetch, { streamTurn: defaultLive.streamTurn })
+  return Object.assign(defaultLive.fetch, {
+    streamTurn: defaultLive.streamTurn, bridgedSpokenTurn: defaultLive.bridgedSpokenTurn,
+    arrivalTurn: defaultLive.arrivalTurn, voiceLevel: defaultLive.voiceLevel,
+  })
 }
 
 export { PROVIDER as GENESIS_PROVIDER, CLASSES as GENESIS_VOICE_CLASSES }

@@ -1,10 +1,20 @@
 /** Owner-only cloud brokers. Variable web targets require a separate public-only transport; mirror data never becomes publication input. */
 import { canonicalJson } from './owner-grant-policy.mjs'
+import { primeConfigured } from './provider-budget.mjs'
+import { reserveRunnerMinutesAtHead } from './runner-budget-broker.mjs' //
 import { EDGE_DIAGNOSTIC_LIMITS, projectDiagnostics } from './edge-diagnostics.mjs'
 import { validStateDiffBase, validMirrorIdentity, projectHeadStateDiff } from './state-diff.mjs'
 import { isDeployInertRepoPath } from '../../ci/deploy-paths.mjs'
 import { PROPOSAL_PATH_NEXTS, caseTwinPaths, isPlainRepoPath, proposalPathRefusal } from '../../ci/frozen-paths.mjs'
 import { headProblem, mirrorCopyRefusals, referencedModules, serializeHead, sha256Hex } from '../../ci/mirror-copy.mjs'
+import { classifyCloudflareRequest, cloudflareAnswerCarriesCredential, cloudflareProtectionShape, cloudflareStagedBytes, liveDurableObjectIds, liveWorkerFacts, normalHost, cloudflareAuth, cloudflareAuthKind, cloudflareDoorLevel, cloudflareDoorStatus, credentialShaped, CLOUDFLARE_DOOR_LIMITS, CLOUDFLARE_LIVE_HOME, CLOUDFLARE_NEXT, CLOUDFLARE_PROTECTED_REASONS } from './cloudflare-door.mjs'
+import { isReaderWindow, readerWindowRefusalResponse } from './reader-window.mjs'
+
+const REPO_READER_READ_ACTIONS = Object.freeze([
+  'status', 'diagnostics', 'selftest', 'tree', 'read', 'log', 'diff',
+  'search', 'compare_files', 'bytes', 'state_diff',
+  'exec_runs', 'exec_run', 'exec_logs', 'exec_artifacts',
+]) // Closed read inventory for reader windows
 
 const REPOSITORY = 'your_org_x/your-node'
 const BRANCH = 'main'
@@ -35,8 +45,13 @@ const liveMirrorPath = path => path.startsWith('mirror/home/auma/') || documentP
 const canonicalPath = path => typeof path === 'string' && path.length > 0 && path.length <= 1024
   && !/[\\%?#\u0000-\u0020\u007f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && !privatePart(part))
 
-/** Fixed byte/time ceilings apply to complete streams, not only declared Content-Length. */
-export const CLOUD_BROKER_LIMITS = Object.freeze({ requestBytes: 256 * 1024, responseBytes: 256 * 1024, fileBytes: 64 * 1024, publicationBytes: 128 * 1024, files: 16, timeoutMs: 10000 })
+/** Fixed byte/time ceilings apply to complete streams, not only declared Content-Length.
+ * A broker call's time went from 10 s to 30 s. `merge_proposal` keeps 10 s
+ * (`mergeTimeoutMs`): HEAD's REPO_MERGE_ACTION_DEADLINE_MS (head-do.mjs) is that same number and decides when an
+ * attempt is reconciled, so the merge clock moves only with HEAD's.
+ * Those 10 s are the ACT window, which starts at begin_merge (his approval consumed); the
+ * reads before it have their own window, MERGE_READ_WINDOW_MS, and the two with the settle grace fit `timeoutMs`. */
+export const CLOUD_BROKER_LIMITS = Object.freeze({ requestBytes: 256 * 1024, responseBytes: 256 * 1024, fileBytes: 64 * 1024, publicationBytes: 128 * 1024, files: 16, timeoutMs: 30000, mergeTimeoutMs: 10000 })
 
 /** Repository source reads allow 512 KiB decoded, including the core runtime loader. */
 export const CLOUD_REPO_READ_LIMITS = Object.freeze({
@@ -45,19 +60,51 @@ export const CLOUD_REPO_READ_LIMITS = Object.freeze({
   encodedResponseBytes: Math.ceil(512 * 1024 / 3) * 4 + 32 * 1024,
   // JSON escapes plus the GitHub broker's nested stdout copy and bounded metadata.
   responseBytes: 13 * 512 * 1024 + 16 * 1024,
+  /** A ranged read's `length`, at most (was 524,288). The answer still carries at most the file read
+   * above (fileBytes) and says where the next range starts (`nextOffset`). */
+  rangeLength: 2 * 1024 * 1024,
+  /** `compare_files`, each side (was 256 KiB). Each side is also one file read, bounded by fileBytes. */
+  compareSideBytes: 1024 * 1024,
 })
 
-/** Private source drafts/commits support core files without enlarging legacy main publication. */
-export const CLOUD_REPO_BRANCH_LIMITS = Object.freeze({ fileBytes: 512 * 1024, publicationBytes: 1024 * 1024, requestBytes: 6 * 1024 * 1024 + 32 * 1024 })
+/** `log` (10 commits became 100, GitHub's own page size). GitHub's answer for 100 commits is read up to
+ * `upstreamBytes`; her answer keeps the newest commits that fit `answerBytes` (under the 256 KiB broker answer) and says so. */
+export const CLOUD_REPO_LOG_LIMITS = Object.freeze({ commits: 100, defaultCommits: 10, upstreamBytes: 4 * 1024 * 1024, answerBytes: 224 * 1024 })
+
+/** Private source drafts/commits support core files without enlarging legacy main publication.
+ * A private commit holds 64 files and 4 MiB (were 16 and 1 MiB). The request bound
+ * moved in step, under the 16 MiB door body: 3x the content plus 32 KiB (was 6x for 1 MiB), room for every byte to be a
+ * quote, backslash or newline; content that escapes past that is refused before it is sent. One file stays 512 KiB:
+ * files are read back through GitHub's contents API (githubFileAt), which carries content only up to 1 MB. */
+export const CLOUD_REPO_BRANCH_LIMITS = Object.freeze({ fileBytes: 512 * 1024, publicationBytes: 4 * 1024 * 1024, files: 64, requestBytes: 3 * 4 * 1024 * 1024 + 32 * 1024 })
 
 /** Exact-byte inspection admits whole safe UTF-8 source files before exposing any slice or digest. */
 export const CLOUD_REPO_BYTE_LIMITS = Object.freeze({ sliceBytes: 4096, defaultSliceBytes: 256 })
 
-/** A recursive GitHub tree is one bounded response, never a recursive fetch loop. */
-export const CLOUD_REPO_TREE_LIMITS = Object.freeze({ responseBytes: 12 * 1024 * 1024, entries: 50000, returnedEntries: 1000, projectedBytes: 96 * 1024 })
+/** A recursive GitHub tree is one bounded response, never a recursive fetch loop.
+ * x6_repo `tree` returns up to 4,000 entries (was 1,000) within `treeProjectedBytes` (224 KiB, under the
+ * 256 KiB broker answer; was the shared 96 KiB). An entry carries its 40-hex sha, so the byte bound is met first, at
+ * roughly 2,000 to 3,000 entries; `truncated` says so and `prefix` narrows. The x6_github trees answer, which carries the
+ * tree twice (json and stdout), keeps 1,000 and 96 KiB (`apiReturnedEntries`, `projectedBytes`); `projectedBytes` still
+ * bounds `search`. */
+export const CLOUD_REPO_TREE_LIMITS = Object.freeze({ responseBytes: 12 * 1024 * 1024, entries: 50000, returnedEntries: 4000, apiReturnedEntries: 1000, projectedBytes: 96 * 1024, treeProjectedBytes: 224 * 1024 })
 
-/** Search and proposal inspection never silently convert incomplete evidence to success. */
-export const CLOUD_REPO_PROPOSAL_LIMITS = Object.freeze({ files: 100, bytes: 96 * 1024, inspectedBytes: 4 * 1024 * 1024, searchFiles: 128, searchBytes: 4 * 1024 * 1024, searchMatches: 200, logBytes: 2 * 1024 * 1024, logTailBytes: 128 * 1024 })
+/** Search and proposal inspection never silently convert incomplete evidence to success.
+ * `logTailBytes` is the Actions log tail measured as it sits in her answer (JSON-escaped): 252 KiB, so the whole job-log
+ * answer, which carries the log once (json.log; stdout only names it), stays within the 256 KiB broker answer. */
+export const CLOUD_REPO_PROPOSAL_LIMITS = Object.freeze({ files: 100, bytes: 96 * 1024, inspectedBytes: 4 * 1024 * 1024, searchFiles: 128, searchBytes: 4 * 1024 * 1024, searchMatches: 200, logBytes: 2 * 1024 * 1024, logTailBytes: 252 * 1024 })
+
+/** The newest whole characters of `text` whose JSON-escaped UTF-8 size fits `budget` bytes (quotes not counted). */
+function escapedTail(text, budget) {
+  let start = text.length, used = 0
+  while (start > 0) {
+    const unit = text.charCodeAt(start - 1), pair = unit >= 0xdc00 && unit <= 0xdfff && start > 1 && text.charCodeAt(start - 2) >= 0xd800 && text.charCodeAt(start - 2) <= 0xdbff
+    const cost = pair ? 4 : unit === 0x22 || unit === 0x5c || [0x08, 0x09, 0x0a, 0x0c, 0x0d].includes(unit) ? 2 : unit < 0x20 || unit >= 0xd800 && unit <= 0xdfff ? 6 : unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3
+    if (used + cost > budget) break
+    used += cost; start -= pair ? 2 : 1
+  }
+  return text.slice(start)
+}
 
 function repoPathAllowed(path) {
   return canonicalPath(path) && (sourceFile(path) || path.includes('/') && sourceRoots.has(path.split('/')[0]) || liveMirrorPath(path))
@@ -152,21 +199,30 @@ export function isT2ProtectedRepoPath(path) {
   return false
 }
 
+/** The outward-write secret screen safeText applies, as a predicate: true when the text carries a secret shape or a
+ * configured secret's value. the wake: her wake notes are screened by this same function (head-do.mjs appendWakeNote). */
+export function outwardTextCarriesSecret(text, env) {
+  if (/-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:cfk|cfut|cfat)_[A-Za-z0-9_-]{16,})\b|["'](?:seedHex|privateKey(?:Hex|Pkcs8|Jwk)?|secretKey(?:Hex)?|access_token|refresh_token|client_secret)["']\s*:/i.test(text)) return true
+  // Error and content echoes from an upstream must not reveal any configured secret.
+  for (const [key, value] of Object.entries(env)) if (/(?:TOKEN|SECRET|PASSWORD|API_KEY)$|(?:^|_)(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|SIGNING_KEY|CREDENTIAL)(?:_|$)/.test(key) && typeof value === 'string' && value && text.includes(value)) return true
+  return false
+}
+
 function safeText(text, env, maximum = CLOUD_BROKER_LIMITS.fileBytes) {
   if (typeof text !== 'string' || size(text) > maximum || /[\u0000]/.test(text)) fail('BROKER_CONTENT_INVALID', 502)
-  if (/-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b|["'](?:seedHex|privateKey(?:Hex|Pkcs8|Jwk)?|secretKey(?:Hex)?|access_token|refresh_token|client_secret)["']\s*:/i.test(text)) fail('BROKER_PRIVATE_CONTENT_REFUSED', 403)
-  // Error and content echoes from an upstream must not reveal any configured secret.
-  for (const [key, value] of Object.entries(env)) if (/(?:TOKEN|SECRET|PASSWORD|API_KEY)$|(?:^|_)(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|SIGNING_KEY|CREDENTIAL)(?:_|$)/.test(key) && typeof value === 'string' && value && text.includes(value)) fail('BROKER_PRIVATE_CONTENT_REFUSED', 403)
+  if (outwardTextCarriesSecret(text, env)) fail('BROKER_PRIVATE_CONTENT_REFUSED', 403)
   return text
 }
 
-async function boundedBytes(source, maximum, signal) {
+/** The body, at most `maximum` bytes. With `keep` below `maximum` only its newest `keep` bytes are held (the exec door exec logs: a
+ * rolling tail), and `onTotal` hears how many bytes went by. */
+async function boundedBytes(source, maximum, signal, { keep = maximum, onTotal } = {}) {
   const declared = source.headers.get('content-length')
   if (declared !== null && (!/^(0|[1-9][0-9]*)$/.test(declared) || !Number.isSafeInteger(Number(declared)))) fail('BROKER_BODY_INVALID')
   if (declared !== null && Number(declared) > maximum) fail('BROKER_BODY_TOO_LARGE', 413)
   const reader = source.body?.getReader()
   if (!reader) fail('BROKER_BODY_INVALID')
-  const chunks = []; let bytes = 0
+  const chunks = []; let bytes = 0, held = 0
   let rejectAbort
   const aborted = new Promise((resolve, reject) => { rejectAbort = () => { reject(Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408 })); void reader.cancel().catch(_error => {}) } })
   signal.addEventListener('abort', rejectAbort, { once: true })
@@ -177,12 +233,14 @@ async function boundedBytes(source, maximum, signal) {
       if (done) break
       bytes += value.byteLength
       if (bytes > maximum) { void reader.cancel().catch(_error => {}); fail('BROKER_BODY_TOO_LARGE', 413) }
-      chunks.push(value)
+      chunks.push(value); held += value.byteLength
+      while (chunks.length > 1 && held - chunks[0].byteLength >= keep) held -= chunks.shift().byteLength
     }
     if (declared !== null && (!source.headers.has('content-encoding') || source.headers.get('content-encoding') === 'identity') && Number(declared) !== bytes) fail('BROKER_BODY_INVALID')
-    const joined = new Uint8Array(bytes); let offset = 0
+    onTotal?.(bytes)
+    const joined = new Uint8Array(held); let offset = 0
     for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.length }
-    return joined
+    return held > keep ? joined.slice(held - keep) : joined
   } finally { signal.removeEventListener('abort', rejectAbort); reader.releaseLock() }
 }
 
@@ -199,13 +257,13 @@ async function boundedJson(source, maximum, signal, observeBytes) {
  * settle its own bookkeeping, and ITS answer is the answer: a merge cut off before sending says in the same call that the
  * approval is spent and nothing changed (nothing runs after the response, there is no waitUntil).
  */
-async function withDeadline(signal, operation, { settleMs = 0 } = {}) {
+async function withDeadline(signal, operation, { settleMs = 0, timeoutMs = CLOUD_BROKER_LIMITS.timeoutMs } = {}) {
   const controller = new AbortController()
   let timeout, grace, onAbort
   const aborted = new Promise((resolve, reject) => {
     const refuse = () => reject(Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408 }))
     onAbort = () => { controller.abort(); if (settleMs <= 0) refuse(); else grace ??= setTimeout(refuse, settleMs) }
-    timeout = setTimeout(onAbort, CLOUD_BROKER_LIMITS.timeoutMs)
+    timeout = setTimeout(onAbort, timeoutMs)
     signal?.addEventListener('abort', onAbort, { once: true })
   })
   try {
@@ -292,8 +350,9 @@ async function selftest(env, context) {
   let meta, buildInfoState = 'available'
   try { meta = metadata(env) }
   catch (_error) { meta = { runtime: 'cloudflare', sourceRevision: 'UNVERIFIED', buildInfo: {} }; buildInfoState = 'invalid' }
-  const providerDoors = Object.fromEntries(['deepseek', 'moonshot', 'moonshot-cn', 'openrouter', 'openai', 'anthropic', 'xai']
-    .map(name => [name, configured(env[name.toUpperCase().replace('-', '_') + '_API_KEY'])]))
+  // Prime is configured only with all five of its settings, not its key alone.
+  const providerDoors = Object.fromEntries(['deepseek', 'moonshot', 'moonshot-cn', 'openrouter', 'openai', 'anthropic', 'xai', 'prime']
+    .map(name => [name, name === 'prime' ? primeConfigured(env) : configured(env[name.toUpperCase().replace('-', '_') + '_API_KEY'])]))
   const ok = buildInfoState === 'available' && [head, mirror, aumlok].every(item => item.state === 'available')
   const githubConfigured = configured(env.GITHUB_TOKEN)
   const cloudflareConfigured = configured(env.CLOUDFLARE_API_TOKEN)
@@ -502,7 +561,7 @@ function regularFile(tree, path, allowMissing = false) {
   return entry
 }
 
-async function repositoryTree(prefix, env, networkFetch, signal) {
+async function repositoryTree(prefix, env, networkFetch, signal, { entryLimit = CLOUD_REPO_TREE_LIMITS.returnedEntries, byteLimit = CLOUD_REPO_TREE_LIMITS.treeProjectedBytes } = {}) {
   if (prefix !== undefined && (!canonicalPath(prefix) || !(sourceRoots.has(prefix) || remotePathAllowed(prefix)))) fail('REPO_PATH_REFUSED', 403)
   const tree = await readTree('main', env, networkFetch, signal), entries = []
   let matched = 0, projectedBytes = 0
@@ -514,9 +573,9 @@ async function repositoryTree(prefix, env, networkFetch, signal) {
     matched++
     const projected = { path: entry.path, type: entry.type, sha: entry.sha, ...(entry.size === undefined ? {} : { size: entry.size }) }
     const bytes = size(JSON.stringify(projected)) + 1
-    if (entries.length < CLOUD_REPO_TREE_LIMITS.returnedEntries && projectedBytes + bytes <= CLOUD_REPO_TREE_LIMITS.projectedBytes) { entries.push(projected); projectedBytes += bytes }
+    if (entries.length < entryLimit && projectedBytes + bytes <= byteLimit) { entries.push(projected); projectedBytes += bytes }
   }
-  return { branch: BRANCH, treeSha: tree.sha, entries, filtered: true, truncated: tree.truncated || matched > entries.length, upstreamTruncated: tree.truncated, limit: CLOUD_REPO_TREE_LIMITS.returnedEntries, byteLimit: CLOUD_REPO_TREE_LIMITS.projectedBytes }
+  return { branch: BRANCH, treeSha: tree.sha, entries, filtered: true, truncated: tree.truncated || matched > entries.length, upstreamTruncated: tree.truncated, limit: entryLimit, byteLimit }
 }
 
 function projectCommit(value, env) {
@@ -524,8 +583,8 @@ function projectCommit(value, env) {
   return { sha: value.sha, message: safeText(value.commit.message, env, 8192), parentSha: Array.isArray(value.parents) && value.parents.length === 1 && SHA.test(value.parents[0]?.sha) ? value.parents[0].sha : null, url: `https://github.com/${REPOSITORY}/commit/${value.sha}` }
 }
 
-async function commits(env, networkFetch, signal, limit = 10) {
-  const value = await github(env, networkFetch, `/commits?sha=main&per_page=${limit}`, signal)
+async function commits(env, networkFetch, signal, limit = CLOUD_REPO_LOG_LIMITS.defaultCommits, ref = 'main') {
+  const value = await github(env, networkFetch, `/commits?sha=${encodeURIComponent(ref)}&per_page=${limit}`, signal, CLOUD_REPO_LOG_LIMITS.upstreamBytes)
   if (!Array.isArray(value) || !value.length || value.length > limit) fail('BROKER_RESPONSE_INVALID', 502)
   return value.map(item => projectCommit(item, env))
 }
@@ -648,6 +707,9 @@ const ordered = values => [...values].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
 const exactFields = (input, fields) => { if (Object.keys(input).some(key => !fields.includes(key))) fail('BROKER_QUERY_INVALID') }
 
 function requireOwner(env, context) {
+  // The wake-mandate actor (module-private, built only by cloudWakeMandateAct) passes this check for exactly
+  // the act it is running (branch_create, commit or apply_patch on her own branch); never for anything else.
+  if (context.principal === WAKE_MANDATE_ACTOR && WAKE_MANDATE_OWNER_STEPS.includes(context.wakeMandateStep)) return
   const access = context.access, now = context.now()
   const email = value => typeof value === 'string' && value.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(value)
   if (access?.type !== 'owner' || !email(access.email) || !email(env.OWNER_EMAIL) || access.email.toLowerCase() !== env.OWNER_EMAIL.toLowerCase()
@@ -730,9 +792,8 @@ async function compareFiles(input, env, context) {
   const pinned = leftSource === 'mirror' && rightSource === 'mirror' ? undefined : await pinnedTree(ref, env, context.networkFetch, context.signal)
   const left = await sourceText(leftPath, leftSource, ref, env, context, pinned)
   const right = await sourceText(rightPath, rightSource, ref, env, context, pinned)
-  // The two-file comparison wire contract stays at 256 KiB per side even though
-  // branch source reads and edits admit larger core implementation files.
-  if (size(left.content) > 256 * 1024 || size(right.content) > 256 * 1024) fail('BROKER_BODY_TOO_LARGE', 413)
+  // Each side up to compareSideBytes (was 256 KiB); each side is one file read, so fileBytes bounds it first.
+  if (size(left.content) > CLOUD_REPO_READ_LIMITS.compareSideBytes || size(right.content) > CLOUD_REPO_READ_LIMITS.compareSideBytes) fail('BROKER_BODY_TOO_LARGE', 413)
   if (left.source === 'mirror' && right.source === 'mirror' && (left.lineageId !== right.lineageId || left.revision !== right.revision)) fail('REPO_MIRROR_CHANGED', 409)
   const { diff } = lineDiff(left.content, right.content, leftPath, rightPath, contextLines)
   return { ok: true, identical: left.content === right.content, leftBytes: size(left.content), rightBytes: size(right.content), diff: safeText(diff, env, 4 * CLOUD_REPO_READ_LIMITS.fileBytes) }
@@ -894,7 +955,7 @@ async function branchOperation(input, env, context) {
     if (!input.oldString) fail('REPO_EDIT_TARGET_EMPTY')
   }
   if (input.action === 'commit') {
-    if (!Array.isArray(input.changes) || !input.changes.length || input.changes.length > CLOUD_BROKER_LIMITS.files) fail('REPO_EXPLICIT_CHANGES_REQUIRED')
+    if (!Array.isArray(input.changes) || !input.changes.length || input.changes.length > CLOUD_REPO_BRANCH_LIMITS.files) fail('REPO_EXPLICIT_CHANGES_REQUIRED')
     files = input.changes.map(change => {
       if (!record(change)) fail('REPO_CHANGE_INVALID')
       exactFields(change, ['path', 'content'])
@@ -921,18 +982,27 @@ async function branchOperation(input, env, context) {
   const message = safeText(input.message, env, 1024)
   if (!message.trim() || /[\r\n]/.test(message)) fail('REPO_COMMIT_MESSAGE_INVALID')
   if (input.dryRun === true) return { ok: true, action: input.action, branch, baseSha: current, dryRun: true, committed: false, paths: files.map(file => file.path) }
+  const commit = await commitOnBranch(branch, current, files, message, env, context)
+  return { ok: true, action: input.action, branch, commit, commitSha: commit, headSha: commit, paths: files.map(file => file.path), stdout: commit, stderr: '' }
+}
+
+/** The one commit to her own branch: GitHub's createCommitOnBranch with `expectedHeadOid` (compare-and-swap), then the
+ * branch head read back. `commit` and `apply_patch` both end here; only apply_patch passes `deletions`. */
+// Commit and apply_patch share the exact expected-head mutation below.
+async function commitOnBranch(branch, current, files, message, env, context, deletions = []) {
   const query = 'mutation X61Publish($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }'
   const additions = files.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0).map(file => ({ path: file.path, contents: btoa(Array.from(encoder.encode(file.content), byte => String.fromCharCode(byte)).join('')) }))
+  const fileChanges = deletions.length ? { additions, deletions: ordered(deletions).map(path => ({ path })) } : { additions }
   requireOwner(env, context)
   if (context.signal.aborted) fail('BROKER_TIMEOUT', 408)
   context.refMutationDispatched = true
   const result = await upstream(context.networkFetch, 'https://api.github.com/graphql', { method: 'POST', headers: githubHeaders(env), body: JSON.stringify({ query, variables: { input: {
-    branch: { repositoryNameWithOwner: REPOSITORY, branchName: branch }, expectedHeadOid: current, message: { headline: message }, fileChanges: { additions },
+    branch: { repositoryNameWithOwner: REPOSITORY, branchName: branch }, expectedHeadOid: current, message: { headline: message }, fileChanges,
   } } }) }, context.signal)
   const commit = result?.data?.createCommitOnBranch?.commit?.oid
   if (result?.errors?.length || !SHA.test(commit)) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
   if (await branchHead(branch, env, context) !== commit) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
-  return { ok: true, action: input.action, branch, commit, commitSha: commit, headSha: commit, paths: files.map(file => file.path), stdout: commit, stderr: '' }
+  return commit
 }
 
 /** Every changed path of a proposal, judged with both trees in hand (stage, merge, branch diff) by the one judgement of
@@ -940,7 +1010,7 @@ async function branchOperation(input, env, context) {
  * has (changed or deleted), and open. Either side of a rename counts (it is a delete and an add here). `pathsOnly` judges
  * names and reads no file. `markFrozen` is for the branch diff, a read: it refuses nothing for the fence and marks each
  * such file with `refused` (its code) and `next` instead (`frozen: true` for a frozen one). */
-async function inspectedChanges(before, after, env, context, allowEmpty = false, { pathsOnly = false, markFrozen = false } = {}) {
+async function inspectedChanges(before, after, env, context, allowEmpty = false, { pathsOnly = false, markFrozen = false, concurrentReads = false } = {}) {
   if (before.tree.truncated || after.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
   const paths = ordered(new Set([...before.tree.entries.keys(), ...after.tree.entries.keys()])), candidates = [], changed = []
   for (const path of paths) {
@@ -964,10 +1034,20 @@ async function inspectedChanges(before, after, env, context, allowEmpty = false,
   if (!changed.length && !allowEmpty) fail('REPO_PROPOSAL_EMPTY', 409)
   if (changed.length > CLOUD_REPO_PROPOSAL_LIMITS.files) fail('REPO_PROPOSAL_TOO_LARGE', 413)
   if (pathsOnly) return changed
+  // ---- MERGE block begin: the merge reads up to MERGE_FILES_AHEAD files at once, both sides of each, and judges them
+  // in the same order with the same byte bound below; a read left ahead of a refusal is cancelled by the read window. ----
+  const ahead = concurrentReads ? [] : null
+  const side = (file, pinned, absent) => settled(file.status === absent ? Promise.resolve('')
+    : githubFileAt(file.path, pinned, env, context.networkFetch, context.signal).then(value => value.content))
+  const fetchAhead = index => { if (ahead && index < changed.length) ahead[index] = [side(changed[index], before, 'added'), side(changed[index], after, 'removed')] }
+  for (let index = 0; index < MERGE_FILES_AHEAD; index++) fetchAhead(index)
+  // ---- MERGE block end ----
   let bytes = 0
-  for (const file of changed) {
-    const left = file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, context.networkFetch, context.signal)).content
-    const right = file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, context.networkFetch, context.signal)).content
+  for (const [index, file] of changed.entries()) {
+    const read = ahead ? ahead[index] : null
+    if (ahead) fetchAhead(index + MERGE_FILES_AHEAD)
+    const left = read ? await judged(read[0]) : file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, context.networkFetch, context.signal)).content
+    const right = read ? await judged(read[1]) : file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, context.networkFetch, context.signal)).content
     bytes += size(left) + size(right)
     if (bytes > CLOUD_REPO_PROPOSAL_LIMITS.inspectedBytes) fail('REPO_PROPOSAL_TOO_LARGE', 413)
     const { additions, deletions } = lineDiff(left, right, file.path, file.path, 0)
@@ -975,6 +1055,52 @@ async function inspectedChanges(before, after, env, context, allowEmpty = false,
   }
   return changed
 }
+
+// ---- MERGE block begin: concurrent reads, judged in order ----
+/** A read started now and judged later: it never rejects, so a read left behind by an earlier refusal is never an
+ * unhandled rejection; `judged` gives its answer or throws its error at the moment the judgement reaches it. */
+const settled = promise => promise.then(value => ({ value }), error => ({ error }))
+const judged = async read => { const result = await read; if (Object.hasOwn(result, 'error')) throw result.error; return result.value }
+/** How many changed files the merge reads at once (each both sides); bounds what is held while judged in order. */
+const MERGE_FILES_AHEAD = 4
+
+/** The merge's evidence up to the fence: proposalEvidence's reads and judgements, in its order, with independent reads
+ * started together. Both refs (a moved branch or main is REPO_HEAD_CONFLICT) -> the comparison and both pinned trees (the
+ * head's tree must be the approved one) -> every changed path judged by the fence, which reads no file. A refusal here
+ * comes before any file, workflow or repository read, as today. Returns both trees for the file reads. */
+async function mergeEvidence(input, env, context) {
+  const { networkFetch, signal } = context
+  const main = settled(branchHead('main', env, context)), branch = settled(branchHead(input.branch, env, context))
+  const baseSha = await judged(main), headSha = await judged(branch)
+  if (input.baseSha !== baseSha || input.headSha !== headSha) fail('REPO_HEAD_CONFLICT', 409)
+  if (baseSha === headSha) fail('REPO_PROPOSAL_EMPTY', 409)
+  // Memory: the comparison (up to 8 MiB) runs beside the base tree (up to 12 MiB); the head tree is
+  // read only after both, so at most two of the three large answers are held at once, as in the sequential order.
+  const comparison = settled(mainComparison(baseSha, headSha, env, networkFetch, signal))
+  const beforeRead = settled(pinnedTree(baseSha, env, networkFetch, signal))
+  await judged(comparison)
+  const before = await judged(beforeRead), after = await pinnedTree(headSha, env, networkFetch, signal)
+  if (input.treeSha !== after.tree.sha) fail('REPO_HEAD_CONFLICT', 409)
+  await inspectedChanges(before, after, env, context, false, { pathsOnly: true })
+  return { before, after }
+}
+
+/** The base (main's head when it was staged) of the repo proposal HEAD holds staged, read from HEAD's own status
+ * (/_head/promotion-status: internal, by bootstrap seed, as the card reads it); null when none is staged or the read
+ * fails in any way. Used by sync_head_to_github only, which then behaves as before. */
+async function stagedProposalBase(env, context, signal) {
+  try {
+    const status = await withDeadline(signal, async limited => {
+      const response = await env.HEAD.get(env.HEAD.idFromName('node-main-v1')).fetch(new Request('https://x61.internal/_head/promotion-status', {
+        headers: { 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': context.bootstrap.head.seedId }, signal: limited }))
+      if (!response.ok) fail('HEAD_READ_FAILED', 502)
+      return await boundedJson(response, 8 * 1024 * 1024, limited)
+    })
+    const base = status?.ok === true ? status.stagedRepoProposal?.mergeBody?.baseSha : null
+    return typeof base === 'string' && SHA.test(base) ? base : null
+  } catch (_error) { return null }
+}
+// ---- MERGE block end ----
 
 async function proposalEvidence(branch, env, context, expected) {
   const baseSha = await branchHead('main', env, context), headSha = await branchHead(branch, env, context)
@@ -1049,10 +1175,13 @@ async function workflowCi(workflow, branch, headSha, env, context) {
  * else 'pending'. stage_proposal shows this same combined state, and merge_proposal reads it before the passkey.
  * @returns {Promise<'passed'|'pending'|'failed'|'none'>}
  */
-async function proposalCi(branch, headSha, env, context) {
+async function proposalCi(branch, headSha, env, context, { concurrent = false } = {}) {
+  // The merge reads both workflows at once; they are judged here in this same order (a failed one first
+  // reached is the answer, whatever a later one says, as when the later one was never read).
+  const reads = concurrent ? PROPOSAL_CI_WORKFLOWS.map(workflow => settled(workflowCi(workflow, branch, headSha, env, context))) : null
   const states = []
-  for (const workflow of PROPOSAL_CI_WORKFLOWS) {
-    const state = await workflowCi(workflow, branch, headSha, env, context)
+  for (const [index, workflow] of PROPOSAL_CI_WORKFLOWS.entries()) {
+    const state = reads ? await judged(reads[index]) : await workflowCi(workflow, branch, headSha, env, context)
     if (state === 'failed') return 'failed'
     states.push(state)
   }
@@ -1106,6 +1235,22 @@ async function stageProposal(input, env, context) {
   await headProposal({ action: 'stage', proposal }, env, context)
   return { ok: true, action: input.action, proposal }
 }
+
+// ---- MERGE block begin: withdraw_proposal ----
+/** The staged merge card taken back: { action: 'withdraw_proposal', branch, headSha } names the card (HEAD refuses
+ * REPO_PROPOSAL_CHANGED when another one is staged). The owner session as for stage_proposal; no passkey: it spends
+ * nothing and merges nothing, and an attempt pending or held is refused by HEAD with its own code. A reader window never
+ * reaches here (not in REPO_READER_READ_ACTIONS: refused at the boundary like every other write). */
+async function withdrawProposal(input, env, context) {
+  requireOwner(env, context)
+  exactFields(input, ['action', 'branch', 'headSha', 'ownerSession'])
+  if (!validProposalBranch(input.branch) || typeof input.headSha !== 'string' || !SHA.test(input.headSha)
+    || (input.ownerSession !== undefined && input.ownerSession !== true)) fail('REPO_PROPOSAL_INVALID')
+  const value = await headProposal({ action: 'withdraw', branch: input.branch, headSha: input.headSha }, env, context)
+  return value.withdrawn === true ? { ok: true, action: input.action, withdrawn: true, branch: input.branch, headSha: input.headSha }
+    : { ok: true, action: input.action, withdrawn: false, code: 'REPO_PROPOSAL_NOT_STAGED' }
+}
+// ---- MERGE block end ----
 
 /**
  * Whether `headSha` is an ancestor of `mainSha` (SHOULD 1): ONE call to GitHub's compare endpoint, bounded by this
@@ -1231,12 +1376,13 @@ async function reconcileReleasedAll(env, context) {
  * merge goes on as before. Only for the same branch, base, head and tree, so another proposal's merge pays no extra read.
  * A released record HEAD cannot read is left alone here: it is advisory, and the merge's own reads still decide.
  */
-async function mergedAfterRelease(input, env, context) {
+async function mergedAfterRelease(input, env, context, seen = {}) {
   let releases
   try { releases = await keptReleases(env, context) } catch (_error) { return null }
   // Review, MUST 2: the kept release of this very merge, by its terms, whichever release is newest.
   const released = releases.find(item => item.state === 'void-by-owner' && ['branch', 'baseSha', 'headSha', 'treeSha'].every(key => item[key] === input[key]))
   if (!released) return null
+  seen.release = true // This call is now reading an earlier merge, which may have moved main
   const result = await reconcileReleased(released, env, context)
   if (result?.reconciled !== true || result.outcome?.status !== 'succeeded' || result.outcome.commitSha !== input.headSha) return null
   return { ok: true, action: 'merge_proposal', commitSha: input.headSha, branch: input.branch, treeSha: input.treeSha, attemptId: released.attemptId, resumed: true, mergedAfterRelease: true }
@@ -1280,13 +1426,35 @@ async function releaseAttempt(input, env, context) {
 /** What to do when a merge attempt ended after his approval was spent but before main could move (MUST 5). */
 export const APPROVAL_SPENT_VOID_NEXT = 'his approval for this merge was spent and main did not move: stage_proposal again and ask him for a new passkey'
 /** Time the steps after the reads need (attempt claimed with his approval, mark, ref update, bookkeeping). With less
- * left, the merge stops before anything is claimed or spent. */
+ * left, the merge stops before anything is claimed or spent. the merge card: the act window is a fresh mergeTimeoutMs from
+ * begin_merge, so a full one always leaves it; the check stays for an act window the call's own end would cut short. */
 export const MERGE_AFTER_READS_RESERVE_MS = 3000
 /** Bookkeeping that settles an attempt after this call's own deadline fired gets its own short limit (HEAD only). */
 const SETTLE_TIMEOUT_MS = 3000
 /** How long a merge cut off by its deadline may take to settle its own attempt before the answer (one HEAD call, at most
  * SETTLE_TIMEOUT_MS, follows the cut on every path), so its answer is the truthful one, not a bare 408. */
 export const MERGE_SETTLE_GRACE_MS = SETTLE_TIMEOUT_MS + 1000
+
+// ---- MERGE block begin: two windows ----
+/** The READ window. Every read before his approval is consumed (an earlier attempt, a kept
+ * release, the evidence, both workflows, the repository id) must end within this long of the call's start, or the call
+ * answers 408 BROKER_TIMEOUT with phase 'reads': nothing was claimed, spent or sent. Then the ACT window, the 10 s of
+ * mergeTimeoutMs (HEAD's REPO_MERGE_ACTION_DEADLINE_MS), starts at begin_merge. Read window + act window + settle grace
+ * = 16 + 10 + 4 = 30 s, the broker's timeoutMs: the whole call never takes longer than any other bounded call. */
+export const MERGE_READ_WINDOW_MS = 16000
+/** A window inside the merge call: its signal aborts `ms` from now (never past `cap`, the call's own end) or with
+ * `parent`; `close` clears its timer. */
+function mergeWindow(parent, ms, cap) {
+  const controller = new AbortController(), deadlineAt = Math.min(Date.now() + ms, cap), abort = () => controller.abort()
+  const timer = setTimeout(abort, Math.max(0, deadlineAt - Date.now()))
+  if (parent?.aborted) abort(); else parent?.addEventListener('abort', abort, { once: true })
+  return { signal: controller.signal, deadlineAt, abort, close: () => { clearTimeout(timer); parent?.removeEventListener('abort', abort) } }
+}
+/** The 408 of a merge that ended before begin_merge. With `facts` (this call found no earlier attempt and read no
+ * release of an earlier merge, so nothing it touched can have moved main) it carries closed facts, true by construction:
+ * nothing was sent to HEAD's approval store or to GitHub's refs by this call. Otherwise a plain 408. */
+const readsTimeout = facts => Object.assign(new Error('BROKER_TIMEOUT'), { code: 'BROKER_TIMEOUT', status: 408, ...(facts ? { phase: 'reads', approvalSpent: false, mainMoved: false } : {}) })
+// ---- MERGE block end ----
 
 /**
  * An earlier attempt meets a new merge call (MUST 3b and d). A call for ANOTHER proposal is refused. For the same
@@ -1340,31 +1508,82 @@ function mergeAttemptFacts(code, error) {
  * old value) -> its bookkeeping. After consumption nothing but the mark, the ref update and its bookkeeping remain, and
  * every exit is settled truthfully by this call: before anything is sent, void (REPO_APPROVAL_SPENT_VOID, approve again);
  * after, unknown until GitHub says.
+ * Everything before begin_merge runs in the READ window (MERGE_READ_WINDOW_MS; its 408 says phase 'reads',
+ * approvalSpent false, mainMoved false); begin_merge and everything after it run in the ACT window, mergeTimeoutMs from
+ * begin_merge, HEAD's REPO_MERGE_ACTION_DEADLINE_MS. Independent reads run together; judgements keep the order above.
  */
 async function mergeProposal(input, env, context) {
   requireOwner(env, context)
   exactFields(input, ['action', 'baseSha', 'branch', 'headSha', 'treeSha'])
   if (Object.keys(input).length !== 5 || !validAumaBranch(input.branch) || ![input.baseSha, input.headSha, input.treeSha].every(value => SHA.test(value))) fail('REPO_PROPOSAL_INVALID')
+  // ---- MERGE block begin: the read window ----
+  const call = context.signal, callEnd = Number.isFinite(context.deadlineAt) ? context.deadlineAt : Date.now() + MERGE_READ_WINDOW_MS + CLOUD_BROKER_LIMITS.mergeTimeoutMs
   const binding = await mergeBinding(input, context)
   const approvalToken = context.request?.headers.get('x-x6-class3-approval') ?? null
-  const pending = await pendingMergeAttempt(env, context)
-  const earlier = pending ? await settleEarlierAttempt(pending, input, binding, env, context) : null
-  if (earlier?.result) return earlier.result
-  // Review: a merge he released that GitHub now shows in main is merged, not a conflict and not a second spend.
-  const landed = pending ? null : await mergedAfterRelease(input, env, context)
-  if (landed) return landed
-  if (!approvalToken) fail(earlier?.voided ? 'REPO_APPROVAL_SPENT_VOID' : 'CLASS3_WEBAUTHN_REQUIRED', earlier?.voided ? 409 : 403)
-  // Every read before his approval: the fence (frozen, open, plain) is judged inside, so a refused path, a moved branch
-  // or a red workflow leaves his approval unspent. The card's ciStatus is the snapshot from stage_proposal; this is now.
-  await proposalEvidence(input.branch, env, context, input)
-  const ciStatus = await proposalCi(input.branch, input.headSha, env, context)
-  if (ciStatus !== 'passed') fail('REPO_PROPOSAL_CI_NOT_PASSED', 409, { ciStatus })
-  const id = await repositoryId(env, context)
-  if (context.signal.aborted || (Number.isFinite(context.deadlineAt) && Date.now() > context.deadlineAt - MERGE_AFTER_READS_RESERVE_MS)) fail('BROKER_TIMEOUT', 408)
+  // ---- reader window begin: reader window cannot settle/mutate earlier merge state without verified begin_merge approval ----
+  if (isReaderWindow(context.request, env) && !approvalToken) fail('READER_WINDOW', 403)
+  // ---- READER-WINDOW end ----
+  // His session must outlast the whole call (both windows and the settling) BEFORE any read spends his time; the same
+  // closed code as the check before begin_merge below, which still covers the act window.
+  if (!Number.isFinite(context.access?.expires) || context.access.expires * 1000 <= context.now() + Math.max(0, callEnd - Date.now()) + MERGE_SETTLE_GRACE_MS) fail('OWNER_SESSION_REQUIRED', 403)
+  const reads = mergeWindow(call, MERGE_READ_WINDOW_MS, callEnd)
+  context.signal = reads.signal; context.deadlineAt = reads.deadlineAt
+  let id
+  // Review: the reads timeout carries its facts only while this call has touched no earlier merge.
+  const seen = { attempt: false, release: false }
+  try {
+    const pending = await pendingMergeAttempt(env, context)
+    // ---- reader window begin (inside the read window, right after the pending-attempt read; HEAD's refusal keeps its code) ----
+    if (pending && isReaderWindow(context.request, env)) fail('REPO_MERGE_PENDING', 409, { outcome: 'unknown', ageMs: pending.ageMs, reconcileAfterMs: pending.reconcileAfterMs })
+    // ---- READER-WINDOW end ----
+    seen.attempt = Boolean(pending)
+    const earlier = pending ? await settleEarlierAttempt(pending, input, binding, env, context) : null
+    if (earlier?.result) return earlier.result
+    // Review: a merge he released that GitHub now shows in main is merged, not a conflict and not a second spend.
+    const landed = pending ? null : await mergedAfterRelease(input, env, context, seen)
+    if (landed) return landed
+    if (!approvalToken) fail(earlier?.voided ? 'REPO_APPROVAL_SPENT_VOID' : 'CLASS3_WEBAUTHN_REQUIRED', earlier?.voided ? 409 : 403)
+    // Every read before his approval: the fence (frozen, open, plain) is judged inside, so a refused path, a moved branch
+    // or a red workflow leaves his approval unspent. The card's ciStatus is the snapshot from stage_proposal; this is now.
+    // A moved branch or main and a refused path are judged first, before any file, workflow or repository read
+    // (as today). Then every file, both workflows and the repository id are read together and judged in today's order:
+    // the files (their reads and byte bound), then the workflows, then the repository id.
+    const { before, after } = await mergeEvidence(input, env, context)
+    const files = settled(inspectedChanges(before, after, env, context, false, { concurrentReads: true }))
+    const ci = settled(proposalCi(input.branch, input.headSha, env, context, { concurrent: true }))
+    const repository = settled(repositoryId(env, context))
+    await judged(files)
+    const ciStatus = await judged(ci)
+    if (ciStatus !== 'passed') fail('REPO_PROPOSAL_CI_NOT_PASSED', 409, { ciStatus })
+    id = await judged(repository)
+    // Review: both refs again, together, as the LAST read before his approval is used. A ref that moved
+    // during the reads is refused here, unspent; past this point only GitHub's compare-and-swap catches it, after
+    // begin_merge (the attempt held, his approval spent).
+    const mainAgain = settled(branchHead('main', env, context)), branchAgain = settled(branchHead(input.branch, env, context))
+    if (await judged(mainAgain) !== input.baseSha || await judged(branchAgain) !== input.headSha) fail('REPO_HEAD_CONFLICT', 409)
+    if (reads.signal.aborted || Date.now() > reads.deadlineAt) throw readsTimeout(!seen.attempt && !seen.release)
+  } catch (error) {
+    // A read cut by the read window (or the call's end) ends before begin_merge: nothing claimed, spent or sent by this
+    // call. Only a timeout becomes the reads timeout; a refusal (HEAD's included) keeps its own code and fields.
+    if (error?.code === 'BROKER_TIMEOUT') throw readsTimeout(!seen.attempt && !seen.release)
+    throw error
+  } finally { reads.abort(); reads.close(); context.signal = call }
+  // The act window: begin_merge, the mark, the ref update and its bookkeeping, mergeTimeoutMs from here (never past the
+  // call's own end, which the read window leaves at least that far away).
+  const act = mergeWindow(call, CLOUD_BROKER_LIMITS.mergeTimeoutMs, callEnd)
+  context.signal = act.signal; context.deadlineAt = act.deadlineAt
+  try { return await mergeAct(input, binding, approvalToken, id, env, context, !seen.attempt && !seen.release) } finally { act.close() }
+}
+
+/** The steps of mergeProposal from begin_merge on, unchanged, inside the act window (context.signal and
+ * context.deadlineAt are that window's). `fresh`: this call touched no earlier merge (the facts of its timeout). */
+async function mergeAct(input, binding, approvalToken, id, env, context, fresh) {
+  if (context.signal.aborted || Date.now() > context.deadlineAt - MERGE_AFTER_READS_RESERVE_MS) throw readsTimeout(fresh)
+  // ---- MERGE block end ----
   // His session must outlast everything this call can still do, its settling included: HEAD refuses an
   // expired session, so one that ran out after begin_merge could not even void the attempt. Refused here, nothing is spent.
   // On the owner clock requireOwner uses (context.now()); the time left to the deadline is measured on the real one.
-  const left = Number.isFinite(context.deadlineAt) ? Math.max(0, context.deadlineAt - Date.now()) : CLOUD_BROKER_LIMITS.timeoutMs
+  const left = Math.max(0, context.deadlineAt - Date.now())
   if (!Number.isFinite(context.access?.expires) || context.access.expires * 1000 <= context.now() + left + MERGE_SETTLE_GRACE_MS) fail('OWNER_SESSION_REQUIRED', 403)
   freezeJson(input)
   const owner = crypto.randomUUID()
@@ -1459,11 +1678,354 @@ function exactText(bytes) {
   return again.length === bytes.length && again.every((byte, i) => byte === bytes[i]) ? text : null
 }
 
+// ---- HANDS block begin: x6_exec, her hands on a throwaway GitHub runner (.github/workflows/auma-exec.yml) ----
+/** The one workflow her exec door starts and reads without a passkey: no secret, contents: read, dispatched on main only. */
+export const AUMA_EXEC_WORKFLOW = Object.freeze({ file: 'auma-exec.yml', path: '.github/workflows/auma-exec.yml' })
+/** Bounds of the exec door: the input shape auma-exec.yml validates again, and the dispatches one owner session may start. */
+export const AUMA_EXEC_LIMITS = Object.freeze({ commandChars: 4096, labelChars: 64, minMinutes: 1, maxMinutes: 30, defaultMinutes: 10,
+  perHour: 60, perDay: 300, runs: 20, artifacts: 20, sessions: 64, logStreamBytes: 32 * 1024 * 1024, labelHeld: 400 })
+/** Her exec reads and the cancel; each acts on a run of AUMA_EXEC_WORKFLOW only (checked against GitHub's answer). */
+export const AUMA_EXEC_ACTIONS = Object.freeze(['exec_runs', 'exec_run', 'exec_logs', 'exec_cancel', 'exec_artifacts'])
+/** The run name auma-exec.yml gives each run (`run-name: auma-exec <label> @ <ref>`); the label is how she finds her run. */
+export const AUMA_EXEC_LABEL = /^[A-Za-z0-9._-]{1,64}$/
+const AUMA_EXEC_RUN_NAME = /^auma-exec ([A-Za-z0-9._-]{1,64}) @ (main|auma\/(?:sandbox|proposal)\/[a-z0-9][a-z0-9._-]{1,60})$/
+const AUMA_EXEC_INPUTS = Object.freeze(['ref', 'command', 'timeout_minutes', 'browser', 'label'])
+/** owner session key -> { hour: number[], day: number[] }: when each dispatch was let through (one isolate, as linear-door.mjs). */
+const execSessions = new Map()
+const execRequest = value => value === 'auma-exec.yml'
+
+function execOwnerSession(context) {
+  const nowMs = typeof context.now === 'function' ? context.now() : Date.now()
+  const active = (context.access?.authenticated === true && context.access?.owner === true)
+    || (['owner', 'access'].includes(context.access?.type) && Number.isFinite(context.access?.expires) && context.access.expires * 1000 > nowMs)
+  if (!active) fail('OWNER_SESSION_REQUIRED', 403)
+  return nowMs
+}
+
+/** The dispatch inputs exactly as auma-exec.yml takes them (all strings), or a closed refusal before anything is sent. */
+export function aumaExecInputs(raw) {
+  if (!record(raw) || Object.keys(raw).some(key => !AUMA_EXEC_INPUTS.includes(key))) fail('EXEC_INPUTS_INVALID')
+  const ref = raw.ref
+  if (!(ref === 'main' || validAumaBranch(ref))) fail('EXEC_REF_INVALID')
+  const command = raw.command
+  if (typeof command !== 'string' || !command.trim() || command.length > AUMA_EXEC_LIMITS.commandChars || /\u0000/.test(command)) fail('EXEC_COMMAND_INVALID')
+  const minutes = raw.timeout_minutes === undefined ? AUMA_EXEC_LIMITS.defaultMinutes
+    : typeof raw.timeout_minutes === 'string' && /^[1-9][0-9]?$/.test(raw.timeout_minutes) ? Number(raw.timeout_minutes) : raw.timeout_minutes
+  if (!Number.isSafeInteger(minutes) || minutes < AUMA_EXEC_LIMITS.minMinutes || minutes > AUMA_EXEC_LIMITS.maxMinutes) fail('EXEC_TIMEOUT_INVALID')
+  const browser = raw.browser === undefined ? false : raw.browser === 'true' ? true : raw.browser === 'false' ? false : raw.browser
+  if (typeof browser !== 'boolean') fail('EXEC_BROWSER_INVALID')
+  if (typeof raw.label !== 'string' || !AUMA_EXEC_LABEL.test(raw.label)) fail('EXEC_LABEL_INVALID')
+  return { ref, command, timeout_minutes: String(minutes), browser: String(browser), label: raw.label }
+}
+
+async function execSession(access) {
+  const key = typeof access?.session === 'string' && access.session !== '' ? 'session:' + await sha256(access.session) : `owner:${access?.expires}`
+  let entry = execSessions.get(key)
+  if (!entry) {
+    while (execSessions.size >= AUMA_EXEC_LIMITS.sessions) execSessions.delete(execSessions.keys().next().value)
+    entry = { hour: [], day: [] }
+    execSessions.set(key, entry)
+  }
+  return entry
+}
+
+/** Takes one dispatch from this session's hour and UTC day, or refuses with when the next one is allowed. */
+function execRate(entry, at) {
+  const day = Math.floor(at / 86400000)
+  while (entry.hour.length && at - entry.hour[0] >= 3600000) entry.hour.shift()
+  while (entry.day.length && Math.floor(entry.day[0] / 86400000) !== day) entry.day.shift()
+  if (entry.day.length >= AUMA_EXEC_LIMITS.perDay) fail('EXEC_RATE_LIMITED', 429, { retryAt: (day + 1) * 86400000, limit: `${AUMA_EXEC_LIMITS.perDay} runs per UTC day` })
+  if (entry.hour.length >= AUMA_EXEC_LIMITS.perHour) fail('EXEC_RATE_LIMITED', 429, { retryAt: entry.hour[0] + 3600000, limit: `${AUMA_EXEC_LIMITS.perHour} runs per hour` })
+  entry.hour.push(at); entry.day.push(at)
+}
+
+/** One run of auma-exec.yml as she sees it; any other workflow's run is not hers to read here. */
+function execRun(value, env) {
+  if (!record(value) || !Number.isSafeInteger(value.id) || value.id < 1 || value.path !== AUMA_EXEC_WORKFLOW.path) fail('EXEC_RUN_NOT_FOUND', 404)
+  if (!RUN_STATUSES.includes(value.status) || !(value.conclusion === null || RUN_CONCLUSIONS.includes(value.conclusion))
+    || typeof value.created_at !== 'string' || value.html_url !== `https://github.com/${REPOSITORY}/actions/runs/${value.id}`) fail('BROKER_RESPONSE_INVALID', 502)
+  // A run name the screen refuses (a credential shape) is withheld for that run alone; the rest of the list still answers.
+  let runName = null, withheld = false
+  if (typeof value.display_title === 'string') {
+    try { runName = safeText(value.display_title, env, AUMA_EXEC_LIMITS.labelHeld) } catch (_error) { withheld = true }
+  }
+  const named = runName === null ? null : AUMA_EXEC_RUN_NAME.exec(runName)
+  return { id: value.id, status: value.status, conclusion: value.conclusion, created: safeText(value.created_at, env, 40), runName,
+    label: named ? named[1] : null, ref: named ? named[2] : null, url: value.html_url, ...(withheld ? { runNameWithheld: true } : {}) }
+}
+
+const execRunId = value => Number.isSafeInteger(value) && value >= 1 && value <= 9999999999999999 ? value : fail('EXEC_RUN_INVALID')
+
+async function execRunOf(id, env, context) {
+  let value
+  try { value = await github(env, context.networkFetch, `/actions/runs/${id}`, context.signal) }
+  catch (error) { if (error?.code === 'BROKER_NOT_FOUND') fail('EXEC_RUN_NOT_FOUND', 404); throw error }
+  const run = execRun(value, env)
+  if (run.id !== id) fail('BROKER_RESPONSE_INVALID', 502)
+  return run
+}
+
+async function execJobs(id, env, context) {
+  const value = await github(env, context.networkFetch, `/actions/runs/${id}/jobs?per_page=10`, context.signal, 1024 * 1024)
+  if (!record(value) || !Array.isArray(value.jobs) || value.jobs.length > 10) fail('BROKER_RESPONSE_INVALID', 502)
+  return value.jobs.map(job => projectJob(job, env, id))
+}
+
+/** Her exec door: start auma-exec.yml with validated inputs, and read, cancel or list its runs. No passkey: an
+ * owner session, the input shape and the hour and day bounds. Every other workflow keeps its rule in `repo` below. */
+async function execDoor(input, env, context) {
+  // The cloud wake's internal read-only principal may list her runs and read a log tail; nothing else here.
+  const wakeExec = context.principal === WAKE_MANDATE_ACTOR && context.wakeMandateStep === 'exec_start' && input.action === 'dispatch_workflow'
+  // Authorization still comes from the paid mandate; the budget scope cannot grant it.
+  const at = context.principal === CLOUD_WAKE_READER && CLOUD_WAKE_EXEC_READS.includes(input.action) ? Date.now()
+    : wakeExec ? context.now() : execOwnerSession(context)
+  if (input.action === 'dispatch_workflow') {
+    exactFields(input, ['action', 'workflow', 'inputs', 'ownerSession'])
+    const inputs = aumaExecInputs(input.inputs)
+    // The label and ref come back in every run name she lists: one shaped like a credential is refused here, not later.
+    for (const [field, code] of [['label', 'EXEC_LABEL_INVALID'], ['ref', 'EXEC_REF_INVALID']]) {
+      try { safeText(inputs[field], env, AUMA_EXEC_LIMITS.labelHeld) } catch (_error) { fail(code) }
+    }
+    safeText(inputs.command, env, 4 * AUMA_EXEC_LIMITS.commandChars)
+    githubHeaders(env)
+    execRate(await execSession(context.access), at)
+    // Only the host sets runnerPickScope; a charged reservation is not an authority grant.
+    const dispatchBody = JSON.stringify({ ref: BRANCH, inputs })
+    await reserveRunnerMinutesAtHead({ head: env.HEAD, seedId: context.bootstrap?.head?.seedId,
+      minutes: Number(inputs.timeout_minutes), requestId: crypto.randomUUID(), requestHash: await sha256(dispatchBody),
+      signal: context.signal, pickScope: context.runnerPickScope, requireLocal: wakeExec })
+    const response = await withDeadline(context.signal, limitedSignal => context.networkFetch(`https://api.github.com/repos/${REPOSITORY}/actions/workflows/${AUMA_EXEC_WORKFLOW.file}/dispatches`, {
+      method: 'POST', redirect: 'error', signal: limitedSignal, headers: githubHeaders(env), body: dispatchBody,
+    }))
+    void response.body?.cancel().catch(_error => {})
+    if (!response.ok) fail(response.status === 404 ? 'EXEC_WORKFLOW_NOT_FOUND' : response.status === 422 ? 'EXEC_DISPATCH_REFUSED' : 'BROKER_UPSTREAM_FAILED', response.status === 404 ? 404 : 502)
+    return { ok: true, action: 'dispatch_workflow', workflow: AUMA_EXEC_WORKFLOW.file, branch: BRANCH, ref: inputs.ref, label: inputs.label,
+      runName: `auma-exec ${inputs.label} @ ${inputs.ref}`, timeoutMinutes: Number(inputs.timeout_minutes), browser: inputs.browser === 'true',
+      stdout: `auma-exec ${inputs.label} dispatched on ${inputs.ref}`, stderr: '' }
+  }
+  if (input.action === 'exec_runs') {
+    exactFields(input, ['action', 'limit'])
+    const limit = input.limit === undefined ? AUMA_EXEC_LIMITS.runs : input.limit
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > AUMA_EXEC_LIMITS.runs) fail('EXEC_LIMIT_INVALID')
+    const value = await github(env, context.networkFetch, `/actions/workflows/${AUMA_EXEC_WORKFLOW.file}/runs?per_page=${limit}`, context.signal, 1024 * 1024)
+    if (!record(value) || !Array.isArray(value.workflow_runs) || value.workflow_runs.length > limit || !Number.isSafeInteger(value.total_count)) fail('BROKER_RESPONSE_INVALID', 502)
+    const runs = value.workflow_runs.map(run => { if (run?.path !== AUMA_EXEC_WORKFLOW.path) fail('BROKER_RESPONSE_INVALID', 502); return execRun(run, env) })
+    return { ok: true, action: 'exec_runs', workflow: AUMA_EXEC_WORKFLOW.file, runs, total: value.total_count,
+      stdout: runs.map(run => `${run.id} ${run.status}${run.conclusion ? '/' + run.conclusion : ''} ${run.label ?? '?'} @ ${run.ref ?? '?'}`).join('\n'), stderr: '' }
+  }
+  exactFields(input, ['action', 'run', ...(input.action === 'exec_logs' ? ['job'] : [])])
+  const id = execRunId(input.run)
+  if (input.job !== undefined && (!Number.isSafeInteger(input.job) || input.job < 1)) fail('EXEC_JOB_INVALID')
+  const run = await execRunOf(id, env, context)
+  if (input.action === 'exec_run') {
+    const jobs = await execJobs(id, env, context)
+    return { ok: true, action: 'exec_run', run, jobs, stdout: `${run.id} ${run.status}${run.conclusion ? '/' + run.conclusion : ''}`, stderr: '' }
+  }
+  if (input.action === 'exec_logs') {
+    const jobs = await execJobs(id, env, context)
+    const job = input.job === undefined ? jobs[0] : jobs.find(item => item.id === input.job)
+    if (!job) fail('EXEC_JOB_NOT_FOUND', 404)
+    const logs = await jobLogs(job.id, env, context, { tail: true })
+    // The tail is carried once, in `log`; the earlier part stays on GitHub at the run's page.
+    return { ok: true, action: 'exec_logs', run: run.id, status: run.status, conclusion: run.conclusion, jobId: job.id, log: logs.log, truncated: logs.truncated,
+      ...(logs.truncated ? { earlier: `the earlier lines are on GitHub: ${run.url}` } : {}),
+      stdout: `Job ${job.id} log: the newest ${size(logs.log)} bytes are in log${logs.truncated ? '; earlier lines were cut' : ''}.`, stderr: '' }
+  }
+  if (input.action === 'exec_artifacts') {
+    const value = await github(env, context.networkFetch, `/actions/runs/${id}/artifacts?per_page=${AUMA_EXEC_LIMITS.artifacts}`, context.signal)
+    if (!record(value) || !Array.isArray(value.artifacts) || value.artifacts.length > AUMA_EXEC_LIMITS.artifacts) fail('BROKER_RESPONSE_INVALID', 502)
+    const artifacts = value.artifacts.map(item => {
+      if (!record(item) || typeof item.name !== 'string' || !Number.isSafeInteger(item.size_in_bytes) || item.size_in_bytes < 0
+        || !(item.expires_at === null || typeof item.expires_at === 'string')) fail('BROKER_RESPONSE_INVALID', 502)
+      return { name: safeText(item.name, env, 256), sizeBytes: item.size_in_bytes, expiresAt: item.expires_at === null ? null : safeText(item.expires_at, env, 40), expired: item.expired === true }
+    })
+    return { ok: true, action: 'exec_artifacts', run: run.id, artifacts, download: `not through this door; the run's page: ${run.url}`,
+      stdout: artifacts.map(item => `${item.name} ${item.sizeBytes} bytes`).join('\n'), stderr: '' }
+  }
+  // exec_cancel: one POST for this run of auma-exec.yml (GitHub answers 409 when it has already finished).
+  const response = await withDeadline(context.signal, limitedSignal => context.networkFetch(`https://api.github.com/repos/${REPOSITORY}/actions/runs/${id}/cancel`, {
+    method: 'POST', redirect: 'error', signal: limitedSignal, headers: githubHeaders(env),
+  }))
+  void response.body?.cancel().catch(_error => {})
+  if (response.status === 409) fail('EXEC_RUN_NOT_CANCELLABLE', 409)
+  if (!response.ok) fail('BROKER_UPSTREAM_FAILED', 502)
+  return { ok: true, action: 'exec_cancel', run: run.id, requested: true, stdout: `cancel requested for ${run.id}`, stderr: '' }
+}
+// ---- HANDS block end ----
+
+// ---- PATCH block begin ----
+/** `apply_patch`: a unified diff as `git diff` prints it, applied to her own branch in ONE commit. Strict: every hunk at
+ * its stated line with every context and removed line equal (no fuzz, no offset search); a rename, copy, mode change,
+ * binary patch or submodule is refused by name. Each path passes the rules `commit` applies (branchPath), the content is
+ * read at `baseSha` through githubFileAt and screened by safeText, and the commit is commitOnBranch with `baseSha` as the
+ * expected head. Nothing is written until every file has applied. No passkey: her own branch, exactly as `commit`. */
+export const CLOUD_REPO_PATCH_LIMITS = Object.freeze({ patchBytes: 256 * 1024, files: CLOUD_REPO_BRANCH_LIMITS.files })
+const PATCH_HUNK = /^@@ -(\d{1,9})(?:,(\d{1,9}))? \+(\d{1,9})(?:,(\d{1,9}))? @@(?: .*)?$/
+const NO_EOL_MARK = '\\ No newline at end of file'
+
+/** Parse a `git diff` text into [{ path, status: 'modified'|'added'|'deleted', hunks }]; throws a closed PATCH_* code. */
+export function parseUnifiedPatch(text) {
+  if (typeof text !== 'string' || !text || text.includes('\u0000')) fail('PATCH_SHAPE')
+  if (size(text) > CLOUD_REPO_PATCH_LIMITS.patchBytes) fail('PATCH_TOO_LARGE', 413)
+  const lines = text.split('\n')
+  if (lines.at(-1) === '') lines.pop()
+  const parseFail = index => fail('PATCH_PARSE', 400, { line: index + 1 })
+  const unsupported = (path, what) => fail('PATCH_UNSUPPORTED', 400, { path, what })
+  const files = []
+  let index = 0
+  while (index < lines.length) {
+    const header = lines[index]
+    if (!header.startsWith('diff --git ')) parseFail(index)
+    const rest = header.slice('diff --git '.length), half = (rest.length - 5) / 2
+    const named = Number.isInteger(half) && half > 0 ? rest.slice(2, 2 + half) : null
+    const path = named !== null && rest === `a/${named} b/${named}` ? named : null
+    const shown = path ?? (rest.startsWith('a/') ? rest.slice(2).split(' b/')[0] : rest)
+    const file = { path, status: 'modified', hunks: [] }
+    index++
+    // Extended header lines, up to the first `---` (or the next file, for an empty new or deleted file).
+    while (index < lines.length && !lines[index].startsWith('diff --git ') && !lines[index].startsWith('--- ')) {
+      const line = lines[index]
+      if (/^rename (?:from|to) /.test(line)) unsupported(shown, 'rename')
+      if (/^copy (?:from|to) /.test(line)) unsupported(shown, 'copy')
+      if (/^(?:old|new) mode /.test(line)) unsupported(shown, 'mode')
+      if (line.startsWith('Binary files ') || line === 'GIT binary patch') unsupported(shown, 'binary')
+      const created = /^new file mode (\d{6})$/.exec(line), removed = /^deleted file mode (\d{6})$/.exec(line), indexLine = /^index [0-9a-f]{7,64}\.\.[0-9a-f]{7,64}(?: (\d{6}))?$/.exec(line)
+      const mode = created?.[1] ?? removed?.[1] ?? indexLine?.[1]
+      if (mode === '160000') unsupported(shown, 'submodule')
+      if (indexLine?.[1] === '100755' && file.status === 'modified') unsupported(shown, 'executable')
+      if (mode !== undefined && mode !== '100644') unsupported(shown, 'mode')
+      if (created) file.status = 'added'
+      else if (removed) file.status = 'deleted'
+      else if (!indexLine && !/^(?:dis)?similarity index \d{1,3}%$/.test(line)) parseFail(index)
+      index++
+    }
+    if (path === null) unsupported(shown, 'rename')
+    if (index < lines.length && lines[index].startsWith('--- ')) {
+      const from = lines[index].slice(4), to = lines[index + 1]
+      if (from !== (file.status === 'added' ? '/dev/null' : 'a/' + path)) parseFail(index)
+      if (to !== '+++ ' + (file.status === 'deleted' ? '/dev/null' : 'b/' + path)) parseFail(index + 1)
+      index += 2
+      let lastOldEnd = 0
+      while (index < lines.length && lines[index].startsWith('@@')) {
+        const match = PATCH_HUNK.exec(lines[index])
+        if (!match) parseFail(index)
+        const hunk = { oldStart: Number(match[1]), oldCount: match[2] === undefined ? 1 : Number(match[2]), newStart: Number(match[3]), newCount: match[4] === undefined ? 1 : Number(match[4]), lines: [] }
+        if ((hunk.oldCount > 0 && hunk.oldStart < 1) || hunk.oldStart < lastOldEnd) parseFail(index)
+        lastOldEnd = hunk.oldStart + hunk.oldCount
+        index++
+        let oldSeen = 0, newSeen = 0
+        while (oldSeen < hunk.oldCount || newSeen < hunk.newCount) {
+          const line = lines[index]
+          if (line === undefined || !line || ![' ', '-', '+'].includes(line[0])) parseFail(index)
+          const op = line[0]
+          if (op !== '+') oldSeen++
+          if (op !== '-') newSeen++
+          if (oldSeen > hunk.oldCount || newSeen > hunk.newCount) parseFail(index)
+          hunk.lines.push({ op, text: line.slice(1), noEol: false })
+          index++
+          if (lines[index] === NO_EOL_MARK) { hunk.lines.at(-1).noEol = true; index++ }
+        }
+        if (!hunk.lines.length) parseFail(index - 1)
+        file.hunks.push(hunk)
+      }
+      if (!file.hunks.length) parseFail(index - 1)
+    } else if (file.status === 'modified') parseFail(index - 1)
+    if (files.some(other => other.path === path)) parseFail(index - 1)
+    files.push(file)
+    if (files.length > CLOUD_REPO_PATCH_LIMITS.files) fail('PATCH_FILES_LIMIT')
+  }
+  if (!files.length) fail('PATCH_SHAPE')
+  return files
+}
+
+/** The new content of one file: every hunk exactly at its line, every context and removed line equal, the final-newline
+ * state of both sides exactly as the markers say. Otherwise PATCH_CONTEXT_MISMATCH { path, hunk } (1-based). */
+export function applyFilePatch(file, prior) {
+  const old = prior === '' ? [] : prior.split('\n'), oldEol = prior === '' || prior.endsWith('\n')
+  if (prior !== '' && oldEol) old.pop()
+  const out = []
+  let position = 0, outEol = true
+  const mismatch = hunk => fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk })
+  const push = (text, eol, hunk) => { if (!outEol) mismatch(hunk); out.push(text); outEol = eol }
+  file.hunks.forEach((hunk, offset) => {
+    const number = offset + 1
+    let at = hunk.oldCount === 0 ? hunk.oldStart : hunk.oldStart - 1
+    if (at < position || at > old.length) mismatch(number)
+    while (position < at) { push(old[position], position < old.length - 1 || oldEol, number); position++ }
+    for (const line of hunk.lines) {
+      if (line.op !== '+') {
+        if (at >= old.length || old[at] !== line.text) mismatch(number)
+        // The old side's marker sits on the old file's last line exactly when that file has no final newline.
+        if (at === old.length - 1 ? line.noEol !== !oldEol : line.noEol) mismatch(number)
+        at++
+      }
+      if (line.op !== '-') push(line.text, !line.noEol, number)
+    }
+    position = at
+  })
+  while (position < old.length) { push(old[position], position < old.length - 1 || oldEol, file.hunks.length); position++ }
+  return out.length ? out.join('\n') + (outEol ? '\n' : '') : ''
+}
+
+/** What a PATCH_* or REPO_HEAD_MOVED refusal says back: the file (bounded, screened), the hunk, the patch line, the kind. */
+function patchRefusalFacts(code, error, env) {
+  if (!code.startsWith('PATCH_') && code !== 'REPO_HEAD_MOVED') return {}
+  const text = value => typeof value === 'string' && value.length <= 1024 && !/[\u0000-\u001f\u007f]/.test(value) && !outwardTextCarriesSecret(value, env)
+  return { ...(text(error.path) ? { path: error.path } : {}), ...(Number.isSafeInteger(error.hunk) ? { hunk: error.hunk } : {}),
+    ...(Number.isSafeInteger(error.line) ? { line: error.line } : {}), ...(['rename', 'copy', 'mode', 'binary', 'submodule', 'executable'].includes(error.what) ? { what: error.what } : {}),
+    ...(typeof error.headSha === 'string' && SHA.test(error.headSha) ? { headSha: error.headSha } : {}) }
+}
+
+async function applyPatch(input, env, context) {
+  requireOwner(env, context)
+  if (!record(input)) fail('PATCH_SHAPE')
+  exactFields(input, ['action', 'branch', 'baseSha', 'patch', 'message', 'ownerSession'])
+  const branch = repoRef(input.branch)
+  if (!validAumaBranch(branch)) fail('REPO_BRANCH_REFUSED', 403)
+  if (typeof input.baseSha !== 'string' || !SHA.test(input.baseSha)) fail('REPO_BASE_SHA_REQUIRED')
+  if (typeof input.patch !== 'string') fail('PATCH_SHAPE')
+  const parsed = parseUnifiedPatch(input.patch)
+  // The path rules `commit` applies, every path, before anything is read (a delete is judged as commit judges a write).
+  for (const file of parsed) file.path = branchPath(file.path, env)
+  const message = safeText(input.message, env, 1024)
+  if (!message.trim() || /[\r\n]/.test(message)) fail('REPO_COMMIT_MESSAGE_INVALID')
+  const current = await branchHead(branch, env, context)
+  if (current !== input.baseSha) fail('REPO_HEAD_MOVED', 409, { headSha: current })
+  const pinned = await pinnedTree(current, env, context.networkFetch, context.signal)
+  if (pinned.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
+  const files = [], deletions = [], answer = []
+  let total = 0
+  for (const file of parsed) {
+    const entry = regularFile(pinned.tree, file.path, true)
+    if ((entry === null) !== (file.status === 'added')) fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk: 0 })
+    const prior = entry === null ? '' : (await githubFileAt(file.path, pinned, env, context.networkFetch, context.signal)).content
+    const content = applyFilePatch(file, prior)
+    if (file.status === 'deleted') {
+      if (content !== '') fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk: file.hunks.length })
+      deletions.push(file.path)
+    } else {
+      files.push({ path: file.path, content: safeText(content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) })
+      total += size(content)
+    }
+    answer.push({ path: file.path, status: file.status })
+  }
+  if (total > CLOUD_REPO_BRANCH_LIMITS.publicationBytes) fail('REPO_CHANGE_INVALID')
+  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true)
+  const commit = await commitOnBranch(branch, current, files, message, env, context, deletions)
+  return { ok: true, action: 'apply_patch', branch, head: commit, commit, headSha: commit, baseSha: current, files: answer,
+    stdout: `${commit} ${answer.map(file => `${file.status} ${file.path}`).join(', ')}`, stderr: '' }
+}
+// ---- PATCH block end ----
+
 async function repo(input, env, context) {
   const { bootstrap, networkFetch, signal } = context
+  if (input.action === 'apply_patch') return await applyPatch(input, env, context)
+  // Auma-exec.yml and its runs go through her exec door; every other workflow keeps the rule below.
+  if (AUMA_EXEC_ACTIONS.includes(input.action) || (input.action === 'dispatch_workflow' && execRequest(input.workflow))) return await execDoor(input, env, context)
   if (input.action === 'search') return await searchRepository(input, env, context)
   if (input.action === 'compare_files') return await compareFiles(input, env, context)
   if (input.action === 'stage_proposal') return await stageProposal(input, env, context)
+  if (input.action === 'withdraw_proposal') return await withdrawProposal(input, env, context)
   if (input.action === 'reconcile_proposal') return await reconcileProposal(input, env, context)
   if (input.action === 'release_attempt') return await releaseAttempt(input, env, context)
   if (input.action === 'merge_proposal') return await mergeProposal(input, env, context)
@@ -1496,7 +2058,7 @@ async function repo(input, env, context) {
     exactFields(input, ['action', 'path', 'offset', 'length', 'branch', 'ownerSession'])
     const offset = input.offset === undefined ? 0 : input.offset
     const length = input.length === undefined ? undefined : input.length
-    if (!Number.isSafeInteger(offset) || offset < 0 || (length !== undefined && (!Number.isSafeInteger(length) || length < 1 || length > CLOUD_REPO_READ_LIMITS.fileBytes))) fail('REPO_BYTE_RANGE_INVALID')
+    if (!Number.isSafeInteger(offset) || offset < 0 || (length !== undefined && (!Number.isSafeInteger(length) || length < 1 || length > CLOUD_REPO_READ_LIMITS.rangeLength))) fail('REPO_BYTE_RANGE_INVALID')
     const path = requirePath(input.path)
     const sliceContent = fullResult => {
       if (input.offset === undefined && input.length === undefined) return fullResult
@@ -1515,10 +2077,15 @@ async function repo(input, env, context) {
     return sliceContent({ ok: true, path, ...await githubFile(path, env, networkFetch, signal, branch), source: branch === 'main' ? 'github-main' : 'github-branch', ...(branch === 'main' ? {} : { branch }) })
   }
   if (input.action === 'log') {
-    const limit = input.limit ?? 10
-    if (!Number.isInteger(limit) || limit < 1 || limit > 10) fail('BROKER_QUERY_INVALID')
+    const limit = input.limit ?? CLOUD_REPO_LOG_LIMITS.defaultCommits
+    if (!Number.isInteger(limit) || limit < 1 || limit > CLOUD_REPO_LOG_LIMITS.commits) fail('BROKER_QUERY_INVALID')
     const log = await commits(env, networkFetch, signal, limit)
-    return { ok: true, commits: log, stdout: log.map(commit => `${commit.sha.slice(0, 8)} ${commit.message.split('\n')[0]}`).join('\n'), stderr: '' }
+    // Newest first: keep the newest commits whose answer fits answerBytes; the rest are named, never silently dropped.
+    const answer = kept => ({ ok: true, commits: kept, stdout: kept.map(commit => `${commit.sha.slice(0, 8)} ${commit.message.split('\n')[0]}`).join('\n'), stderr: '',
+      ...(kept.length < log.length ? { truncated: true, returned: kept.length, available: log.length, next: 'ask for fewer commits, or read one with diff' } : {}) })
+    let kept = log
+    while (kept.length > 1 && size(JSON.stringify(answer(kept))) > CLOUD_REPO_LOG_LIMITS.answerBytes) kept = kept.slice(0, Math.max(1, Math.floor(kept.length * 0.9)))
+    return answer(kept)
   }
   if (input.action === 'diff') {
     if (Object.keys(input).some(key => !['action', 'base', 'path', 'branch', 'ownerSession'].includes(key))) fail('BROKER_QUERY_INVALID')
@@ -1660,6 +2227,12 @@ async function repo(input, env, context) {
       }
       const history = await commits(env, networkFetch, signal, 1)
       const headSha = history[0].sha
+      // ---- MERGE block begin: a reload no longer kills a staged card ----
+      // A staged repo proposal merges only while main's head is its base (REPO_HEAD_CONFLICT otherwise). While one can
+      // still merge, this sync commits nothing and says so; when its base is no longer main's head (the card is dead), or
+      // nothing is staged, or HEAD's status cannot be read (the sync is not the place to fail closed), it runs as before.
+      if (await stagedProposalBase(env, context, signal) === headSha) return { ok: true, action: 'sync_head_to_github', deferred: true, code: 'SYNC_HELD_FOR_STAGED_PROPOSAL', branch: BRANCH }
+      // ---- MERGE block end ----
       const baseTree = await pinnedTree(headSha, env, networkFetch, signal)
       let githubHead = null
       try {
@@ -1820,7 +2393,7 @@ function projectJob(value, env, runId) {
   return { id: value.id, name: safeText(value.name, env, 1000), status: value.status, conclusion: value.conclusion === null ? null : safeText(value.conclusion, env, 40), steps }
 }
 
-async function jobLogs(jobId, env, context) {
+async function jobLogs(jobId, env, context, { tail = false } = {}) {
   return await withDeadline(context.signal, async signal => {
     let response = await context.networkFetch(`https://api.github.com/repos/${REPOSITORY}/actions/jobs/${jobId}/logs`, { method: 'GET', headers: githubHeaders(env), redirect: 'manual', signal })
     if (response.redirected) fail('BROKER_REDIRECT_REFUSED', 502)
@@ -1837,16 +2410,20 @@ async function jobLogs(jobId, env, context) {
     }
     if (response.redirected || response.status >= 300 && response.status < 400) { void response.body?.cancel().catch(_error => {}); fail('BROKER_REDIRECT_REFUSED', 502) }
     if (!response.ok) { void response.body?.cancel().catch(_error => {}); fail(response.status === 404 ? 'BROKER_NOT_FOUND' : 'BROKER_UPSTREAM_FAILED', response.status === 404 ? 404 : 502) }
-    const bytes = await boundedBytes(response, CLOUD_REPO_PROPOSAL_LIMITS.logBytes, signal)
+    // Her exec logs keep a rolling tail of a log up to AUMA_EXEC_LIMITS.logStreamBytes instead of refusing one
+    // over logBytes; the tail starts after a line break, so no character or escape sequence is cut in two.
+    let total = 0
+    let bytes = await boundedBytes(response, tail ? AUMA_EXEC_LIMITS.logStreamBytes : CLOUD_REPO_PROPOSAL_LIMITS.logBytes, signal,
+      tail ? { keep: CLOUD_REPO_PROPOSAL_LIMITS.logBytes, onTotal: value => { total = value } } : {})
+    const cut = tail && total > bytes.length
+    if (cut) bytes = bytes.subarray(bytes.indexOf(10) + 1)
     let raw
     try { raw = decoder.decode(bytes) } catch (_error) { fail('BROKER_CONTENT_INVALID', 502) }
     safeText(raw, env, CLOUD_REPO_PROPOSAL_LIMITS.logBytes)
     const clean = raw.replace(/(?:\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]|\u001b[@-_])/g, '')
     safeText(clean, env, CLOUD_REPO_PROPOSAL_LIMITS.logBytes)
-    const encoded = encoder.encode(clean), truncated = encoded.length > CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes
-    let offset = Math.max(0, encoded.length - CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes)
-    while (offset < encoded.length && (encoded[offset] & 0xc0) === 0x80) offset++
-    return { jobId, log: decoder.decode(encoded.subarray(offset)), truncated }
+    const log = escapedTail(clean, CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes)
+    return { jobId, log, truncated: cut || log.length < clean.length }
   })
 }
 
@@ -1896,7 +2473,8 @@ async function githubBroker(input, env, context) {
     result = await comparison(base, undefined, env, context.networkFetch, context.signal, head)
   } else if (suffix === '/git/trees/main') {
     if (url.search !== '?recursive=1') fail('GITHUB_ENDPOINT_REFUSED', 403)
-    result = await repositoryTree(undefined, env, context.networkFetch, context.signal)
+    // The GitHub API answer carries the tree twice (json and stdout), so it keeps the earlier 1,000 entries and 96 KiB.
+    result = await repositoryTree(undefined, env, context.networkFetch, context.signal, { entryLimit: CLOUD_REPO_TREE_LIMITS.apiReturnedEntries, byteLimit: CLOUD_REPO_TREE_LIMITS.projectedBytes })
   } else if (/^\/(?:issues|pulls)$/.test(suffix)) {
     const { page, limit } = listQuery(url, true)
     const value = await github(env, context.networkFetch, suffix + url.search, context.signal)
@@ -1936,7 +2514,11 @@ async function githubBroker(input, env, context) {
       if (String(result.id) !== suffix.split('/')[3]) fail('BROKER_RESPONSE_INVALID', 502)
     }
   } else fail('GITHUB_ENDPOINT_REFUSED', 403)
-  return { ok: true, action: 'api', method: 'GET', endpoint: normalized, json: result, stdout: JSON.stringify(result), stderr: '' }
+  // A job log is carried once, in json.log: stdout only names it, so the answer stays within 256 KiB (review fix, the raised limits).
+  const stdout = typeof result.log === 'string'
+    ? `Job ${result.jobId} log: the newest ${encoder.encode(result.log).length} bytes are in json.log${result.truncated ? '; earlier lines were cut' : ''}.`
+    : JSON.stringify(result)
+  return { ok: true, action: 'api', method: 'GET', endpoint: normalized, json: result, stdout, stderr: '' }
 }
 
 function queryParameters(url, allowed) {
@@ -2005,15 +2587,289 @@ async function githubMutation(input, suffix, url, endpoint, env, context) {
   return { ok: true, action: 'api', method: 'POST', endpoint, json: result, stdout: JSON.stringify(result), stderr: '', replaySafe: false }
 }
 
+const cloudflareAccount = env => typeof env.CLOUDFLARE_ACCOUNT_ID === 'string' && /^[a-f0-9]{32}$/.test(env.CLOUDFLARE_ACCOUNT_ID) ? env.CLOUDFLARE_ACCOUNT_ID : null
+
+/** The ids of the zones that serve the live hosts, remembered in this isolate once learned
+ * (positive answers only: a zone name to its id). The live Worker's settings and its Durable Object namespace list are
+ * never kept: they are read again for every write. */
+const cloudflareLiveZoneIds = new Map()
+
+/** One GET of a Cloudflare fact for the classifier; any failure (an error answer, a thrown fetch, a timeout, an answer that
+ * is not JSON) is null. */
+async function cloudflareRead(path, auth, context) {
+  try {
+    return await upstream(context.networkFetch, 'https://api.cloudflare.com/client/v4' + path, { method: 'GET', headers: { ...auth.headers, accept: 'application/json' } }, context.signal)
+  } catch (_error) { return null }
+}
+
+/** The zones that serve the live hosts, [{ id, name }]: for each host, the most specific zone of the account
+ * whose name is the host or a parent of it (GET /zones?name=<candidate>, longest first). Null when an answer is not well
+ * formed (not a success, `result` not a list, a zone without a 32-hex id or a host name). */
+async function cloudflareLiveZones(hosts, auth, context) {
+  const zones = []
+  for (const host of new Set(hosts.map(item => normalHost(String(item))).filter(item => item !== null))) {
+    const labels = host.split('.')
+    const candidates = labels.slice(0, -1).map((_, index) => labels.slice(index).join('.')).filter(name => name.includes('.'))
+    const kept = candidates.find(name => cloudflareLiveZoneIds.has(name))
+    if (kept !== undefined) { zones.push({ id: cloudflareLiveZoneIds.get(kept), name: kept }); continue }
+    for (const candidate of candidates) {
+      const value = await cloudflareRead(`/zones?name=${encodeURIComponent(candidate)}&per_page=50`, auth, context)
+      if (!record(value) || value.success !== true || !Array.isArray(value.result)) return null
+      if (!value.result.every(item => record(item) && typeof item.id === 'string' && /^[0-9a-f]{32}$/i.test(item.id) && normalHost(item.name) !== null)) return null
+      const found = value.result.find(item => normalHost(item.name) === candidate)
+      if (found === undefined) continue
+      if (cloudflareLiveZoneIds.size >= 64) cloudflareLiveZoneIds.clear()
+      cloudflareLiveZoneIds.set(candidate, found.id.toLowerCase())
+      zones.push({ id: found.id.toLowerCase(), name: candidate })
+      break
+    }
+  }
+  return zones
+}
+
+/** The live home's own facts, read for every write before the classifier decides anything:
+ * the live Worker's settings (liveWorkerFacts), its Durable Object namespaces (liveDurableObjectIds), the zones that
+ * serve the live hosts. Each that fails, times out or is not well formed is null: the classifier then holds the write
+ * (`live-facts-unresolved`). With no account configured the first two cannot be read: null. */
+async function cloudflareLiveFacts(need, facts, auth, context, hosts) {
+  const account = typeof need.account === 'string' && /^[a-f0-9]{32}$/.test(need.account) ? need.account : null
+  const [settings, namespaces] = account === null ? [null, null] : await Promise.all([
+    cloudflareRead(`/accounts/${account}/workers/scripts/${CLOUDFLARE_LIVE_HOME.worker}/settings`, auth, context),
+    cloudflareRead(`/accounts/${account}/workers/durable_objects/namespaces?per_page=${CLOUDFLARE_DOOR_LIMITS.boundIdPage}`, auth, context)])
+  facts.liveWorker = account === null ? null : liveWorkerFacts(settings)
+  facts.boundIds = account === null ? null : liveDurableObjectIds(namespaces, facts.liveWorker)
+  facts.liveZones = await cloudflareLiveZones(hosts, auth, context)
+}
+
+/** The products a write reaches through a relation, each in the shape the classifier reads; null when the
+ * answer is not well formed. */
+const text1024 = value => typeof value === 'string' && value.length <= 1024 ? value : null
+const CLOUDFLARE_RELATION_FACTS = {
+  // A queue by id: its name and the Workers that consume it.
+  queue: {
+    path: need => `/accounts/${need.account}/queues/${need.id}`, table: 'queues', key: need => `${need.account}/${need.id}`,
+    read: result => (text1024(result.queue_name) && Array.isArray(result.consumers ?? []) && (result.consumers ?? []).every(record)
+      ? { name: result.queue_name, consumers: (result.consumers ?? []).flatMap(item => [item.script, item.script_name, item.service].filter(text1024)) } : null),
+  },
+  // A Pages project: its custom domains, and the type of each environment variable.
+  pagesProject: {
+    path: need => `/accounts/${need.account}/pages/projects/${need.id}`, table: 'pages', key: need => `${need.account}/${need.id}`,
+    read: result => {
+      if (!Array.isArray(result.domains) || !result.domains.every(text1024)) return null
+      const configs = record(result.deployment_configs) ? result.deployment_configs : {}
+      const envVars = Object.fromEntries(Object.entries(configs).filter(([, config]) => record(config)).map(([environment, config]) => [environment,
+        Object.fromEntries(Object.entries(record(config.env_vars) ? config.env_vars : {}).map(([name, value]) => [name, record(value) && typeof value.type === 'string' ? value.type : 'plain_text']))]))
+      return { domains: result.domains, envVars }
+    },
+  },
+  // What references a load-balancer pool or monitor.
+  lbReferences: {
+    path: need => `/accounts/${need.account}/load_balancers/${need.collection}/${need.id}/references`, table: 'references', key: need => `${need.account}/${need.collection}/${need.id}`,
+    list: true,
+    read: result => (Array.isArray(result) && result.every(item => record(item) && typeof item.resource_type === 'string')
+      ? result.map(item => ({ type: item.resource_type.toLowerCase(), name: text1024(item.resource_name) ?? '' })) : null),
+  },
+  // A tunnel's configuration: locally managed, and its ingress host names.
+  tunnelConfig: {
+    path: need => `/accounts/${need.account}/cfd_tunnel/${need.id}/configurations`, table: 'tunnels', key: need => `${need.account}/${need.id}`,
+    read: result => {
+      if (typeof result.source !== 'string') return null
+      if (result.source.toLowerCase() === 'local') return { local: true, hostnames: [] }
+      const config = result.config ?? null
+      if (config === null) return { local: false, hostnames: [] }
+      if (!record(config) || !Array.isArray(config.ingress ?? []) || !(config.ingress ?? []).every(record)) return null
+      return { local: false, hostnames: (config.ingress ?? []).map(item => item.hostname).filter(value => typeof value === 'string') }
+    },
+  },
+}
+
+/** What an id names, looked up on Cloudflare before a write so the classifier can tell whether it touches her
+ * live home. A Worker, custom domain, record or route lookup that fails refuses the write; it never guesses. A zone, the
+ * live home's own facts and a relation that cannot be read hold it instead (null). */
+async function cloudflareFact(need, facts, auth, context, hosts) {
+  if (need.kind === 'live') return await cloudflareLiveFacts(need, facts, auth, context, hosts)
+  const relation = Object.hasOwn(CLOUDFLARE_RELATION_FACTS, need.kind) ? CLOUDFLARE_RELATION_FACTS[need.kind] : null
+  if (relation !== null) {
+    const value = await cloudflareRead(relation.path(need), auth, context)
+    const result = record(value) && value.success === true && (relation.list ? Array.isArray(value.result) : record(value.result)) ? value.result : null
+    facts[relation.table][relation.key(need)] = result === null ? null : relation.read(result)
+    return
+  }
+  const paths = { zone: `/zones/${need.zoneId}`, dnsRecord: `/zones/${need.zoneId}/dns_records/${need.id}`, route: `/zones/${need.zoneId}/workers/routes/${need.id}`,
+    domain: `/accounts/${need.account}/workers/domains/${need.id}`, worker: `/accounts/${need.account}/workers/workers/${need.id}` }
+  let result
+  try {
+    const value = await upstream(context.networkFetch, 'https://api.cloudflare.com/client/v4' + paths[need.kind], { method: 'GET', headers: { ...auth.headers, accept: 'application/json' } }, context.signal)
+    result = value?.success === true && record(value.result) ? value.result : null
+  } catch (error) {
+    if (error?.code === 'BROKER_TIMEOUT') throw error
+    // A zone the edge cannot resolve could be the live one: the classifier asks (zone-unresolved).
+    if (need.kind === 'zone') { facts.zones[need.zoneId] = null; return }
+    fail('CLOUDFLARE_TARGET_UNRESOLVED', error?.code === 'BROKER_NOT_FOUND' ? 404 : 502, { next: CLOUDFLARE_NEXT.unresolved })
+  }
+  // A zone name must be a host name; a custom domain keeps its zone's id and name.
+  const fact = need.kind === 'route' ? (result && text1024(result.pattern) ? { pattern: result.pattern, script: text1024(result.script) } : null)
+    : need.kind === 'domain' ? (result && text1024(result.hostname) ? { hostname: result.hostname, service: text1024(result.service), zoneId: text1024(result.zone_id), zoneName: text1024(result.zone_name) } : null)
+      : need.kind === 'zone' ? (result && text1024(result.name) && normalHost(result.name) !== null && normalHost(result.name).includes('.') ? result.name : null)
+        : text1024(result?.name)
+  if (fact === null && need.kind === 'zone') { facts.zones[need.zoneId] = null; return }
+  if (fact === null) fail('CLOUDFLARE_TARGET_UNRESOLVED', 502, { next: CLOUDFLARE_NEXT.unresolved })
+  const table = { zone: 'zones', dnsRecord: 'dnsRecords', route: 'routes', domain: 'domains', worker: 'workers' }[need.kind]
+  const key = need.kind === 'zone' ? need.zoneId : need.kind === 'domain' || need.kind === 'worker' ? need.account + '/' + need.id : need.zoneId + '/' + need.id
+  facts[table][key] = fact
+}
+
+/** One Cloudflare API v4 call for her (`api`). Open reads and writes go straight out; a protected write goes only
+ * with the owner's consumed passkey approval of these exact bytes; nothing is retried; the answer is screened whole.
+ * Job 7: the approved request carries `expect`, the protection his card showed; the edge
+ * classifies the request again with fresh facts and sends nothing, and spends nothing, unless they are equal. */
+async function cloudflareApi(input, env, context) {
+  const hosts = [...CLOUDFLARE_LIVE_HOME.hosts, ...(typeof env.PUBLIC_HOST === 'string' && env.PUBLIC_HOST ? [env.PUBLIC_HOST] : [])]
+  const facts = { zones: {}, dnsRecords: {}, routes: {}, domains: {}, workers: {}, queues: {}, pages: {}, references: {}, tunnels: {} }
+  // The door's level (env.CLOUDFLARE_DOOR_LEVEL; absent or unknown is `guarded`).
+  const level = cloudflareDoorLevel(env)
+  // `expect` rides only on a request the owner approved (the approval travels as this header).
+  const approving = context.request.headers.has('x-x6-class3-approval')
+  const expecting = record(input) && Object.hasOwn(input, 'expect')
+  if (expecting && !approving) fail('CLOUDFLARE_REQUEST_INVALID', 400, { next: CLOUDFLARE_NEXT.request })
+  const request = expecting ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'expect')) : input
+  const options = { accountId: cloudflareAccount(env), facts, hosts, level, lookups: ['live'] }
+  let verdict = classifyCloudflareRequest(request, options)
+  if (verdict.verdict === 'refused') fail(verdict.code, verdict.status, { next: verdict.next })
+  // ---- reader window begin: unapproved reader writes fail before any Cloudflare fact lookup ----
+  if (isReaderWindow(context.request, env) && verdict.read !== true && !approving) fail('READER_WINDOW', 403)
+  // ---- READER-WINDOW end ----
+  const auth = cloudflareAuth(env)
+  for (let round = 0; verdict.verdict === 'needs'; round++) {
+    if (round >= CLOUDFLARE_DOOR_LIMITS.factRounds) fail('CLOUDFLARE_TARGET_UNRESOLVED', 502, { next: CLOUDFLARE_NEXT.unresolved })
+    for (const need of verdict.needs) await cloudflareFact(need, facts, auth, context, hosts)
+    verdict = classifyCloudflareRequest(request, options)
+  }
+  if (verdict.verdict !== 'open' && verdict.verdict !== 'protected') fail('CLOUDFLARE_REQUEST_INVALID', 400, { next: CLOUDFLARE_NEXT.request })
+  // ---- reader window begin: classify Cloudflare API actions at the boundary; open writes remain refused for readers even with an approval header ----
+  if (isReaderWindow(context.request, env) && !verdict.read && (verdict.verdict !== 'protected' || !approving)) fail('READER_WINDOW', 403)
+  // ---- READER-WINDOW end ----
+  const protection = verdict.verdict === 'protected' ? verdict.protection : 'open'
+  // A held request her card could not show whole is refused before anything is staged.
+  if (verdict.verdict === 'protected' && cloudflareStagedBytes(request) > CLOUDFLARE_DOOR_LIMITS.stagedBytes) fail('CLOUDFLARE_REQUEST_TOO_LARGE', 413, { next: CLOUDFLARE_NEXT.tooLarge })
+  // An approved write must carry the reason the card showed, equal to the edge's own reason now.
+  // Different, missing, or no longer held: nothing is sent and the approval is not spent.
+  if ((expecting || (approving && verdict.verdict === 'protected')) && (protection === 'open' || !expecting || canonicalJson(input.expect) !== canonicalJson(protection))) {
+    fail('CLOUDFLARE_REASON_CHANGED', 409, { next: CLOUDFLARE_NEXT.reasonChanged, protection })
+  }
+  if (verdict.verdict === 'protected') {
+    freezeJson(input)
+    if (typeof context.authorizeClass3 !== 'function') fail('CLASS3_WEBAUTHN_REQUIRED', 403, { protection })
+    const requestUrl = new URL(context.request.url)
+    const binding = { schema: 'aukora.class3.action.v1', audience: requestUrl.origin, method: context.request.method, pathname: requestUrl.pathname, bodySha256: await sha256(canonicalJson(input)) }
+    let approval
+    try { approval = freezeJson(structuredClone(await withDeadline(context.signal, () => context.authorizeClass3(input)))) }
+    catch (error) {
+      if (error?.code === 'BROKER_TIMEOUT') throw error
+      fail('CLASS3_WEBAUTHN_REQUIRED', 403, { protection })
+    }
+    if (approval?.ok !== true || canonicalJson(approval.binding) !== canonicalJson(binding) || !Number.isSafeInteger(approval.expiresAt) || approval.expiresAt <= context.now()) fail('CLASS3_WEBAUTHN_REQUIRED', 403, { protection })
+    context.signal.throwIfAborted()
+  }
+  const headers = { ...auth.headers, accept: 'application/json', ...(verdict.body !== undefined ? { 'content-type': verdict.contentType } : {}) }
+  // A write that has left may have happened: from here on, any failure is "outcome unknown", and nothing is sent again.
+  if (!verdict.read) context.cloudflareMutationDispatched = verdict.verdict
+  // Nothing about the live Worker is kept between requests, so nothing is dropped here.
+  let answer
+  try {
+    answer = await withDeadline(context.signal, async signal => {
+      const response = await context.networkFetch(verdict.url, { method: verdict.method, headers, ...(verdict.body !== undefined ? { body: verdict.body } : {}), redirect: 'error', signal })
+      if (response.redirected || (response.status >= 300 && response.status < 400)) { void response.body?.cancel().catch(_error => {}); fail('BROKER_REDIRECT_REFUSED', 502) }
+      return { status: response.status, type: response.headers.get('content-type') || '', bytes: await boundedBytes(response, CLOUDFLARE_DOOR_LIMITS.upstreamBytes, signal) }
+    })
+  } catch (error) {
+    if (!verdict.read) throw error
+    if (typeof error?.code === 'string') throw error
+    fail('CLOUDFLARE_UPSTREAM_FAILED', 502)
+  }
+  const { status } = answer, passed = status >= 200 && status < 300
+  const head = { action: 'api', method: verdict.method, path: verdict.path, status }
+  const withhold = next => ({ ok: passed, ...head, code: 'CLOUDFLARE_RESPONSE_WITHHELD', withheld: true, next, ...(!verdict.read && status >= 500 ? { outcome: 'unknown' } : {}) })
+  let text
+  try { text = decoder.decode(answer.bytes) } catch (_error) { text = null }
+  if (text === null) return { ok: passed, ...head, code: 'CLOUDFLARE_RESPONSE_NOT_TEXT', bytes: answer.bytes.length }
+  // Review: the exact values the door sent as authentication, searched for in the whole answer before
+  // any of it leaves. The key anywhere withholds it whole; the sign-in email is replaced wherever it appears.
+  const key = env.CLOUDFLARE_API_TOKEN, email = auth.authKind === 'global-key' ? auth.headers['x-auth-email'] : null
+  const emailSource = email ? email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null
+  const hasEmail = item => emailSource !== null && new RegExp(emailSource, 'i').test(item)
+  const scrub = item => typeof item === 'string' ? item.replace(new RegExp(emailSource, 'gi'), CLOUDFLARE_ACCOUNT_EMAIL_WORDS)
+    : Array.isArray(item) ? item.map(scrub) : record(item) ? Object.fromEntries(Object.entries(item).map(([name, child]) => [scrub(name), scrub(child)])) : item
+  let redacted = false
+  if (hasEmail(text)) { text = scrub(text); redacted = true }
+  // Review: the screen runs on what the answer IS, not on its declared type: a body that parses as JSON
+  // (whole, line by line, or per multipart part) is screened as JSON, and every text body passes the secret-shape filter.
+  const declaredJson = /^application\/(?:[a-z0-9.+-]+\+)?json(?:\s*;|$)/i.test(answer.type)
+  const views = cloudflareAnswerViews(text, answer.type)
+  if (declaredJson && views.whole === undefined) fail('BROKER_RESPONSE_INVALID', 502)
+  // An email written with JSON escapes is found in the parsed answer and replaced there. An answer not declared JSON goes
+  // back as the text it is, where the escaped form would survive: such an answer is withheld whole.
+  const escapedEmail = views.all.some(view => hasEmail(JSON.stringify(view)))
+  if (escapedEmail) redacted = true
+  let withheld = text.includes(key) || views.all.some(view => JSON.stringify(view).includes(key)) || (escapedEmail && !declaredJson)
+  try { safeText(text, env, CLOUDFLARE_DOOR_LIMITS.upstreamBytes) } catch (_error) { withheld = true }
+  if (views.all.some(view => credentialShaped(view, { allowed: verdict.allowed }))) withheld = true
+  // The raw text too, whatever its type (a text answer, a multipart part, an NDJSON line): a
+  // Cloudflare credential format, a private key, a Bearer value, a URL with a credential in its query or user-info.
+  if (cloudflareAnswerCarriesCredential(text)) withheld = true
+  if (withheld) return withhold(/\/storage\/kv\/namespaces\/[^/]+\/values\//i.test(new URL(verdict.url).pathname) ? CLOUDFLARE_NEXT.stored : CLOUDFLARE_NEXT.withheld)
+  const value = declaredJson ? (redacted ? scrub(views.whole) : views.whole) : undefined
+  const envelope = record(value) && typeof value.success === 'boolean'
+  const errors = Array.isArray(value?.errors) ? value.errors : []
+  const success = envelope ? value.success : passed && errors.length === 0
+  const ok = passed && success
+  const result = { ok, ...head, success, result: value === undefined ? text : envelope ? value.result ?? null : value, errors, messages: Array.isArray(value?.messages) ? value.messages : [],
+    resultInfo: record(value) && record(value.result_info) ? value.result_info : null,
+    ...(!ok ? { code: 'CLOUDFLARE_API_ERROR' } : {}), ...(!ok && !verdict.read && status >= 500 ? { outcome: 'unknown' } : {}), ...(redacted ? { redacted: ['account-email'] } : {}) }
+  // Last look: neither value may be in what leaves, in any spelling the serializer gives.
+  const serialized = JSON.stringify(result)
+  if (serialized.includes(key) || hasEmail(serialized)) return withhold(CLOUDFLARE_NEXT.withheld)
+  return result
+}
+
+/** The `protection` a refusal carries, only in the contract's shape and with
+ * reasons the door knows: on a hold, the protection; on CLOUDFLARE_REASON_CHANGED, the edge's own protection now or "open". */
+function cloudflareProtectionReply(code, value) {
+  if (code === 'CLOUDFLARE_REASON_CHANGED' && value === 'open') return { protection: 'open' }
+  const shaped = cloudflareProtectionShape(value)
+  if (shaped === null || ![shaped, ...(shaped.also ?? [])].every(pair => CLOUDFLARE_PROTECTED_REASONS.includes(pair.reason))) return {}
+  return { protection: shaped }
+}
+
+/** The words that stand where the account's sign-in email was in an answer. */
+const CLOUDFLARE_ACCOUNT_EMAIL_WORDS = '[the account\'s sign-in address]'
+
+/** Every JSON reading of an answer text, whatever its declared type: the whole text, else each line (NDJSON) and
+ * each part of a multipart answer that parses. `whole` is the whole text's reading, or undefined. */
+function cloudflareAnswerViews(text, type) {
+  const parse = value => { try { return JSON.parse(value.replace(/^\uFEFF/, '')) } catch (_error) { return undefined } }
+  const whole = parse(text)
+  if (whole !== undefined) return { whole, all: [whole] }
+  const all = []
+  // An NDJSON line that is a quoted string is a view too.
+  for (const line of text.split(/\r?\n/)) if (/^\s*[[{"]/.test(line)) { const view = parse(line); if (view !== undefined) all.push(view) }
+  const boundary = /boundary="?([^";\s]+)"?/i.exec(type)?.[1]
+  if (boundary) for (const chunk of text.split('--' + boundary)) {
+    const view = parse(chunk.split(/\r?\n\r?\n/).slice(1).join('\n\n').trim())
+    if (view !== undefined) all.push(view)
+  }
+  return { whole: undefined, all }
+}
+
 async function cloudflareBroker(input, env, context) {
   const meta = metadata(env)
-  if (input.action === 'status') return { ok: true, action: 'status', worker: 'your-node', versionId: meta.buildInfo.id ?? meta.sourceRevision, ...meta, brokerConfigured: typeof env.CLOUDFLARE_API_TOKEN === 'string' && Boolean(env.CLOUDFLARE_API_TOKEN), version: meta.buildInfo.id ?? meta.sourceRevision, whoami: 'Owner-authenticated Cloudflare Worker; account credentials remain server-side.' }
-  if (input.action !== 'versions') fail('CLOUDFLARE_ACTION_UNAVAILABLE', 400)
+  if (input.action === 'status') return { ok: true, action: 'status', worker: 'your-node', versionId: meta.buildInfo.id ?? meta.sourceRevision, ...meta, brokerConfigured: typeof env.CLOUDFLARE_API_TOKEN === 'string' && Boolean(env.CLOUDFLARE_API_TOKEN), authKind: cloudflareAuthKind(env), accountConfigured: cloudflareAccount(env) !== null, ...cloudflareDoorStatus(env) /* the Cloudflare door */, actions: ['status', 'versions', 'api'], version: meta.buildInfo.id ?? meta.sourceRevision, whoami: 'Owner-authenticated Cloudflare Worker; account credentials remain server-side.' }
+  if (input.action === 'api') return await cloudflareApi(input, env, context)
+  if (input.action !== 'versions') fail('CLOUDFLARE_ACTION_UNAVAILABLE', 400, { next: CLOUDFLARE_NEXT.wrangler })
   if (input.remote !== true) return { ok: true, action: 'versions', ...meta, source: 'deployment-metadata', versions: Object.keys(meta.buildInfo).length ? [meta.buildInfo] : [{ id: meta.sourceRevision, tag: meta.sourceRevision }] }
-  const token = env.CLOUDFLARE_API_TOKEN, account = env.CLOUDFLARE_ACCOUNT_ID
-  if (typeof token !== 'string' || !token) fail('CLOUDFLARE_BROKER_TOKEN_UNCONFIGURED', 503)
-  if (token.length > 4096 || /\s/.test(token) || typeof account !== 'string' || !/^[a-f0-9]{32}$/.test(account)) fail('CLOUDFLARE_BROKER_CONFIG_INVALID', 503)
-  const value = await upstream(context.networkFetch, `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/your-node/versions`, { method: 'GET', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' } }, context.signal)
+  const auth = cloudflareAuth(env), account = cloudflareAccount(env)
+  if (account === null) fail('CLOUDFLARE_BROKER_CONFIG_INVALID', 503)
+  const value = await upstream(context.networkFetch, `https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts/your-node/versions`, { method: 'GET', headers: { ...auth.headers, 'content-type': 'application/json' } }, context.signal)
   if (value?.success !== true || !Array.isArray(value.result?.items) || value.result.items.length > 100) fail('BROKER_RESPONSE_INVALID', 502)
   const versions = value.result.items.map(item => {
     if (!record(item) || typeof item.id !== 'string' || !/^[A-Za-z0-9-]{1,100}$/.test(item.id)) fail('BROKER_RESPONSE_INVALID', 502)
@@ -2049,9 +2905,31 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     const input = request.method === 'GET' ? { action: url.pathname === '/_host/selftest' ? 'selftest' : url.pathname === '/_host/diagnostics' ? 'diagnostics' : 'status' } : await withDeadline(request.signal, signal => boundedJson(request,
       url.pathname === '/_host/repo' ? CLOUD_REPO_BRANCH_LIMITS.requestBytes : CLOUD_BROKER_LIMITS.requestBytes, signal, bytes => { inputBytes = bytes }))
     if (!record(input) || typeof input.action !== 'string') fail('BROKER_ACTION_REQUIRED')
-    const privateSourceMutation = url.pathname === '/_host/repo' && validAumaBranch(input.branch) && ['write', 'edit', 'commit'].includes(input.action)
+    const privateSourceMutation = url.pathname === '/_host/repo' && validAumaBranch(input.branch) && ['write', 'edit', 'commit', 'apply_patch'].includes(input.action) // apply_patch
     if (!privateSourceMutation && inputBytes > CLOUD_BROKER_LIMITS.requestBytes) fail('BROKER_BODY_TOO_LARGE', 413)
     if (request.method === 'GET' && (request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length') !== '0')) fail('BROKER_BODY_INVALID')
+    // ---- reader window begin: classify broker actions at the authorization boundary (spoofed x-x6-class3-approval never opens ordinary writes) ----
+    if (isReaderWindow(request, env)) {
+      const hasApprovalHeader = Boolean(request.headers.get('x-x6-class3-approval'))
+      if (url.pathname === '/_host/web-eyes') return readerWindowRefusalResponse()
+      if (url.pathname === '/_host/repo') {
+        const class3Merge = input.action === 'merge_proposal' && hasApprovalHeader
+        const class3MainPublication = (input.branch === undefined || input.branch === 'main')
+          && ['write', 'commit', 'push'].includes(input.action)
+          && input.expectedHeadSha !== undefined && input.idempotencyKey !== undefined
+          && hasApprovalHeader
+        if (!REPO_READER_READ_ACTIONS.includes(input.action) && !class3Merge && !class3MainPublication) return readerWindowRefusalResponse()
+      }
+      if (url.pathname === '/_host/github') {
+        const readAction = input.action === 'status' || (input.action === 'api' && (input.method ?? 'GET') === 'GET')
+        const class3Post = input.action === 'api' && input.method === 'POST' && hasApprovalHeader
+        if (!readAction && !class3Post) return readerWindowRefusalResponse()
+      }
+      if (url.pathname === '/_host/cloudflare' && !['status', 'versions', 'api'].includes(input.action)) {
+        return readerWindowRefusalResponse()
+      }
+    }
+    // ---- READER-WINDOW end ----
     if (url.pathname === '/_host/web-eyes') return await webEyes(input, request, env, publicHttpsFetch, trustedDocsHttpsFetch, networkFetch)
     context = { access, bootstrap, networkFetch, approveRepoPublication, authorizeClass3, request, signal: request.signal, now, publicHttpsFetch, trustedDocsHttpsFetch, diagnostics, mutationDispatched: false, repoMutationDispatched: false, refMutationDispatched: false }
     const execute = async () => url.pathname === '/_host/selftest' ? await selftest(env, context)
@@ -2059,23 +2937,31 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
       : url.pathname === '/_host/repo' ? await repo(input, env, context)
       : url.pathname === '/_host/github' ? await githubBroker(input, env, context)
         : await cloudflareBroker(input, env, context)
-    const boundedAction = url.pathname === '/_host/repo' && (['search', 'compare_files', 'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'reconcile_proposal', 'release_attempt'].includes(input.action) || input.branch !== undefined && input.branch !== 'main')
+    const boundedAction = url.pathname === '/_host/repo' && (['search', 'compare_files', 'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'reconcile_proposal', 'release_attempt', 'withdraw_proposal'].includes(input.action) || input.branch !== undefined && input.branch !== 'main')
       || url.pathname === '/_host/github' && typeof input.endpoint === 'string' && input.endpoint.includes('/actions/')
+      || url.pathname === '/_host/repo' && (AUMA_EXEC_ACTIONS.includes(input.action) || input.action === 'dispatch_workflow' && execRequest(input.workflow))
+    // merge_proposal keeps HEAD's merge deadline (mergeTimeoutMs) for its act window; every other bounded call has
+    // timeoutMs. MERGE hook: its read window comes first, so its call ends at most read + act + settle grace = timeoutMs.
+    const merge = url.pathname === '/_host/repo' && input.action === 'merge_proposal'
+    const deadlineMs = merge ? MERGE_READ_WINDOW_MS + CLOUD_BROKER_LIMITS.mergeTimeoutMs : CLOUD_BROKER_LIMITS.timeoutMs
     const result = boundedAction ? await withDeadline(request.signal, async signal => {
       // Share the mutation markers with the outer error handler even when its
       // deadline wins a race with a provider that ignores cancellation.
       context.signal = signal
-      context.deadlineAt = Date.now() + CLOUD_BROKER_LIMITS.timeoutMs
+      context.deadlineAt = Date.now() + deadlineMs
       const value = await execute()
       if (signal.aborted) fail('BROKER_TIMEOUT', 408)
       return value
-    }, { settleMs: url.pathname === '/_host/repo' && input.action === 'merge_proposal' ? MERGE_SETTLE_GRACE_MS : 0 }) : await execute()
+    }, { settleMs: merge ? MERGE_SETTLE_GRACE_MS : 0, timeoutMs: deadlineMs }) : await execute()
     const serialized = JSON.stringify(result)
     const fileRead = (url.pathname === '/_host/repo' && input.action === 'read')
       || (url.pathname === '/_host/github' && typeof result.json?.content === 'string')
     const expandedRepoOutput = url.pathname === '/_host/repo' && ['compare_files', 'diff'].includes(input.action)
     const logOutput = url.pathname === '/_host/github' && typeof result.json?.log === 'string'
-    const maximum = expandedRepoOutput ? 8 * 1024 * 1024 : fileRead || logOutput || privateSourceMutation ? CLOUD_REPO_READ_LIMITS.responseBytes : CLOUD_BROKER_LIMITS.responseBytes
+    // A Cloudflare list answer may be up to 1 MiB (cloudflare-door.mjs CLOUDFLARE_DOOR_LIMITS); every other door keeps its bound.
+    const cloudflareApiAnswer = url.pathname === '/_host/cloudflare' && input.action === 'api'
+    // A job-log answer is held to the 256 KiB broker answer (it no longer takes the 6.5 MiB read maximum).
+    const maximum = expandedRepoOutput ? 8 * 1024 * 1024 : logOutput ? CLOUD_BROKER_LIMITS.responseBytes : fileRead || privateSourceMutation ? CLOUD_REPO_READ_LIMITS.responseBytes : cloudflareApiAnswer ? CLOUDFLARE_DOOR_LIMITS.answerBytes : CLOUD_BROKER_LIMITS.responseBytes
     if (size(serialized) > maximum) fail('BROKER_BODY_TOO_LARGE', 413)
     safeText(serialized, env, maximum)
     return reply(result, result.ok === false ? 503 : 200)
@@ -2083,8 +2969,12 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     if (context?.refMutationDispatched) return reply({ ok: false, code: 'REPO_REF_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'inspect-github-and-durable-merge-outcome-before-any-new-action', replaySafe: false, macFallback: false }, 503)
     if (context?.repoMutationDispatched) return reply({ ok: false, code: 'REPO_PUBLICATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true, macFallback: false }, 503)
     if (context?.mutationDispatched) return reply({ ok: false, code: 'GITHUB_MUTATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'inspect-github-before-new-approval', requiresFreshClass3Approval: true, replaySafe: false, macFallback: false }, 503)
+    // A Cloudflare write that left and lost its answer may have happened; it is never sent again by this door.
+    if (context?.cloudflareMutationDispatched) return reply({ ok: false, code: 'CLOUDFLARE_MUTATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'read-cloudflare-state-before-any-new-request', requiresFreshClass3Approval: context.cloudflareMutationDispatched === 'protected', replaySafe: false, macFallback: false }, 503)
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED'
-    return reply({ ok: false, code, macFallback: false, ...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error) }, [400, 403, 404, 405, 408, 409, 413, 502, 503, 507].includes(error?.status) ? error.status : 503)
+    if (code === 'READER_WINDOW') return readerWindowRefusalResponse()
+    return reply({ ok: false, code, macFallback: false, ...(code.startsWith('CLOUDFLARE_') && Object.values(CLOUDFLARE_NEXT).includes(error.next) ? { next: error.next } : {}), ...(['CLASS3_WEBAUTHN_REQUIRED', 'CLOUDFLARE_REASON_CHANGED'].includes(code) ? cloudflareProtectionReply(code, error.protection) : {}),...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(code === 'BROKER_TIMEOUT' && error?.phase === 'reads' ? { phase: 'reads', approvalSpent: false, mainMoved: false } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error), ...patchRefusalFacts(code, error, env),
+      ...(code === 'EXEC_RATE_LIMITED' && Number.isSafeInteger(error.retryAt) ? { retryAt: error.retryAt, limit: error.limit } : {}) }, [400, 403, 404, 405, 408, 409, 413, 429, 502, 503, 507].includes(error?.status) ? error.status : 503) // 429 and retryAt
   }
 }
 
@@ -2105,13 +2995,17 @@ export function publicHttpsTarget(value) {
   return target
 }
 
+/** `web_eyes` search (at most 50 results, default 10; were 20 and 8). Each source is asked for the same
+ * number: Wikipedia opensearch and HN Algolia take it as their page size; MDN answers its own page. */
+export const WEB_EYES_SEARCH_LIMITS = Object.freeze({ results: 50, defaultResults: 10 })
+
 async function webEyes(input, request, env, publicHttpsFetch, trustedDocsHttpsFetch, networkFetch) {
   if (request.method !== 'POST' || !['fetch', 'search'].includes(input.action)) fail('WEB_EYES_REQUEST_INVALID', 400)
   if (input.action === 'search') {
     if (Object.keys(input).some(key => !['action', 'query', 'limit', 'maxResults'].includes(key))) fail('WEB_EYES_REQUEST_INVALID', 400)
     if (typeof input.query !== 'string' || !input.query.trim() || input.query.length > 512) fail('WEB_EYES_REQUEST_INVALID', 400)
-    const rawLimit = input.limit ?? input.maxResults ?? 8
-    if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || rawLimit > 20) fail('WEB_EYES_REQUEST_INVALID', 400)
+    const rawLimit = input.limit ?? input.maxResults ?? WEB_EYES_SEARCH_LIMITS.defaultResults
+    if (!Number.isSafeInteger(rawLimit) || rawLimit < 1 || rawLimit > WEB_EYES_SEARCH_LIMITS.results) fail('WEB_EYES_REQUEST_INVALID', 400)
     const query = safeText(input.query.trim(), env, 512)
     if (typeof publicHttpsFetch !== 'function') return reply({ ok: false, code: 'PUBLIC_NETWORK_GUARD_UNAVAILABLE', capability: 'public-web-search', macFallback: false }, 503)
     return withDeadline(request.signal, async signal => {
@@ -2191,7 +3085,13 @@ async function webEyes(input, request, env, publicHttpsFetch, trustedDocsHttpsFe
           }
         } catch (_e) {}
       }
-      const out = { ok: true, action: 'search', capability: 'public-web-search', query, count: results.length, results, macFallback: false }
+      // Up to 50 results of bounded fields fit the 256 KiB answer; should escaping push one past it, the last results are
+      // left out and the answer says so, rather than refusing the whole search.
+      const found = results.length
+      const answer = () => ({ ok: true, action: 'search', capability: 'public-web-search', query, count: results.length, results,
+        ...(results.length < found ? { truncated: true, found } : {}), macFallback: false })
+      while (results.length > 0 && size(JSON.stringify(answer())) > CLOUD_BROKER_LIMITS.responseBytes) results.pop()
+      const out = answer()
       const serialized = JSON.stringify(out)
       if (size(serialized) > CLOUD_BROKER_LIMITS.responseBytes) fail('BROKER_BODY_TOO_LARGE', 413)
       safeText(serialized, env, CLOUD_BROKER_LIMITS.responseBytes)
@@ -2300,3 +3200,257 @@ export async function cloudWakeRepoRead(input, env, { seedId, networkFetch = glo
     return { ok: false, code: typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED' }
   }
 }
+
+// ---- WAKE block begin ----
+/** The cloud wake's own reader: an internal, read-only principal. It is never an owner-shaped access (`access` stays
+ * null, so every owner check refuses it); only `execDoor` knows it, and only for the two exec reads below. Module-private:
+ * no request, header or JSON body can produce this object. */
+const CLOUD_WAKE_READER = Object.freeze({ kind: 'cloud-wake-reader', writes: false })
+const CLOUD_WAKE_EXEC_READS = Object.freeze(['exec_runs', 'exec_logs'])
+/** Reads the wake may make on HER OWN work: her branches (`auma/sandbox/*`, `auma/proposal/*`) and main, never another
+ * branch; her exec runs; the checks of a proposal head. Exactly these fields; nothing writes. */
+export const CLOUD_WAKE_OWN_READS = Object.freeze({
+  read: Object.freeze(['action', 'path', 'offset', 'length', 'branch']),
+  search: Object.freeze(['action', 'query', 'prefix', 'maxMatches', 'branch']),
+  log: Object.freeze(['action', 'limit', 'branch']),
+  branches: Object.freeze(['action']),
+  exec_runs: Object.freeze(['action', 'limit']),
+  exec_logs: Object.freeze(['action', 'run', 'job']),
+  proposal_checks: Object.freeze(['action', 'branch']),
+})
+export const CLOUD_WAKE_OWN_BRANCH_LIMIT = 50
+const WAKE_BRANCHES_QUERY = 'query X61WakeBranches($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { '
+  + 'refs(refPrefix: "refs/heads/auma/", first: 50) { totalCount nodes { name target { oid } compare(headRef: "main") { aheadBy behindBy } } } } }'
+/** `main`, or one of her own branches; anything else is refused before any network call. */
+const wakeBranch = value => value === undefined || value === 'main' || validAumaBranch(value) ? (value ?? 'main') : fail('CLOUD_WAKE_BRANCH_REFUSED', 403)
+
+/**
+ * The cloud wake's reads of her own work, called inside HEAD with the internal read-only principal. Each read is
+ * the broker's existing function (`repo` read and search, `commits`, `execDoor` exec_runs and exec_logs, `workflowCi`),
+ * so path rules, secret scrubbing and deadlines all apply. Never throws: a refusal is `{ ok: false, code }`.
+ * @param {object} input One read request from CLOUD_WAKE_OWN_READS.
+ * @param {object} env Worker env; never echoed.
+ * @param {{ seedId: string, networkFetch?: typeof fetch, signal?: AbortSignal, screenFile?: (text: string) => boolean }} context
+ */
+export async function cloudWakeOwnRead(input, env, { seedId, networkFetch = globalThis.fetch, signal, screenFile } = {}) {
+  try {
+    if (!record(input) || typeof input.action !== 'string' || !Object.hasOwn(CLOUD_WAKE_OWN_READS, input.action)) fail('CLOUD_WAKE_REPO_ACTION_REFUSED', 403)
+    exactFields(input, CLOUD_WAKE_OWN_READS[input.action])
+    if (typeof seedId !== 'string' || !/^[0-9a-f]{64}$/.test(seedId)) fail('CLOUD_WAKE_REPO_UNSEEDED', 503)
+    const branch = wakeBranch(input.branch)
+    if (input.action === 'proposal_checks' && branch === 'main') fail('CLOUD_WAKE_BRANCH_REFUSED', 403)
+    if (input.action === 'search' && typeof screenFile !== 'function') fail('CLOUD_WAKE_SCREEN_REQUIRED', 400)
+    const context = { access: null, principal: CLOUD_WAKE_READER, bootstrap: { head: { seedId } }, networkFetch, now: Date.now,
+      mutationDispatched: false, repoMutationDispatched: false, refMutationDispatched: false, ...(typeof screenFile === 'function' ? { screenFile } : {}) }
+    const result = await withDeadline(signal, async limited => {
+      const local = { ...context, signal: limited }
+      if (input.action === 'read' || input.action === 'search' || CLOUD_WAKE_EXEC_READS.includes(input.action)) return await repo(input, env, local)
+      if (input.action === 'log') {
+        const limit = input.limit ?? 10
+        if (!Number.isInteger(limit) || limit < 1 || limit > 20) fail('BROKER_QUERY_INVALID')
+        return { ok: true, branch, commits: await commits(env, networkFetch, limited, limit, branch) }
+      }
+      if (input.action === 'proposal_checks') {
+        const headSha = await branchHead(branch, env, local)
+        const checks = []
+        for (const workflow of PROPOSAL_CI_WORKFLOWS) checks.push({ workflow: workflow.file, conclusion: await workflowCi(workflow, branch, headSha, env, local) })
+        return { ok: true, branch, headSha, checks }
+      }
+      // branches: one GraphQL read (a query, never a mutation) of her refs with ahead/behind against main.
+      const value = await upstream(networkFetch, 'https://api.github.com/graphql', { method: 'POST', headers: githubHeaders(env),
+        body: JSON.stringify({ query: WAKE_BRANCHES_QUERY, variables: { owner: REPOSITORY.split('/')[0], name: REPOSITORY.split('/')[1] } }) }, limited)
+      const refs = value?.data?.repository?.refs
+      if (value?.errors?.length || !record(refs) || !Array.isArray(refs.nodes) || refs.nodes.length > CLOUD_WAKE_OWN_BRANCH_LIMIT || !Number.isSafeInteger(refs.totalCount)) fail('BROKER_RESPONSE_INVALID', 502)
+      const branches = []
+      let skipped = 0
+      for (const node of refs.nodes) {
+        const name = typeof node?.name === 'string' ? 'auma/' + node.name : null
+        const compare = node?.compare
+        if (!name || !validAumaBranch(name) || !SHA.test(node?.target?.oid ?? '') || !record(compare)
+          || !Number.isSafeInteger(compare.aheadBy) || !Number.isSafeInteger(compare.behindBy)) { skipped++; continue }
+        // compare(base: her branch, head: main): main's aheadBy is how far she is behind; behindBy is how far she is ahead.
+        branches.push({ name, head: node.target.oid, ahead: compare.behindBy, behind: compare.aheadBy })
+      }
+      return { ok: true, branches, total: refs.totalCount, ...(skipped ? { skipped } : {}), truncated: refs.totalCount > refs.nodes.length }
+    })
+    const serialized = JSON.stringify(result)
+    if (size(serialized) > CLOUD_REPO_READ_LIMITS.responseBytes) fail('BROKER_BODY_TOO_LARGE', 413)
+    safeText(serialized, env, CLOUD_REPO_READ_LIMITS.responseBytes)
+    return result
+  } catch (error) {
+    return { ok: false, code: typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED' }
+  }
+}
+// ---- WAKE block end ----
+
+// ---- WAKE block begin ----
+/** Her no-tab acts under the owner's mandate. The wake-mandate actor is module-private: no request, header, JSON
+ * body or other module can produce it, and `access` stays null on its path, so every owner check except the three
+ * marked WAKE hooks (requireOwner for branch_create/commit/apply_patch, execDoor for exec_start) refuses it, and
+ * `repo()` is never called with it. HEAD spends the mandate first (useOwnerMandate / useOwnerMandateExecJob) and only
+ * then calls cloudWakeMandateAct. */
+const WAKE_MANDATE_ACTOR = Object.freeze({ kind: 'wake-mandate-actor', writes: 'her-branches-only' })
+/** The acts whose inner functions re-check the owner with requireOwner; the actor passes it only for these. */
+const WAKE_MANDATE_OWNER_STEPS = Object.freeze(['branch_create', 'commit', 'apply_patch'])
+/** The CLOSED list of repo acts and the exact fields of each (linear_comment is the fifth act; it goes through linear-door.mjs). */
+export const CLOUD_WAKE_MANDATE_ACTS = Object.freeze({
+  branch_create: Object.freeze(['act', 'branch', 'fromBranch']),
+  commit: Object.freeze(['act', 'branch', 'expectedHeadSha', 'message', 'changes']),
+  apply_patch: Object.freeze(['act', 'branch', 'baseSha', 'patch', 'message']),
+  exec_start: Object.freeze(['act', 'ref', 'command', 'timeout_minutes', 'label', 'browser']),
+  stage_proposal: Object.freeze(['act', 'branch', 'title', 'summary']),
+})
+const WAKE_MANDATE_ACT_REQUIRED = Object.freeze({ branch_create: ['branch'], commit: ['branch', 'expectedHeadSha', 'message', 'changes'],
+  apply_patch: ['branch', 'baseSha', 'patch', 'message'], exec_start: ['ref', 'command', 'timeout_minutes', 'label'], stage_proposal: ['branch', 'title'] })
+const WAKE_MANDATE_ID = /^[A-Za-z0-9_-]{16,64}$/
+
+/** The mandate use each act must carry (HEAD's receipt for the exact act request), by act. */
+const WAKE_MANDATE_ACT_USE = Object.freeze({ branch_create: ['repo.write.branch', 'branchCreates'], commit: ['repo.write.branch', 'commits'],
+  apply_patch: ['repo.write.branch', 'commits'], exec_start: ['exec.run', 'execJob'], stage_proposal: ['proposal.stage', 'proposalStages'] })
+
+/** Whether `spent` is HEAD's mandate use receipt for exactly this act request of this principal: its
+ * mandate, the act's scope and kind, and `actionSha256` the SHA-256 of canonicalJson(act). Pure but for the hash. */
+async function wakeMandateActPaid(principal, act, spent) {
+  const [scope, use] = WAKE_MANDATE_ACT_USE[act.act]
+  return record(spent) && spent.kind === 'use' && spent.mandateId === principal.mandateId && spent.scope === scope && spent.use === use
+    && typeof spent.actionSha256 === 'string' && spent.actionSha256 === await sha256(canonicalJson(act))
+}
+
+/** Read only, whether execDoor's in-memory hour and day bound (execRate) would refuse the wake actor's
+ * next dispatch at `at`. The actor carries no access, so execSession files it under `owner:undefined`. HEAD asks this
+ * BEFORE it spends the mandate or reserves runner minutes, so a refusal here costs nothing. */
+export function wakeExecRateRefusal(at) {
+  const entry = execSessions.get(`owner:${undefined}`)
+  if (!entry || !Number.isSafeInteger(at)) return null
+  const day = Math.floor(at / 86400000)
+  const hour = entry.hour.filter(time => at - time < 3600000), today = entry.day.filter(time => Math.floor(time / 86400000) === day)
+  if (today.length >= AUMA_EXEC_LIMITS.perDay) return { code: 'EXEC_RATE_LIMITED', retryAt: (day + 1) * 86400000 }
+  if (hour.length >= AUMA_EXEC_LIMITS.perHour) return { code: 'EXEC_RATE_LIMITED', retryAt: hour[0] + 3600000 }
+  return null
+}
+
+/** The wake's own principal `{ type: 'wake-mandate', mandateId }`, exactly; anything else refuses. */
+export function wakeMandatePrincipalValid(principal) {
+  return record(principal) && Object.keys(principal).length === 2 && principal.type === 'wake-mandate'
+    && typeof principal.mandateId === 'string' && WAKE_MANDATE_ID.test(principal.mandateId)
+}
+
+function wakeCommitMessage(message, env) {
+  const text = safeText(message, env, 1024)
+  if (!text.trim() || /[\r\n]/.test(text)) fail('REPO_COMMIT_MESSAGE_INVALID')
+  return text
+}
+
+/**
+ * The act's shape and target, judged with NO network and NO spend. Her branch only (main and any other branch
+ * refused), the frozen-path judgement on every path, a runner ref that is one of her branches, a proposal branch.
+ * Throws a closed `{ code, status }`; answers the normalized act (frozen).
+ */
+export function cloudWakeMandateActShape(principal, act, env) {
+  if (!wakeMandatePrincipalValid(principal)) fail('WAKE_MANDATE_PRINCIPAL_INVALID', 403)
+  if (!record(act) || typeof act.act !== 'string' || !Object.hasOwn(CLOUD_WAKE_MANDATE_ACTS, act.act)) fail('WAKE_ACT_REFUSED', 403)
+  exactFields(act, CLOUD_WAKE_MANDATE_ACTS[act.act])
+  for (const key of WAKE_MANDATE_ACT_REQUIRED[act.act]) if (act[key] === undefined) fail('BROKER_QUERY_INVALID')
+  if (act.act === 'exec_start') {
+    if (!validAumaBranch(act.ref)) fail('EXEC_REF_INVALID')
+    if (!Number.isSafeInteger(act.timeout_minutes) || act.timeout_minutes < AUMA_EXEC_LIMITS.minMinutes || act.timeout_minutes > AUMA_EXEC_LIMITS.maxMinutes) fail('EXEC_TIMEOUT_INVALID')
+    const inputs = aumaExecInputs({ ref: act.ref, command: act.command, timeout_minutes: act.timeout_minutes, label: act.label, ...(act.browser === undefined ? {} : { browser: act.browser }) })
+    safeText(inputs.command, env, 4 * AUMA_EXEC_LIMITS.commandChars)
+    return Object.freeze({ act: 'exec_start', ref: inputs.ref, command: inputs.command, timeout_minutes: act.timeout_minutes, label: inputs.label, browser: inputs.browser === 'true' })
+  }
+  if (act.act === 'stage_proposal') {
+    if (!validProposalBranch(act.branch)) fail('REPO_BRANCH_REFUSED', 403)
+    const title = safeText(act.title, env, 200), summary = act.summary === undefined ? undefined : safeText(act.summary, env, 4000)
+    if (!title.trim() || /[\u0000-\u001f\u007f]/.test(title)) fail('REPO_PROPOSAL_TITLE_INVALID')
+    return Object.freeze({ act: 'stage_proposal', branch: act.branch, title, ...(summary === undefined ? {} : { summary }) })
+  }
+  if (!validAumaBranch(act.branch)) fail('REPO_BRANCH_REFUSED', 403)
+  if (act.act === 'branch_create') {
+    if (!(act.fromBranch === undefined || act.fromBranch === 'main' || validAumaBranch(act.fromBranch))) fail('REPO_BRANCH_REFUSED', 403)
+    if (act.fromBranch === act.branch) fail('REPO_BRANCH_REFUSED', 403)
+    return Object.freeze({ act: 'branch_create', branch: act.branch, ...(act.fromBranch === undefined ? {} : { fromBranch: act.fromBranch }) })
+  }
+  if (act.act === 'commit') {
+    if (typeof act.expectedHeadSha !== 'string' || !SHA.test(act.expectedHeadSha)) fail('REPO_BASE_SHA_REQUIRED')
+    if (!Array.isArray(act.changes) || !act.changes.length || act.changes.length > CLOUD_REPO_BRANCH_LIMITS.files) fail('REPO_EXPLICIT_CHANGES_REQUIRED')
+    const changes = act.changes.map(change => {
+      if (!record(change)) fail('REPO_CHANGE_INVALID')
+      exactFields(change, ['path', 'content'])
+      return Object.freeze({ path: branchPath(change.path, env), content: safeText(change.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) })
+    })
+    if (new Set(changes.map(change => change.path)).size !== changes.length) fail('REPO_CHANGE_INVALID')
+    return Object.freeze({ act: 'commit', branch: act.branch, expectedHeadSha: act.expectedHeadSha, message: wakeCommitMessage(act.message, env), changes: Object.freeze(changes) })
+  }
+  // apply_patch: parsed and every path judged here; applied later exactly as `apply_patch` applies it.
+  if (typeof act.baseSha !== 'string' || !SHA.test(act.baseSha)) fail('REPO_BASE_SHA_REQUIRED')
+  if (typeof act.patch !== 'string') fail('PATCH_SHAPE')
+  for (const file of parseUnifiedPatch(act.patch)) branchPath(file.path, env)
+  return Object.freeze({ act: 'apply_patch', branch: act.branch, baseSha: act.baseSha, patch: act.patch, message: wakeCommitMessage(act.message, env) })
+}
+
+/**
+ * Run ONE act of the closed list for the wake principal, AFTER HEAD has spent the mandate for it. Never throws:
+ * `{ ok: true, ... }` or `{ ok: false, code, dispatched }` (`dispatched`: a write may have left, so the outcome is unknown).
+ * @param {{ type: 'wake-mandate', mandateId: string }} principal
+ * @param {object} act One act request (CLOUD_WAKE_MANDATE_ACTS).
+ * @param {object} env Worker env; never echoed.
+ * @param {{ seedId: string, networkFetch: typeof fetch, signal: AbortSignal, now?: () => number, audience?: string,
+ *   stage?: (proposal: object) => Promise<object>, runnerPickScope?: object, spent: object }} context `stage` stores a proposal
+ *   card in HEAD (its own transaction); `runnerPickScope` is a HEAD-private capability for the reservation, never from a browser or
+ *   the model; `spent` is the mandate use receipt HEAD wrote for exactly this act request: without it, or
+ *   for other bytes, the act is refused WAKE_MANDATE_SPEND_REQUIRED before any request.
+ */
+export async function cloudWakeMandateAct(principal, act, env, { seedId, networkFetch, signal, now = Date.now, audience, stage, runnerPickScope, spent } = {}) {
+  const local = { access: null, principal: WAKE_MANDATE_ACTOR, wakeMandateStep: null, bootstrap: { ready: true, head: { seedId } }, networkFetch, now,
+    mutationDispatched: false, repoMutationDispatched: false, refMutationDispatched: false, runnerPickScope }
+  let dispatched = false
+  try {
+    const shaped = cloudWakeMandateActShape(principal, act, env)
+    if (!await wakeMandateActPaid(principal, act, spent)) fail('WAKE_MANDATE_SPEND_REQUIRED', 403) // Paid first, for these bytes
+    if (typeof seedId !== 'string' || !/^[0-9a-f]{64}$/.test(seedId)) fail('CLOUD_WAKE_REPO_UNSEEDED', 503)
+    if (typeof networkFetch !== 'function') fail('BROKER_UNAVAILABLE', 503)
+    const counted = (url, init) => { if (init?.method && init.method !== 'GET') dispatched = true; return networkFetch(url, init) }
+    return await withDeadline(signal, async limited => {
+      const context = { ...local, wakeMandateStep: shaped.act, networkFetch: counted, signal: limited }
+      if (shaped.act === 'branch_create') {
+        const current = await branchHead(shaped.branch, env, context, true)
+        if (current !== null) return { ok: true, act: 'branch_create', branch: shaped.branch, headSha: current, created: false }
+        const after = await branchHead(shaped.fromBranch ?? 'main', env, context)
+        const id = await repositoryId(env, context)
+        await updateRefs([{ name: 'refs/heads/' + shaped.branch, beforeOid: ZERO_SHA, afterOid: after, force: false }], id, env, context)
+        if (await branchHead(shaped.branch, env, context) !== after) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
+        return { ok: true, act: 'branch_create', branch: shaped.branch, headSha: after, created: true, from: shaped.fromBranch ?? 'main' }
+      }
+      if (shaped.act === 'commit') {
+        const result = await branchOperation({ action: 'commit', branch: shaped.branch, expectedHeadSha: shaped.expectedHeadSha, message: shaped.message,
+          changes: shaped.changes.map(change => ({ ...change })) }, env, context)
+        return { ok: true, act: 'commit', branch: shaped.branch, headSha: result.headSha, paths: result.paths }
+      }
+      if (shaped.act === 'apply_patch') {
+        const result = await applyPatch({ action: 'apply_patch', branch: shaped.branch, baseSha: shaped.baseSha, patch: shaped.patch, message: shaped.message }, env, context)
+        return { ok: true, act: 'apply_patch', branch: shaped.branch, headSha: result.headSha, files: result.files }
+      }
+      if (shaped.act === 'exec_start') {
+        const result = await execDoor({ action: 'dispatch_workflow', workflow: AUMA_EXEC_WORKFLOW.file, inputs: { ref: shaped.ref, command: shaped.command,
+          timeout_minutes: shaped.timeout_minutes, label: shaped.label, browser: shaped.browser } }, env, context)
+        return { ok: true, act: 'exec_start', branch: shaped.ref, runName: result.runName, label: result.label, timeoutMinutes: result.timeoutMinutes }
+      }
+      // stage_proposal: the card's evidence read from GitHub exactly as stage_proposal reads it; HEAD stores it (never merges).
+      if (typeof stage !== 'function' || typeof audience !== 'string') fail('BOOTSTRAP_REQUIRED', 503)
+      const evidence = await proposalEvidence(shaped.branch, env, context)
+      const mergeBody = { action: 'merge_proposal', baseSha: evidence.baseSha, branch: shaped.branch, headSha: evidence.headSha, treeSha: evidence.treeSha }
+      const proposal = { schema: 'aukora.staged-repo-proposal.v1', branch: shaped.branch, title: shaped.title, ...(shaped.summary === undefined ? {} : { summary: shaped.summary }), ...evidence,
+        ciStatus: await proposalCi(shaped.branch, evidence.headSha, env, context), stagedAt: now(), mergeBody,
+        binding: { schema: 'aukora.class3.action.v1', audience, method: 'POST', pathname: '/_host/repo', bodySha256: await sha256(canonicalJson(mergeBody)) } }
+      if (size(JSON.stringify(proposal)) > CLOUD_REPO_PROPOSAL_LIMITS.bytes) fail('REPO_PROPOSAL_TOO_LARGE', 413)
+      safeText(JSON.stringify(proposal), env, CLOUD_REPO_PROPOSAL_LIMITS.bytes)
+      const stored = await stage(proposal)
+      if (stored?.ok !== true) fail(typeof stored?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(stored.code) ? stored.code : 'REPO_PROPOSAL_STORAGE_FAILED', 503)
+      return { ok: true, act: 'stage_proposal', branch: shaped.branch, headSha: evidence.headSha, ciStatus: proposal.ciStatus, changedFiles: evidence.changedFiles.length }
+    })
+  } catch (error) {
+    return { ok: false, code: typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED', dispatched,
+      ...(typeof error?.headSha === 'string' && SHA.test(error.headSha) ? { headSha: error.headSha } : {}) }
+  }
+}
+// ---- WAKE block end ----

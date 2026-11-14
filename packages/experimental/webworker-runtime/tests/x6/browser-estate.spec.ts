@@ -190,6 +190,31 @@ describe('browser estate (pure)', () => {
     expect(Number(huge.outputBytes)).toBeLessThanOrEqual(ESTATE_LIMITS.outputBytes)
     expect(huge.outputTrimmed).toEqual(['vfs.entries'])
   })
+
+  it('a page reaches 4000 entries and a search 400 hits (were 1000 and 100); the defaults stay 200 and 20', async () => {
+    const vfs = estate()
+    for (let i = 0; i < 2500; i += 1) vfs.mkdirSync(`/dsh/home/auma/d/${String(i).padStart(4, '0')}`, { recursive: true })
+    type Vfs = { page: { limit: number; returned: number; nextCursor: number | null } }
+    const wide = await inspectBrowserEstate(vfs, { sections: ['vfs'], limit: 4000 })
+    // Before: held at 1000, so 1000 came back with a next cursor.
+    expect((wide.vfs as Vfs).page).toMatchObject({ limit: 4000, nextCursor: null })
+    expect((wide.vfs as Vfs).page.returned).toBeGreaterThan(2500)
+    expect(wide.outputTrimmed).toBeUndefined()
+    expect((await inspectBrowserEstate(vfs, { sections: ['vfs'], limit: 999_999 }).then(report => report.vfs as Vfs)).page.limit).toBe(4000)
+    expect((await inspectBrowserEstate(vfs, { sections: ['vfs'] }).then(report => report.vfs as Vfs)).page).toMatchObject({ limit: 200, returned: 200 })
+
+    const rows = Array.from({ length: 300 }, (_, i) => said(`the lantern ${String(i)}`)).join('\n')
+    vfs.writeFileSync('/dsh/home/sessions/--dsh-home-auma--/s1/session.v1.jsonl', JSON.stringify({ type: 'session', id: 's1', title: 'Lamps' }) + `\n${rows}\n`)
+    type Search = { hits: unknown[]; truncated: boolean; limits: { hits: number } }
+    const many = (await inspectBrowserEstate(vfs, { sections: ['search'], query: 'lantern', maxHits: 400 })).search as Search
+    // Before: held at 100 hits, and truncated.
+    expect(many).toMatchObject({ truncated: false, limits: { hits: 400 } })
+    expect(many.hits).toHaveLength(300)
+    expect(((await inspectBrowserEstate(vfs, { sections: ['search'], query: 'lantern', maxHits: 99_999 })).search as Search).limits.hits).toBe(400)
+    const plain = (await inspectBrowserEstate(vfs, { sections: ['search'], query: 'lantern' })).search as Search
+    expect(plain).toMatchObject({ limits: { hits: 20 } })
+    expect(plain.hits).toHaveLength(20)
+  })
 })
 
 describe('x6_browser_estate tool (mounted)', () => {

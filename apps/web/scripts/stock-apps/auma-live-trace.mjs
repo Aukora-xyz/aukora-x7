@@ -1,28 +1,26 @@
-// A file of an earlier repository, pointed at x6.1's port of the Pentora figure. Auma Live
-// imports `createAuraTrace` from `/app/aura-trace.js`; this is that module's source. Plain JS on purpose: the web
-// project typechecks `scripts/`, and this file reaches into another project, which only esbuild should follow.
-import { createElement } from 'react'
-import { createRoot } from 'react-dom/client'
-import { PentoraFigure } from '../../../../packages/client/ui-layout/src/client/spatial/aura/PentoraFigure.tsx'
-import { absentHealth } from '../../../../packages/client/ui-layout/src/client/spatial/aura/model.ts'
+// The source of `/app/aura-trace.js`: the living Pentora behind Auma Live's voice field (pentora-live/renderer.mjs).
+// Auma Live imports `createAuraTrace` and calls it with nothing; the seam is unchanged:
+//   { element, resize(), setActive(v), draw(elapsedMs, { color, mic, say, think }), destroy() }
+// The element keeps the class `alv-aura-trace`, `aria-hidden="true"` and no pointer events, behind the orb, the
+// transcript and the controls. Plain JS on purpose: the web project typechecks `scripts/`, and the lattice reaches
+// into another project, which only esbuild should follow. No React.
+import './pentora-live/pentora-live.css'
+import { createPentoraLive } from './pentora-live/renderer.mjs'
 
-export function createAuraTrace() {
-  const element = document.createElement('div')
-  element.className = 'alv-aura-trace'
+/** @param options - only for tests and the harness: the browser globals createPentoraLive accepts. */
+export function createAuraTrace(options = {}) {
+  const doc = options.document ?? document
+  const element = doc.createElement('div')
+  element.className = 'alv-aura-trace alv-pentora-live'
   element.setAttribute('aria-hidden', 'true')
-  const root = createRoot(element)
-  const live = { current: { pulses: [], working: false } }
-  const health = absentHealth()
-  let active = true
-  const render = () => root.render(createElement(PentoraFigure, { view: health, active, focus: null, live }))
-  render()
+  // The figure is centred in this layer's box (the whole field), on a canvas only as large as the figure and its glow.
+  const live = createPentoraLive({ ...options, document: doc, box: element })
+  element.append(live.element)
   return {
     element,
-    resize() {},
-    setActive(value) { active = value; render() },
-    draw(_elapsedMs, state) {
-      live.current.working = Math.max(state.mic, state.say, state.think) > 0.02
-    },
-    destroy() { root.unmount() },
+    resize() { live.resize() },
+    setActive(value) { live.setActive(value) },
+    draw(elapsedMs, state) { live.draw(elapsedMs, state) },
+    destroy() { live.destroy() },
   }
 }

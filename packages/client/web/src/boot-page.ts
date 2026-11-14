@@ -28,6 +28,7 @@ const STALL_REFRESH_MS = 5_000
 const PHASE_WORDS: Readonly<Record<string, { readonly hint: string; readonly doing: string }>> = Object.freeze({
   image: { hint: 'Loading her seed image…', doing: 'fetching her seed image' },
   storage: { hint: 'Opening her memory…', doing: 'opening her memory' },
+  threads: { hint: 'Reading her threads from her cloud…', doing: 'reading her threads from her cloud' },
   plugins: { hint: 'Loading plugins…', doing: 'loading her plugins' },
   head: { hint: 'Reading her head…', doing: 'reading her head' },
   serving: { hint: 'Loading plugins…', doing: 'loading her plugins' },
@@ -152,13 +153,18 @@ export class BootPage {
     if (!this.observing) return
     const raw: unknown = (event as CustomEvent<unknown>).detail
     if (raw === null || typeof raw !== 'object') return
-    const detail = raw as { phase?: unknown; bytes?: unknown }
+    const detail = raw as { phase?: unknown; bytes?: unknown; of?: unknown }
     if (typeof detail.phase !== 'string') return
     this.phase = detail.phase
     const words = PHASE_WORDS[detail.phase]
     const megabytes = typeof detail.bytes === 'number' && Number.isFinite(detail.bytes) && detail.bytes > 0
       ? ` ${String(Math.round(detail.bytes / (1024 * 1024)))} MB` : ''
-    if (words !== undefined) this.hint.textContent = `${words.hint}${megabytes}`
+    // While her threads are read, "N of M" (two whole numbers, done never past total).
+    const count = Array.isArray(detail.of) && detail.of.length === 2 ? detail.of as unknown[] : null
+    const [done, total] = count ?? []
+    const of = Number.isSafeInteger(done) && Number.isSafeInteger(total) && (done as number) >= 0 && (done as number) <= (total as number)
+      ? ` ${String(done)} of ${String(total)}` : ''
+    if (words !== undefined) this.hint.textContent = `${words.hint}${megabytes}${of}`
     this.updateProgress()
     this.progressed()
   }

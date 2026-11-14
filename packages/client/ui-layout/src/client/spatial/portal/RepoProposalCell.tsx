@@ -16,6 +16,7 @@ import type { Class3Action, Class3Dependencies } from '../aumlok/class3-approval
 import { FieldTable, Lead, PortalButton, PortalCell, RecordList, RecordRow, StatusPill, type Tone } from '../primitives/index.ts'
 import { useDebounced, useLiveEvents } from '../work/autonomy.ts'
 import { beginApproval, endApproval, freshFor, mergeApprovalKey, passkeyDidNotComplete, TAP_AGAIN } from './touch-id-timing.ts'
+import { clockText } from './notices.ts'
 
 export interface RepoProposalCellProps {
   readonly active: boolean
@@ -47,12 +48,19 @@ interface Outcome {
   readonly forget?: ForgettableRelease
 }
 
-const CI_WORDS: Record<RepoProposal['ciStatus'], { readonly text: string; readonly tone: Tone; readonly note: string | null }> = {
-  passed: { text: 'CI passed', tone: 'mint', note: null },
-  pending: { text: 'CI running', tone: 'gold', note: 'CI has not finished on this exact commit as of staging. The host merges only once it has passed; she stages it again to show the result.' },
-  failed: { text: 'CI FAILED', tone: 'red', note: 'CI FAILED on this exact commit. The host will not merge it; she needs a new commit on the branch.' },
-  none: { text: 'no CI run', tone: 'gold', note: 'No CI ran on this exact commit before she staged it. The host merges only once it has passed; she stages it again to show the result.' },
+/** The checks as the card recorded them when it was made. The host checks again at approval: it reads the checks
+ * of this exact commit then and merges only if they passed, and a refusal leaves his approval unspent. So only `failed`
+ * disables the approve control; for `pending` and `none` one plain line says approving checks them again. */
+const CI_WORDS: Record<RepoProposal['ciStatus'], { readonly text: string; readonly tone: Tone }> = {
+  passed: { text: 'checks passed', tone: 'mint' },
+  pending: { text: 'checks running', tone: 'gold' },
+  failed: { text: 'checks failed', tone: 'red' },
+  none: { text: 'no checks yet', tone: 'gold' },
 }
+const checksNote = (proposal: RepoProposal): string | null => (proposal.ciStatus === 'passed' ? null
+  : proposal.ciStatus === 'failed' ? 'Checks failed. This card cannot be approved.'
+    : `Checks were not green when this card was made${proposal.stagedAt === null ? '' : `, ${clockText(proposal.stagedAt)}`}. `
+      + 'Approving checks them again now; if they are not green, nothing is spent and nothing merges.')
 
 const short = (sha: string): string => sha.slice(0, 12)
 
@@ -219,8 +227,10 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
 
   const proposal = checked?.proposal ?? null
   const ci = proposal === null ? null : CI_WORDS[proposal.ciStatus]
+  const note = proposal === null ? null : checksNote(proposal)
+  const checksFailed = proposal?.ciStatus === 'failed'
   const t2 = proposal === null ? 0 : proposal.changedFiles.filter(file => file.t2Protected).length
-  const ready = checked !== null && checked.problems.length === 0
+  const ready = checked !== null && checked.problems.length === 0 && checked.proposal.ciStatus !== 'failed'
   return (
     <PortalCell data-sovereignty-portal="repo-proposal">
       <PortalButton
@@ -240,7 +250,7 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
             : null
         ) : (
           <>
-            {ci?.note === null || ci === null ? null : <Lead><span role="status" data-repo-proposal-ci-warning="">{ci.note}</span></Lead>}
+            {note === null ? null : <Lead><span role="status" data-repo-proposal-ci-warning="">{note}</span></Lead>}
             {held === null ? null : (
               <Lead>
                 <span role="status" data-repo-proposal-held="">{HELD_ATTEMPT_WORDS[held.state]}</span>
@@ -267,16 +277,18 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
               <Lead><span data-repo-proposal-problems="">{`No passkey is asked for: ${checked.problems.join(' · ')}`}</span></Lead>
             ) : (
               <>
-                <button type="button" className="x5-field" data-repo-proposal-approve="" disabled={busy || !ownerBound}
+                <button type="button" className="x5-field" data-repo-proposal-approve="" disabled={busy || !ownerBound || checksFailed}
                   onClick={() => { void approve() }}>
                   {`Approve and Merge ${proposal.branch} with Touch ID`}
                 </button>
-                <Lead>
-                  {ownerBound
-                    ? `Touch ID approves exactly this merge, once: main moves from ${short(proposal.baseSha)} to ${short(proposal.headSha)}. `
-                      + 'The host merges only if main and the branch are still exactly these commits.'
-                    : 'No usable passkey is bound on this host, so nothing can approve it here.'}
-                </Lead>
+                {ownerBound && checksFailed ? null : (
+                  <Lead>
+                    {ownerBound
+                      ? `Touch ID approves exactly this merge, once: main moves from ${short(proposal.baseSha)} to ${short(proposal.headSha)}. `
+                        + 'The host merges only if main and the branch are still exactly these commits.'
+                      : 'No usable passkey is bound on this host, so nothing can approve it here.'}
+                  </Lead>
+                )}
               </>
             )}
             <FieldTable rows={[
@@ -285,7 +297,7 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
               ['branch', <span key="branch" data-repo-proposal-branch="">{proposal.branch}</span>],
               ['main moves', <span key="move" data-repo-proposal-move="">{`${short(proposal.baseSha)} → ${short(proposal.headSha)}`}</span>],
               ['tree', proposal.treeSha],
-              ['CI on this commit', <span key="ci" data-repo-proposal-ci={proposal.ciStatus}><StatusPill tone={ci?.tone ?? 'muted'}>{ci?.text ?? ''}</StatusPill></span>],
+              ['checks on this commit', <span key="ci" data-repo-proposal-ci={proposal.ciStatus}><StatusPill tone={ci?.tone ?? 'muted'}>{ci?.text ?? ''}</StatusPill></span>],
               ['files', `${String(proposal.changedFiles.length)} changed${t2 > 0 ? `, ${String(t2)} of them protected (T2)` : ''}`],
               ...(proposal.stagedAt === null ? [] : [['staged on HEAD', new Date(proposal.stagedAt).toISOString()] as const]),
             ]}

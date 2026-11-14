@@ -597,7 +597,7 @@ test('job 5: an old snapshot validator gets 200 with the filtered bytes once the
   storage.data.set(BOOTSTRAP, { phase: 'ready', seedId: SEED, lineageId: LINEAGE })
   const fence = structuredClone(storage.data.get(FENCE))
   const route = '/api/snapshot?snapshotFormat=x61-mirror-snapshot%2Fv2'
-  // The validator an edge issued before the representation carried a version (54ef8b0f and earlier) for this same fence.
+  // The validator an edge issued before the representation carried a version (an earlier commit and earlier) for this same fence.
   const old = `"x61-mirror-snapshot-v2:${fence.lineageId}:${fence.revision}"`
   const first = await call(storage, route, { headers: { 'if-none-match': old } })
   assert.equal(first.status, 200)

@@ -136,6 +136,8 @@ const NOT_IDENTITY = {
   'messages-store.mjs': 'Nostr event signatures (schnorr) in the message store: no owner budget, no session',
   // Classified when world-holder.mjs landed: the file imports neither the one rule nor the gate lockout.
   'world-holder.mjs': 'installation-key proofs (which browser is her body): a 403 KEY_PROOF_INVALID refusal, no owner budget, no session; the owner\'s passkey for a move is judged in aumlok.mjs and head-do.mjs',
+  // Lead's classification at the landing of the managed voice: the file imports neither the one rule nor the gate lockout.
+  'voice-provider-speech-engine.mjs': 'the voice provider\'s Speech Engine JWT (HMAC) at /door/voice-brain: a refusal answered as an unknown path, no owner budget, no session',
 }
 /**
  * The verification primitives in this codebase, by the callee's source text:

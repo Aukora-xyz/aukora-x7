@@ -16,7 +16,7 @@ import { createWorker } from '../worker.mjs'
 import { aumlokClass3Binding, AUMLOK_STORAGE_KEY, createAumlokStore } from '../aumlok.mjs'
 import { canonicalJson, classifyHeadTransition, headPromotionBinding, requireOwnerNodeKeySeparation } from '../owner-grant-policy.mjs'
 import { providerBudgetLimits, providerRequestReservation, providerBudgetRecordStorage, reserveProviderBudget } from '../provider-budget.mjs'
-import { CLOUD_BROKER_LIMITS, cloudRepoMirrorPathAllowed } from '../cloud-brokers.mjs'
+import { CLOUD_BROKER_LIMITS, CLOUD_REPO_LOG_LIMITS, cloudRepoMirrorPathAllowed } from '../cloud-brokers.mjs'
 import { X61HeadDurableObject, createDurableHeadStore, createDurableWakeStore, bootstrapPackage, canonicalBootstrap, digest, manifestId, validateManifest, checkpointPolicyView } from '../head-do.mjs'
 import { MirrorDO, MIRROR_LIMITS, mirrorDigest } from '../mirror-do.mjs'
 import { handleMessagesRequest, projectPredictionReceipts } from '../messages-store.mjs'
@@ -1426,7 +1426,8 @@ test('cloud brokers reject structured signing secrets, oversized upstream bodies
   assert.equal((await body(await broker.request('/_host/repo', { action: 'read', path: 'mirror/home/auma/innocuous.json' }))).code, 'BROKER_PRIVATE_CONTENT_REFUSED')
   assert.equal(cloudRepoMirrorPathAllowed('/dsh/home/auma/seed/checkpoint-key.v1.json'), false)
   cloud.env.GITHUB_TOKEN = 'synthetic-fixture-broker-credential'
-  const oversized = brokerFixture(cloud, { networkFetch: async () => Response.json({ data: 'x'.repeat(CLOUD_BROKER_LIMITS.responseBytes) }) })
+  // The `log` action reads its upstream within its own bound (CLOUD_REPO_LOG_LIMITS.upstreamBytes): a body over THAT is refused.
+  const oversized = brokerFixture(cloud, { networkFetch: async () => Response.json({ data: 'x'.repeat(CLOUD_REPO_LOG_LIMITS.upstreamBytes) }) })
   assert.equal((await oversized.request('/_host/repo', { action: 'log' })).status, 413)
   cloud.env.CLOUDFLARE_API_TOKEN = 'synthetic-cloudflare-credential'
   cloud.env.CLOUDFLARE_ACCOUNT_ID = 'a'.repeat(32)

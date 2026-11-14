@@ -2,7 +2,7 @@
 
 English | [中文](OPEN-SOURCE-READINESS.zh.md)
 
-This repository is published under AGPL-3.0-or-later, but it is **not yet a stack anyone can fully rebuild.** Some of the parts that make decisions ship only as compiled files, one compiled file has no licence at all, and some build inputs live outside the tree. This page lists every known gap in priority order, says who can close it, and says what a reader can and cannot reproduce today.
+This repository is published under AGPL-3.0-or-later, but it is **not yet a stack anyone can fully rebuild.** Some of the parts that make decisions ship only as compiled files, one compiled file has no licence at all, and some build inputs live outside the tree. This page lists every known gap in priority order, says who can close it, and says what a reader can and cannot reproduce from this tree.
 
 None of this is solved. A gap leaves this page only when the fix is in the tree.
 
@@ -12,11 +12,11 @@ Two words used below: an organ is one replaceable module of Auma, the AI in this
 
 ## The gaps, in priority order
 
-### 1. 24 of the 25 Wasm cells cannot be rebuilt
+### 1. 24 of the 30 Wasm cells cannot be rebuilt
 
 The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)). They hold identity, keys, judges, the grant ledger, memory policy and Nostr signing. Five of the 15 ids that only the owner's passkey may change are cells (`T2_ONLY_ORGANS` in `server/ball-transition.mjs`).
 
-- In the tree: 24 compiled files in `apps/web/public/cells/` (6,488,165 bytes), each pinned by size and SHA-256 in `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`. Only `aura-focus.wasm` has its source beside it (`aura-focus.wat`), and `server/aura-focus-cell.build.mjs` checks that the shipped bytes match it. That rebuild uses the pinned `skillsmith` cell as its compiler, and `skillsmith` is one of the 24 without source.
+- In the tree: 30 compiled files in `apps/web/public/cells/`, each pinned by size and SHA-256 in `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`. 24 of them (6,488,165 bytes) have no source here. Six have their hand-written WAT source beside them (`aura-focus.wat`, `cord-echo.wat`, `kyber-cpu.wat`, `menger-hive.wat`, `nucleus.wat`, `pentora-codec.wat`), each with a build script in `server/`. Those rebuilds use the pinned `skillsmith` cell as their compiler, and `skillsmith` is one of the 24 without source.
 - Not in the tree: any Rust source. There is no `.rs` file and no `Cargo.toml` (checked with `find`). The shared crate `mv_abi` that most cells use is not on crates.io and its source is not in this tree (`apps/web/public/cells/THIRD-PARTY.md`, lines 10 and 11). In that table, 13 third-party crate rows and the Rust standard library row read "not visible" for their version. The compiler version and target are not stated in the tree.
 - Licence consequence: under sections 5 and 6 of the AGPL, whoever passes on object code must also give its source. Someone who received this repository cannot meet that duty from the repository alone (`apps/web/public/cells/LICENSE.binaries`).
 - Needed: the cell workspace with `mv_abi`, its lock file, the compiler and target versions, the build command, and the expected SHA-256 of each pin in `wasm-cells.ts`. Or other terms for the compiled files, stated in that note.
@@ -39,7 +39,7 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 ### 4. No named copyright holder and no contribution terms
 
-- 106 JavaScript and TypeScript files carry the header "The Aukora authors" (counted with `grep -rl`); the rest of the tree relies on the root [LICENSE](../LICENSE). No file-level map says which lines are original and which are inherited; [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md) gives the counts by folder.
+- 131 JavaScript and TypeScript files carry the header "The Aukora authors" (counted with `grep -rl` over `*.js`, `*.ts`, `*.tsx` and `*.mjs`); the rest of the tree relies on the root [LICENSE](../LICENSE). No file-level map says which lines are original and which are inherited; [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md) gives the counts by folder.
 - 17 folders besides the root carry their own `LICENSE` file (counted with `find . -name LICENSE`, outside `LICENSES/`), among them BSD-3-Clause in `native/system/` and an adaptation of another project in `packages/fs/fs-patch/`.
 - There is no contributor agreement and no sign-off rule. [CONTRIBUTING.md](../CONTRIBUTING.md) asks each pull request to state its licence until there is.
 - Needed: a named holder or entity, a contribution rule, a generated origin map. By: the copyright holders.
@@ -63,7 +63,7 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 ### 8. Deployment values are placeholders written into code
 
-- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 8, 1700), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
+- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 2866), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
 - A cloud deployment from this tree into a fresh account is UNVERIFIED.
 - By: the maintainers.
 
@@ -88,16 +88,16 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 | Deployment values | One source for them, read by the code | Maintainers | Open |
 | Outside sources | Mirror or pin by hash | Maintainers | Open |
 
-## What a reader can reproduce today
+## What a reader can reproduce from this tree
 
 | Can do | How | Label |
 | --- | --- | --- |
-| Run 22 test files with no install; expected last line `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs` (Node 24.9 or newer) | UNVERIFIED: seen on one machine, not in the recorded run (of an earlier tree) |
+| Run 22 test files with no install; expected last line `verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs` (Node 24.9 or newer) | UNVERIFIED: seen on one machine, not in the recorded run (of an earlier tree) |
 | Check every cell file against its pin, without running it | The SHA-256 loop over `apps/web/public/cells/*.wasm` and `wasm-cells.ts` (see [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md)) | IMPLEMENTED |
-| Rebuild `aura-focus.wasm` from `aura-focus.wat`, using the source-less `skillsmith` cell as the compiler | `server/aura-focus-cell.build.mjs`; test `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
+| Rebuild `aura-focus.wasm` from `aura-focus.wat` (and the five other WAT cells from theirs), using the source-less `skillsmith` cell as the compiler | `server/aura-focus-cell.build.mjs`; test `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
 | Install, build, boot the local host, run the four suites, run the dry run | [CONTRIBUTING.md](../CONTRIBUTING.md), section 3 | RECORDED RUN (of an earlier tree) on one machine |
 
-## What a reader cannot reproduce today
+## What a reader cannot reproduce from this tree
 
 - Rebuild 24 cells, `pentora36.wasm` or the Dakini Code bundle, or check that any of them matches any source.
 - Run the pentora checks as their own definition files describe them: those files are absent.

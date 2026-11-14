@@ -14,6 +14,8 @@
  * @module cloud-model-door
  */
 
+import { PRIME_ORIGIN, primeConfigured, primeSettings, primeTeamId } from './provider-budget.mjs'
+
 const ANTHROPIC_VERSION = '2023-06-01'
 
 /** Provider wire table: origin, secret name, wire shape, default model (null: the caller or env must name one). */
@@ -22,12 +24,17 @@ export const CLOUD_MODEL_PROVIDERS = Object.freeze({
   openrouter: Object.freeze({ url: 'https://openrouter.ai/api/v1/chat/completions', secret: 'OPENROUTER_API_KEY', wire: 'openai', modelEnv: 'CLOUD_MODEL_OPENROUTER', model: null }),
   deepseek: Object.freeze({ url: 'https://api.deepseek.com/chat/completions', secret: 'DEEPSEEK_API_KEY', wire: 'openai', modelEnv: 'CLOUD_MODEL_DEEPSEEK', model: 'deepseek-chat' }),
   openai: Object.freeze({ url: 'https://api.openai.com/v1/chat/completions', secret: 'OPENAI_API_KEY', wire: 'openai', modelEnv: 'CLOUD_MODEL_OPENAI', model: 'gpt-4o-mini' }),
+  // Prime Intellect at its constant origin; the caller or CLOUD_MODEL_PRIME names the model. Every call is capped
+  // by HEAD's spend ledger (provider-budget.mjs), which the wake passes before it sends.
+  prime: Object.freeze({ url: `${PRIME_ORIGIN}/v1/chat/completions`, secret: 'PRIME_API_KEY', wire: 'openai', modelEnv: 'CLOUD_MODEL_PRIME', model: null }),
 })
 
+/** Output 8,192 became 32,000, time 30 s became 120 s and the answer 64 KiB became
+ * 256 KiB. These are the door's ceilings; the cloud wake asks for less and reads less (head-do.mjs CLOUD_WAKE_LIMITS). */
 export const CLOUD_MODEL_DOOR_LIMITS = Object.freeze({
-  requestBytes: 64 * 1024, responseBytes: 64 * 1024, timeoutMs: 30000,
+  requestBytes: 64 * 1024, responseBytes: 256 * 1024, timeoutMs: 120000,
   /** Current Claude models always think; a smaller output cap is refused (PROVIDER_OUTPUT_LIMIT_TOO_SMALL), never raised. */
-  anthropicMinOutputTokens: 2048, maxOutputTokens: 8192,
+  anthropicMinOutputTokens: 2048, maxOutputTokens: 32000,
 })
 
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/
@@ -46,7 +53,8 @@ function secretOf(env, name) {
  * @returns {Record<string, boolean>}
  */
 export function cloudModelDoorStatus(env) {
-  return Object.fromEntries(Object.entries(CLOUD_MODEL_PROVIDERS).map(([name, spec]) => [name, secretOf(env, spec.secret) !== '']))
+  // Prime counts as configured only with all five of its settings (its key, both caps, both prices).
+  return Object.fromEntries(Object.entries(CLOUD_MODEL_PROVIDERS).map(([name, spec]) => [name, name === 'prime' ? primeConfigured(env) : secretOf(env, spec.secret) !== '']))
 }
 
 /**
@@ -59,6 +67,9 @@ export function pickCloudModelProvider(env, order) {
   const names = (Array.isArray(order) ? order : []).filter(name => Object.hasOwn(CLOUD_MODEL_PROVIDERS, name))
   if (names.length === 0) return refuse('PROVIDER_UNAVAILABLE')
   const found = names.find(name => secretOf(env, CLOUD_MODEL_PROVIDERS[name].secret) !== '')
+  // Prime with its key but a cap or price absent or malformed is refused by name, never swapped.
+  const prime = found === 'prime' ? primeSettings(env) : null
+  if (prime && !prime.ok) return refuse('PRIME_NOT_CONFIGURED', { missing: prime.missing })
   return found ? Object.freeze({ ok: true, provider: found }) : refuse('PROVIDER_SECRET_NOT_CONFIGURED', { tried: names })
 }
 
@@ -113,6 +124,21 @@ function fromAnthropic(data) {
   const toolCalls = blocks.filter(block => block?.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string')
     .map(block => ({ id: block.id, type: 'function', function: { name: block.name, arguments: JSON.stringify(record(block.input) ? block.input : {}) } }))
   return { role: 'assistant', content: text || null, ...(toolCalls.length ? { tool_calls: toolCalls } : {}), anthropicContent: blocks }
+}
+
+// DeepSeek (and other OpenAI-wire providers) put `index` on every element of `tool_calls`. A call whose
+// keys are exactly id/type/function plus an `index` that is a safe integer >= 0 is projected to the closed shape
+// `{ id, type, function }` (as fromAnthropic builds it), so HEAD's check and the replayed turn both see the closed shape.
+// Anything else (another key, a bad `index`, a missing field) is passed on UNCHANGED: HEAD's closed check in
+// executeCloudWakeStep (CLOUD_WAKE_TOOL_INVALID) stays the one judge and refuses it. Nothing is invented or defaulted here.
+const OPENAI_CALL_KEYS = Object.freeze(['id', 'type', 'function'])
+function closedToolCall(call) {
+  if (!record(call) || Object.getPrototypeOf(call) !== Object.prototype || !Object.hasOwn(call, 'index')) return call
+  if (!Number.isSafeInteger(call.index) || call.index < 0) return call
+  if (Object.keys(call).some(key => key !== 'index' && !OPENAI_CALL_KEYS.includes(key))) return call
+  const projected = {}
+  for (const key of OPENAI_CALL_KEYS) if (Object.hasOwn(call, key)) projected[key] = record(call[key]) ? { ...call[key] } : call[key]
+  return projected
 }
 
 async function boundedText(response, maximum, signal) {
@@ -219,6 +245,8 @@ export async function sendCloudModelRequest(prepared, { env, signal, fetchImpl =
     else headers['x-api-key'] = key
     headers['anthropic-version'] = ANTHROPIC_VERSION
   } else headers.authorization = `Bearer ${key}`
+  // The team that pays, only when PRIME_TEAM_ID is set and valid.
+  if (provider === 'prime' && primeTeamId(env)) headers['x-prime-team-id'] = primeTeamId(env)
 
   const controller = new AbortController()
   const onAbort = () => controller.abort(signal.reason)
@@ -250,7 +278,11 @@ export async function sendCloudModelRequest(prepared, { env, signal, fetchImpl =
     }
     const answer = data?.choices?.[0]?.message
     if (!record(answer) || !(answer.content === null || answer.content === undefined || typeof answer.content === 'string')) return refuse('PROVIDER_RESPONSE_INVALID', { provider })
-    const message = { role: 'assistant', content: answer.content ?? null, ...(Array.isArray(answer.tool_calls) && answer.tool_calls.length ? { tool_calls: answer.tool_calls } : {}) }
+    const message = { role: 'assistant', content: answer.content ?? null, ...(Array.isArray(answer.tool_calls) && answer.tool_calls.length ? { tool_calls: answer.tool_calls.map(closedToolCall) } : {}),
+      // A thinking model (deepseek-reasoner) needs its reasoning back on the assistant tool-call turn in
+      // the next round of the same step, or it refuses with 400. Kept ONLY on a turn that carries tool calls; the caller
+      // sends it back unchanged and never journals, notes or shows it.
+      ...(Array.isArray(answer.tool_calls) && answer.tool_calls.length && typeof answer.reasoning_content === 'string' ? { reasoning_content: answer.reasoning_content } : {}) }
     return Object.freeze({ ok: true, provider, model: prepared.model, message,
       stopReason: typeof data.choices[0].finish_reason === 'string' ? data.choices[0].finish_reason : null, usage: record(data.usage) ? data.usage : null })
   } catch (error) {
@@ -268,6 +300,8 @@ export async function sendCloudModelRequest(prepared, { env, signal, fetchImpl =
  * @param {Parameters<typeof prepareCloudModelRequest>[0] & { signal?: AbortSignal, fetchImpl?: typeof fetch }} input
  */
 export async function callCloudModel({ signal, fetchImpl, ...input }) {
+  // Prime is spent only through a path that reserves against its cap first (the wake: prepare, reserve, send).
+  if (input.provider === 'prime') return refuse('SPEND_RESERVATION_REQUIRED', { provider: 'prime' })
   const prepared = prepareCloudModelRequest(input)
   if (!prepared.ok) return prepared
   return await sendCloudModelRequest(prepared, { env: input.env, signal, ...(fetchImpl ? { fetchImpl } : {}) })

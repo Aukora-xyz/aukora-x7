@@ -3,35 +3,32 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write README.md
 /aukora:
-  en: d981f568f090bb0d
-  zh: 6fb7732f011082b3
-/aukora/the-first-60-seconds:
-  en: b5d6ad1affa90809
-  zh: 25cd94711b67d9b7
-/aukora/the-first-five-minutes:
-  en: aede02bea06d8e0d
-  zh: 04e1c6048f3f6b3a
-/aukora/the-first-five-minutes/the-rule-and-where-it-stops:
-  en: ece3e8abb497d856
-  zh: 1f55d1ef364dcb16
-/aukora/the-first-five-minutes/one-picture:
-  en: 3e5d6317f6e66185
-  zh: 736ad9977a911670
-/aukora/the-first-five-minutes/one-example:
-  en: d024ffe1262f5a1a
-  zh: 6ad3563250da5996
-/aukora/the-first-five-minutes/verify-it-yourself:
-  en: 9dc23ec8c7acee7c
-  zh: ccc82d343f08ed56
-/aukora/the-first-five-minutes/what-is-not:
-  en: 91e5f57cd0c240b3
-  zh: 64b98d8fd3bb037a
-/aukora/the-first-five-minutes/where-it-is-going:
-  en: 190f858ff151aad6
-  zh: bb377d2614e6e42a
+  en: dc938dd5029f865b
+  zh: e6150b39c4d6c2db
+/aukora/what-is-built-and-how-far-it-is-proven:
+  en: eae214f64ef6e751
+  zh: d937cd8a6adcff45
+/aukora/the-rule-and-where-it-stops:
+  en: af919396d0503f7b
+  zh: 32f6476cf30a1333
+/aukora/the-rule-and-where-it-stops/one-picture:
+  en: 69877cf7cdcbd3f9
+  zh: 98df971af678b78d
+/aukora/the-rule-and-where-it-stops/verify-it-yourself:
+  en: 1bb052f36a1cc115
+  zh: aee7aebf85b0930e
+/aukora/what-is-deliberately-not-done:
+  en: bbb094d58eb866a0
+  zh: b6079fe74ee712b7
+/aukora/where-it-is-going:
+  en: 87a8d96e17806316
+  zh: 4a4c8873e5541610
 /aukora/go-deeper:
-  en: 28fc03995c6f9490
-  zh: 70839ab24d559b2e
+  en: 97fed875af0f01dc
+  zh: 2fe79126a4a09606
 /aukora/go-deeper/how-to-help:
-  en: 531509fe70679cc9
-  zh: 0afc7847d83b6e02
+  en: 236f24c991581ed3
+  zh: 65a105c7ca8efd25
+/aukora/next-if-you-are-an-ai:
+  en: 0d4e55c545fc3e26
+  zh: d2a529ba8aa2b60b

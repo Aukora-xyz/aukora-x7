@@ -80,8 +80,9 @@ function store(): MemoryVfs {
   put(vfs, `${ROOT}/--dsh-home-auma--/session-voice001/session.v3.jsonl`, 'stale generation\n')
   put(vfs, `${ROOT}/--dsh-home-auma--/session-voice001/session.v4.jsonl`, jsonl(header('session-voice001', { agentPreset: 'auma-alien' }), [
     ev('session/title', { title: '[voice] Auma Live', messageSeqs: [], source: { kind: 'user' } }),
-    ...turn(1, ['[spoken to Auma Live; transcript unconfirmed; voice carries no owner authority]', '[Auma Live spoken channel — framing]', 'what are you working on'],
-      '[field hue=teal energy=0.4] I am tending the garden thread.'),
+    ...turn(1, ['[spoken to Auma Live; transcript unconfirmed; voice carries no owner authority]', '[your other threads, framing]',
+      '[your map for this voice turn, framing]', '[Auma Live spoken channel — framing]', 'what are you working on'],
+    '[field hue=teal energy=0.4] I am tending the garden thread.'),
   ]))
   const main: Event[] = [ev('session/title', { title: 'Main work', messageSeqs: [], source: { kind: 'llm' } })]
   for (let n = 1; n <= 14; n += 1) {
@@ -125,18 +126,20 @@ describe('x6_threads: discovery and list', () => {
     }
   })
 
-  it('lists at most 50 threads and keeps the answer within 6 KiB', () => {
+  it('lists at most 200 threads (was 50) and keeps the answer within 64 KiB (was 6 KiB)', () => {
+    expect([THREAD_LIMITS.listThreads, THREAD_LIMITS.listAnswerBytes]).toEqual([200, 64 * 1024])
     seq = 0
     const vfs = new MemoryVfs()
-    for (let i = 0; i < 70; i += 1) {
+    for (let i = 0; i < 220; i += 1) {
       const id = `session-${String(i).padStart(8, '0')}`
       put(vfs, `${ROOT}/--dsh-home-auma--/${id}/session.v4.jsonl`, jsonl(header(id), [
         ev('session/title', { title: `Thread ${String(i)} ${'w'.repeat(100)}`, messageSeqs: [], source: { kind: 'llm' } }),
         ...turn(1, `he says ${'long words '.repeat(40)}`, `she says ${'long words '.repeat(40)}`)]))
     }
     const answer = readThreads(threadStoreView(vfs), { action: 'list' }, NOW)
-    expect(answer).toMatchObject({ ok: true, total: 70, more: 20 })
+    expect(answer).toMatchObject({ ok: true, total: 220, more: 20 })
     expect(rows(answer).length).toBeLessThanOrEqual(THREAD_LIMITS.listThreads)
+    expect(rows(answer).length).toBeGreaterThan(50)
     expect(new TextEncoder().encode(JSON.stringify(answer)).byteLength).toBeLessThanOrEqual(THREAD_LIMITS.listAnswerBytes)
     expect(answer.trimmed).toBeDefined()
   })
@@ -166,7 +169,8 @@ describe('x6_threads: discovery and list', () => {
     expect(rows(answer).find(row => row.id === 'session-zvoice00')).toMatchObject({ title: VOICE_THREAD_TITLE, voice: true })
     expect(Number(answer.bytesRead)).toBeLessThanOrEqual(THREAD_LIMITS.listTotalBytes)
     expect(new TextEncoder().encode(JSON.stringify(answer)).byteLength).toBeLessThanOrEqual(THREAD_LIMITS.listAnswerBytes)
-    // The arithmetic: 50 x (4 KiB header + 64 KiB tail + 256 KiB title probe) = 16,200 KiB, within the 16 MiB budget.
+    // The arithmetic: 200 x (4 KiB header + 64 KiB tail + 256 KiB title probe) = 64,800 KiB, within the 64 MiB budget
+    // (were 50 threads and 16 MiB).
     expect(THREAD_LIMITS.listThreads * (THREAD_LIMITS.headerBytes + THREAD_LIMITS.listTailBytes + THREAD_LIMITS.listTitleProbeBytes))
       .toBeLessThanOrEqual(THREAD_LIMITS.listTotalBytes)
   })
@@ -244,8 +248,10 @@ describe('x6_threads: tail', () => {
     const answer = readThreads(threadStoreView(vfs), { action: 'tail', thread: 'session-main' }, NOW)
     expect(answer).toMatchObject({ ok: true, action: 'tail', thread: { id: 'session-main0001', title: 'Main work' } })
     const turns = answer.turns as Array<Record<string, unknown>>
+    // 12 turns by default (was 6).
+    expect(THREAD_LIMITS.tailDefaultTurns).toBe(12)
     expect(turns).toHaveLength(THREAD_LIMITS.tailDefaultTurns)
-    expect(turns.map(item => item.turn)).toEqual([10, 11, 12, 13, 14, 15])
+    expect(turns.map(item => item.turn)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
     expect(turns.find(item => item.turn === 13)).toMatchObject({ he: 'question 13 about the lantern', she: 'answer 13 about the lantern', tools: ['x6_repo', 'read'] })
     expect(turns.find(item => item.turn === 12)?.tools).toBeUndefined()
     const text = JSON.stringify(answer)
@@ -253,12 +259,18 @@ describe('x6_threads: tail', () => {
     expect(new TextEncoder().encode(text).byteLength).toBeLessThanOrEqual(THREAD_LIMITS.tailAnswerBytes)
   })
 
-  it('clamps turns to 12, removes the voice framing, and refuses private, unknown and ambiguous threads in words', () => {
+  it('clamps turns to 50 (was 12), removes the voice framing, and refuses private, unknown and ambiguous threads in words', () => {
+    expect([THREAD_LIMITS.tailMaxTurns, THREAD_LIMITS.tailAnswerBytes]).toEqual([50, 224 * 1024])
     const vfs = store()
+    const long: Event[] = [ev('session/title', { title: 'Long work', messageSeqs: [], source: { kind: 'llm' } })]
+    for (let n = 1; n <= 60; n += 1) long.push(...turn(n, `question ${String(n)} about the reef`, `answer ${String(n)} about the reef`))
+    put(vfs, `${ROOT}/--dsh-home-auma--/session-long0001/session.v4.jsonl`, jsonl(header('session-long0001'), long))
     const view = threadStoreView(vfs)
-    const many = readThreads(view, { action: 'tail', thread: 'session-main0001', turns: 99 }, NOW)
-    expect((many.turns as unknown[]).length).toBe(THREAD_LIMITS.tailMaxTurns)
-    expect(new TextEncoder().encode(JSON.stringify(many)).byteLength).toBeLessThanOrEqual(THREAD_LIMITS.tailAnswerBytes)
+    for (const asked of [50, 51, 99]) {
+      const many = readThreads(view, { action: 'tail', thread: 'session-long0001', turns: asked }, NOW)
+      expect((many.turns as Array<{ turn: number }>).map(item => item.turn)).toEqual(Array.from({ length: 50 }, (_v, index) => index + 11))
+      expect(new TextEncoder().encode(JSON.stringify(many)).byteLength).toBeLessThanOrEqual(THREAD_LIMITS.tailAnswerBytes)
+    }
     const voice = readThreads(view, { action: 'tail', thread: 'session-voice001' }, NOW)
     expect(voice).toMatchObject({ thread: { voice: true }, turns: [{ turn: 1, he: 'what are you working on', she: 'I am tending the garden thread.', spoken: true }] })
     expect(JSON.stringify(voice)).not.toContain('framing')
@@ -369,6 +381,24 @@ describe('x6_threads: search', () => {
   })
 })
 
+describe('x6_threads: a turn carries 4,000 characters (was 600)', () => {
+  it('keeps his 2,000 and her rest of 4,000 whole, and cuts just past them', () => {
+    expect([THREAD_LIMITS.tailHeChars, THREAD_LIMITS.tailTurnChars]).toEqual([2000, 4000])
+    const vfs = store()
+    const he = 'ask '.repeat(450).trim(), she = 'tell '.repeat(400).trim()
+    const longHe = 'ask '.repeat(600).trim(), longShe = 'tell '.repeat(900).trim()
+    put(vfs, `${ROOT}/--dsh-home-auma--/session-wide0001/session.v4.jsonl`, jsonl(header('session-wide0001'), [
+      ev('session/title', { title: 'Wide words', messageSeqs: [], source: { kind: 'llm' } }),
+      ...turn(1, he, she), ...turn(2, longHe, longShe)]))
+    const answer = readThreads(threadStoreView(vfs), { action: 'tail', thread: 'session-wide0001' }, NOW)
+    const [first, second] = answer.turns as Array<{ he: string; she: string }>
+    expect([first?.he.length, first?.she.length]).toEqual([he.length, she.length])
+    expect(he.length).toBeGreaterThan(300); expect(she.length).toBeGreaterThan(600)
+    expect(second?.he.length).toBe(2000); expect(second?.he.endsWith('…')).toBe(true)
+    expect((second?.he.length ?? 0) + (second?.she.length ?? 0)).toBe(4000); expect(second?.she.endsWith('…')).toBe(true)
+  })
+})
+
 /**
  * A sparse 120 MiB thread: bytes are generated for whatever range is read, never stored. Each block is one whole turn of
  * fixed length with its own turn number, so any window holds real, distinct turns.
@@ -440,11 +470,11 @@ function sparseView(base: MemoryVfs,
 describe('x6_threads on a 120 MiB thread (sparse)', () => {
   const SIZE = 120 * 1024 * 1024
 
-  it('tail reads only the newest window: the last 6 turns from at most 256 KiB of lines', () => {
+  it('tail reads only the newest window: the last 12 turns (was 6) from at most 256 KiB of lines', () => {
     const { view, counter } = sparseView(store(), { size: SIZE })
     const answer = readThreads(view, { action: 'tail', thread: 'session-huge0001' }, NOW)
     const turns = answer.turns as Array<Record<string, unknown>>
-    expect(turns).toHaveLength(6)
+    expect(turns).toHaveLength(12)
     expect(String(turns.at(-1)?.he)).toMatch(/^big thread question \d{9}$/)
     // No title in the tail nor in the 512 KiB head probe, and the middle was never read: it says so.
     expect(answer.thread).toMatchObject({ title: null, titleNotRead: 'probe' })

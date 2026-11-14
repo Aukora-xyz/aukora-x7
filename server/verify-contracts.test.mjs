@@ -656,14 +656,14 @@ test('web-eyes deadline includes DNS and slow body; cancellation prevents a late
 test('web-eyes monotonic deadline wins when DNS, headers or end arrive before a delayed timer callback', async () => {
   let elapsed = 0
   const dnsDelayed = createPublicHttpsTransport({ now: () => elapsed,
-    lookup: async () => { elapsed = 10000; return [{ address: '93.184.216.34', family: 4 }] },
+    lookup: async () => { elapsed = CLOUD_BROKER_LIMITS.timeoutMs; return [{ address: '93.184.216.34', family: 4 }] },
     request: () => assert.fail('Expired DNS must not launch a socket'),
   })
   await assert.rejects(dnsDelayed('https://example.com/'), { code: 'WEB_EYES_TIMEOUT' })
   for (const stage of ['headers', 'end']) {
     elapsed = 0
-    const chunks = (async function* () { yield Buffer.from('early'); if (stage === 'end') elapsed = 10000 })()
-    const synthetic = syntheticHttps({ chunks, inspect: () => { if (stage === 'headers') elapsed = 10000 } })
+    const chunks = (async function* () { yield Buffer.from('early'); if (stage === 'end') elapsed = CLOUD_BROKER_LIMITS.timeoutMs })()
+    const synthetic = syntheticHttps({ chunks, inspect: () => { if (stage === 'headers') elapsed = CLOUD_BROKER_LIMITS.timeoutMs } })
     const transport = createPublicHttpsTransport({ now: () => elapsed, request: synthetic.request,
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],
     })

@@ -1472,19 +1472,19 @@ describe.skipIf(HOST === null)('against the host lane’s own AUMLOK store (Roun
 describe.skipIf(HOST === null)('the node in the host’s facts (Round 21; skipped until the host lane’s projection is in this tree)', () => {
   it('reads organ source and AUMLOK as projectVerifiedFacts sends them, and says what each is', async () => {
     const aumlok = host().projectAumlokStatus(await statusBody(host().createAumlokStore(memoryStorage(), OWNED)))
-    const node = parseNodeFacts({ organSourceCommit: 'ca9fcd15a1bfebedac574ef524efe9c955073214', organSourceEvidence: 'recorded-build-info', aumlok })
-    expect(node).toEqual({ organSourceCommit: 'ca9fcd15a1bfebedac574ef524efe9c955073214', organSourceEvidence: 'recorded-build-info', aumlok: 'unbound',
+    const node = parseNodeFacts({ organSourceCommit: 'faf9e4724f1803485747525a31cb6a99c1909094', organSourceEvidence: 'recorded-build-info', aumlok })
+    expect(node).toEqual({ organSourceCommit: 'faf9e4724f1803485747525a31cb6a99c1909094', organSourceEvidence: 'recorded-build-info', aumlok: 'unbound',
       passkeyVerified: false, enrollmentAvailable: false })
-    expect(nodeWords(node)).toBe('organ source: build image recorded at ca9fcd15 (not proof the running organs came from it) · '
+    expect(nodeWords(node)).toBe('organ source: build image recorded at faf9e472 (not proof the running organs came from it) · '
       + 'AUMLOK: UNBOUND · first binding needs a trusted owner approval this host does not have yet')
     expect(parseNodeFacts({ organSourceCommit: null, organSourceEvidence: 'invalid', aumlok: host().projectAumlokStatus(undefined) }))
       .toEqual({ organSourceCommit: null, organSourceEvidence: 'invalid', aumlok: null, passkeyVerified: null, enrollmentAvailable: null })
-    const facts = parseHostFacts({ ...LIVE, organSourceCommit: 'ca9fcd15a1bfebedac574ef524efe9c955073214', organSourceEvidence: 'recorded-build-info', aumlok })
+    const facts = parseHostFacts({ ...LIVE, organSourceCommit: 'faf9e4724f1803485747525a31cb6a99c1909094', organSourceEvidence: 'recorded-build-info', aumlok })
     if (facts === null) throw new Error('fixture')
     // Sovereignty (Round 25): the organ source sits in the chain card's details; AUMLOK is the Keys and trust card's, not repeated.
     const unknown: FactsAgreement = { kind: 'unknown', reason: 'not compared' }
     const details = chainCardOf({ kind: 'ok', facts }, unknown, null).details
-    expect(details).toContainEqual(['organ source', 'build image recorded at ca9fcd15 (not proof the running organs came from it)'])
+    expect(details).toContainEqual(['organ source', 'build image recorded at faf9e472 (not proof the running organs came from it)'])
     expect(details.map(([name]) => name)).not.toContain('AUMLOK')
     expect(signerWords('rotated-pinned')).toBe('signer rotated-pinned')
     // The host's own projection of an incomplete read: BUILD_INFO was never reached, so it is "not read", not "none".
@@ -2209,7 +2209,7 @@ describe('the Work view offers no passkey approval the host would refuse', () =>
 
 /** A staged epoch 163: seed-pearl's bytes move to ball:fa5df625…; everything else is the published head. */
 const STAGED_PEARL = 'fa5df62571b34d59aadc4e32ac75d2cbff51b58cc5799c8abfecd2ca164a9292'
-const HEAD_62 = '7c01cb98514e4ae7a6aaa0dc29653282d94bc4717b85a18968b47aa4310120a8'
+const HEAD_62 = '79fd695ce12f6fb6614d7b4c5fb10dffe52e6ed0fdb1ab4c30f7a5c9724cd5f2'
 /** A manifest entry in HEAD's own shape (`validateManifest`). */
 const entryOf = (id: string, specifier: string, extra: Record<string, unknown> = {}) =>
   ({ id, specifier, disabled: false, config: {}, previousSpecifiers: [] as string[], ...extra })

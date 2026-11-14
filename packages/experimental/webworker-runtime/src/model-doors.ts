@@ -14,6 +14,8 @@ export const MODEL_DOORS: ReadonlyArray<readonly [upstream: string, door: string
   ['https://api.openai.com/', 'openai'],
   ['https://api.anthropic.com/', 'anthropic'],
   ['https://api.x.ai/', 'xai'],
+  // Prime Intellect; its spend cap and key live at the edge (deploy/cloudflare/src/provider-budget.mjs).
+  ['https://api.pinference.ai/api/', 'prime'],
 ]
 
 const DOOR_UPSTREAMS = MODEL_DOORS.map(([upstream, door]) => {

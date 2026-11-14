@@ -52,6 +52,7 @@ import { promotionReceiptsOf, promotionRowsOf, promotionWords, RECEIPTS_PATH, ty
 import { captureRecoverySnapshot, recoveryStateOf, recoveryWords, type RecoveryState } from './recovery-snapshot.ts'
 import { WakeCell } from './WakeCell.tsx'
 import { NightGrantCell } from './NightGrantCell.tsx'
+import { MandateCell } from './MandateCell.tsx' // The owner mandate, beside the night grant
 import { OrganSetCell } from './OrganSetCell.tsx'
 import { CHECKPOINTS_PATH, chainVerdictOf, chainVerdictWords, type ChainVerdict } from './receipt-chain-verdict.ts'
 import { OutwardApprovalCell } from './OutwardApprovalCell.tsx'
@@ -1353,6 +1354,7 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
               >
                 <CardBody card={keys} />
                 <NightGrantCell active={active} round={round} />
+                <MandateCell active={active} round={round} />
               </PortalButton>
             </PortalCell>
             <PortalCell data-sovereignty-portal="chain">

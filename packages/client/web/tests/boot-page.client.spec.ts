@@ -70,8 +70,9 @@ describe('BootPage: boot steps, a still-starting notice with Reload, never a fai
     const events = new EventTarget()
     const reload = vi.fn()
     const page = new BootPage(el, { stallMs, reload, events })
-    const phase = (name: string, bytes?: number) => {
-      events.dispatchEvent(new CustomEvent(BOOT_PHASE_EVENT, { detail: { phase: name, ...(bytes === undefined ? {} : { bytes }) } }))
+    const phase = (name: string, bytes?: number, of?: unknown) => {
+      const detail = { phase: name, ...(bytes === undefined ? {} : { bytes }), ...(of === undefined ? {} : { of }) }
+      events.dispatchEvent(new CustomEvent(BOOT_PHASE_EVENT, { detail }))
     }
     return { el, page, phase, reload }
   }
@@ -153,6 +154,28 @@ describe('BootPage: boot steps, a still-starting notice with Reload, never a fai
     expect(observer.takeRecords()).toEqual([])
     observer.disconnect()
     expect(el.textContent).not.toMatch(/late failure|Failed to load/)
+  })
+
+  it('a reader pulling her threads says so, with the bytes so far, and a silence there says what it was doing', () => {
+    const { el, phase } = staged()
+    phase('threads')
+    expect(el.textContent).toContain('Reading her threads from her cloud…')
+    phase('threads', 9 * 1024 * 1024)
+    expect(el.textContent).toContain('Reading her threads from her cloud… 9 MB')
+    vi.advanceTimersByTime(1001)
+    expect(el.textContent).toContain('She is still starting (1 s so far, reading her threads from her cloud). Nothing new for a while; you can wait or reload.')
+  })
+
+  it('while her threads are read the boot page says "N of M"; a malformed count is left out', () => {
+    const { el, phase } = staged()
+    phase('threads', undefined, [3, 12])
+    expect(el.textContent).toContain('Reading her threads from her cloud… 3 of 12')
+    phase('threads', undefined, [13, 12])
+    expect(el.textContent).not.toContain('13 of 12')
+    phase('threads', undefined, ['1', 2])
+    expect(el.textContent).not.toContain(' of 2')
+    phase('threads', undefined, [12, 12])
+    expect(el.textContent).toContain('Reading her threads from her cloud… 12 of 12')
   })
 
   it('shows the step and the image bytes as they arrive', () => {

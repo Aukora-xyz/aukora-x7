@@ -8,7 +8,10 @@
  *                   gold (`ak-tone-gold`, the gold the old pill used) and carries the count. Its name says the count.
  *   NoticesSurface  opens in the centre like every system app (`AppSurface` + `AppHeader`): one plain list, newest
  *                   first, each row what it is in plain words, when it was first seen, and its one action as a
- *                   normal button. With nothing waiting it says one line.
+ *                   normal button. With nothing waiting it says one line. An approval waiting is a row like
+ *                   any other: what waits, one status line from what HEAD said, and "Open Sovereignty". It approves nothing.
+ *   NewBuildLine    the one quiet line Work and Aura say in their own flow while a newer build exists (their
+ *                   gold Reload buttons are gone; the row here carries Reload).
  * Nothing here opens by itself, takes focus, plays a sound, or is positioned over anything.
  */
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
@@ -16,7 +19,12 @@ import {
   ActionControl, AppHeader, AppSurface, Lead, PortalFold, PortalLauncher, RecordList, StatusPill,
 } from '../primitives/index.ts'
 import { APPROVAL_FINISHING_WORDS, useReloadHeld } from './build-notice.ts'
-import { firstSeenText, NOTHING_WAITING, NOTICES_SURFACE, noticesLabel, useNotices } from './notices.ts'
+import {
+  firstSeenText, NEW_BUILD_LINE, NOTHING_WAITING, NOTICES_SURFACE, noticesLabel, useNotices, type NoticeKind,
+} from './notices.ts'
+
+/** An approval row carries the approvals icon; a reload row the releases icon. */
+const iconOf = (kind: NoticeKind): 'approvals' | 'releases' => (kind === 'build' || kind === 'auma' || kind === 'release' ? 'releases' : 'approvals')
 
 /** The launcher's donor-style copy. */
 export const NOTICES_COPY = Object.freeze({
@@ -73,9 +81,9 @@ export function NoticesSurface({ activeSurface }: PropsRuntime<'shell.surface'>)
             <li key={notice.id} data-notice={notice.kind} data-notice-id={notice.id}>
               <PortalFold
                 tone="gold"
-                icon="releases"
+                icon={iconOf(notice.kind)}
                 title={notice.what}
-                summary={firstSeenText(notice.firstSeen, now)}
+                summary={notice.detail ?? firstSeenText(notice.firstSeen, now)}
                 badge={(
                   <ActionControl tone="gold" data-notice-action={notice.kind} onClick={notice.action.run}>
                     {notice.action.label}
@@ -88,4 +96,14 @@ export function NoticesSurface({ activeSurface }: PropsRuntime<'shell.surface'>)
       )}
     </AppSurface>
   )
+}
+
+/**
+ * Work's and Aura's one quiet line, where their Reload button was, while a newer build exists: in their own flow, no
+ * gold, no button, positioned over nothing. Notices holds the row and its Reload.
+ * @param props - whether a newer build exists.
+ */
+export function NewBuildLine({ shown }: { readonly shown: boolean }) {
+  if (!shown) return null
+  return <Lead><span data-new-build-line="">{NEW_BUILD_LINE}</span></Lead>
 }

@@ -24,7 +24,8 @@ export const ESTATE_LIMITS = Object.freeze({
   outputBytes: 256 * 1024,
   walkNodes: 20_000,
   defaultPage: 200,
-  maxPage: 1000,
+  /** 1,000 became 4,000; the output bound below still trims a page that does not fit, and says so. */
+  maxPage: 4000,
   perFileHashBytes: 1024 * 1024,
   maxPerFileHashBytes: 8 * 1024 * 1024,
   totalHashBytes: 16 * 1024 * 1024,
@@ -35,7 +36,8 @@ export const ESTATE_LIMITS = Object.freeze({
   /** A file larger than what is left of searchBytes is searched in its newest part, at most this much. */
   searchTailBytes: 4 * 1024 * 1024,
   searchHits: 20,
-  maxSearchHits: 100,
+  /** 100 became 400; the files and bytes a search reads are bounded above, unchanged. */
+  maxSearchHits: 400,
   queryChars: 128,
 })
 

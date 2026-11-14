@@ -8,6 +8,7 @@ import { canonicalJson, verifyHybridEnvelopeV2 } from './owner-grant-policy.mjs'
 import { AUMLOK_STORAGE_KEY, aumlokClass3Binding, createAumlokStore } from './aumlok.mjs'
 import { legacyManifestPreimage, validateManifestStructure } from '../../../server/ball-manifest.mjs'
 import { secretShapedPart } from './mirror-secret-paths.mjs'
+import { isReaderWindow, readerWindowRefusalBody } from './reader-window.mjs'
 
 export const COLD_ARCHIVE_SCHEMA = 'aukora.cold-archive.v1'
 export const COMPOSITE_HEAD_SCHEMA = 'aukora.x61.composite-head.v1'
@@ -340,6 +341,7 @@ function checkedDrillCleanup(cleanup) {
 export function archiveErrorReply(error) {
   const code = error?.code
   if (typeof code !== 'string' || !/^[A-Z0-9_]{1,80}$/.test(code)) return null
+  if (code === 'READER_WINDOW') return { status: 403, body: readerWindowRefusalBody() }
   const status = [400, 403, 408, 409, 413, 423, 429, 503].includes(error.status) ? error.status : 503
   const cleanup = checkedDrillCleanup(error.cleanup)
   const step = typeof error.step === 'string' && /^[A-Z][A-Z_]{0,39}$/.test(error.step) ? error.step : null
@@ -1730,6 +1732,11 @@ export async function executeEdgeArchiveOperation({ env, seedId, input, now = Da
   // what the service itself holds (the live HEAD and Mirror, or a snapshot it wrote to its own bucket).
   if (isObject(input) && Object.hasOwn(input, 'bundle')) refuse('ARCHIVE_CLIENT_BUNDLE_REFUSED', 400)
   const action = typeof input?.action === 'string' ? input.action : 'status'
+  // ---- reader window begin: reader windows may read archive status or run a verified Class-3 owner-secrets export only ----
+  if (isReaderWindow(request, env) && !(action === 'status' || (action === 'export' && input?.includeBundle === true && Boolean(request?.headers?.get('x-x6-class3-approval'))))) {
+    refuse('READER_WINDOW', 403)
+  }
+  // ---- READER-WINDOW end ----
   const expectedOwnerPublicKeyHex = env.OWNER_PUBLIC_KEY_HEX
   const archiveBucket = env.ARCHIVE_BUCKET ?? null
   const aumlokPepperSecret = env.AUMLOK_PEPPER_SECRET
@@ -1849,6 +1856,7 @@ export async function executeEdgeArchiveOperation({ env, seedId, input, now = Da
     const includeBundle = input?.includeBundle === true
     // judged (and the approval spent) before anything is read or written; only a bundle reply can carry the row.
     const approved = includeBundle ? await ownerSecretsApproval({ request, input, authorizeClass3, now }) : null
+    if (isReaderWindow(request, env) && !approved) refuse('READER_WINDOW', 403)
     // judged on the exact bytes written below, before the first put; refused, nothing is written.
     const { bundle, serialized } = await buildOnePieceBundle()
     let r2Key = null

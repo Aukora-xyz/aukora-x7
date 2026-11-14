@@ -16,6 +16,7 @@
  */
 
 import { ELEVEN_SPEECH_ACTIONS, handleElevenSpeech, herVoiceField } from './eleven-speech.mjs' // VOICE hook
+import { handleManagedSession, handleManagedStatus, voiceManagedOn } from './voice-bridge.mjs' // The managed voice's owner door and its status read
 export const VOICE_DIRECTOR_PROTOCOL = 'aukora.voice-director.v1'
 export const VOICE_CLAUSE_SCHEMA = 'aukora.voice-clause.v1'
 export const VOICE_STATE_SLOT_SCHEMA = 'aukora.voice-state-slot.v1'
@@ -438,6 +439,8 @@ export async function handleEdgeVoiceRequest({ request, url, env, seedId, access
   }
 
   if (ELEVEN_SPEECH_ACTIONS.includes(input.action)) return await handleElevenSpeech({ request, url, env, seedId, access, networkFetch, now, input }) // VOICE hook
+  if (input.action === 'managed_session' && voiceManagedOn(env)) return await handleManagedSession({ request, url, env, seedId, access, networkFetch, now, input }) // Switch off = an unknown action
+  if (input.action === 'managed_status') return await handleManagedStatus({ request, url, env, access, now, input }) // Owner-only read of names and stages, switch on or off
   if (input.action === 'speech_pass') {
     const at = now()
     if (access?.type !== 'owner' || typeof access.email !== 'string' || access.email.length > 254

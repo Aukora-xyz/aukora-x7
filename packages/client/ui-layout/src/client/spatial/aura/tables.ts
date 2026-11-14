@@ -9,6 +9,7 @@
  * One generated table was removed by hand: CHECKS, the registry text of the 90 private checks, which only the
  * health map (now gone, never fed here) listed. A fresh generation would bring it back with nothing reading it.
  */
+export const GEOMETRY_SHA256 = '96b27c9b4de41cd961612be5b1e88d40e973a2fded16bd320415b3e15e3b8c61'
 
 /** Global cell index -> [x, y, z]; 111 points, 55 is the centre (no cell). */
 export const POINTS: Readonly<Record<number, readonly [number, number, number]>> = {

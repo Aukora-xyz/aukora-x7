@@ -143,3 +143,21 @@ test('one publisher: gh missing (ENOENT) or the lookup fails (expired auth, no a
     assert.deepEqual([calls, emergency], [1, [`${ONE_PUBLISHER_UNKNOWN_NOTICE} Reason: ${reason}.`]])
   }
 })
+
+test('the managed voice\'s Durable Object (VoiceBridge): exported, bound, its own unique SQLite migration after an unchanged x61-v1, and switched off', async () => {
+  const worker = await import('../deploy/cloudflare/src/worker.mjs')
+  assert.equal(typeof worker.VoiceBridgeDO, 'function')
+  assert.equal(worker.VoiceBridgeDO.name, 'VoiceBridgeDO')
+  const plain = value => JSON.parse(JSON.stringify(value))
+  const bindings = plain(config.durable_objects.bindings)
+  assert.deepEqual(bindings.filter(binding => binding.name === 'VOICE_BRIDGE'), [{ name: 'VOICE_BRIDGE', class_name: 'VoiceBridgeDO' }])
+  for (const binding of bindings) assert.equal(typeof worker[binding.class_name], 'function', binding.class_name)
+  const migrations = plain(config.migrations)
+  const tags = migrations.map(migration => migration.tag)
+  assert.equal(new Set(tags).size, tags.length)
+  assert.deepEqual(migrations[0], { tag: 'x61-v1', new_sqlite_classes: ['X61HeadDurableObject', 'MirrorDO'] })
+  assert.deepEqual(migrations.filter(migration => migration.tag === 'x61-v2-voice-bridge'), [{ tag: 'x61-v2-voice-bridge', new_sqlite_classes: ['VoiceBridgeDO'] }])
+  assert.equal(migrations.at(-1).tag, 'x61-v2-voice-bridge')
+  assert.equal(migrations.flatMap(migration => [...(migration.new_classes ?? []), ...(migration.new_sqlite_classes ?? [])]).filter(name => name === 'VoiceBridgeDO').length, 1)
+  assert.equal(config.vars.VOICE_MANAGED, '1') // switched on 2026-11-13; '0' is the rollback
+})

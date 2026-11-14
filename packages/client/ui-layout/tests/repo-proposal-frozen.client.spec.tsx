@@ -102,6 +102,8 @@ describe('a frozen file on the card gives a problem and asks no passkey', () => 
       { path: 'mirror/home/auma/HEAD.json', status: 'modified' },
       { path: 'packages/experimental/webworker-runtime/src/x6/ball-loader.ts', status: 'modified' },
       { path: 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts', status: 'modified' },
+      { path: 'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', status: 'modified' },
+      { path: 'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts', status: 'modified' },
       { path: 'deploy/cloudflare/src/head-do.mjs', status: 'modified' },
       { path: 'server/scrub.mjs', previousPath: 'server/build-preview.mjs', status: 'renamed' },
       { path: 'deploy/cloudflare/src/worker.mjs', previous_filename: 'deploy/cloudflare/src/old-worker.mjs', status: 'renamed' },

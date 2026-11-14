@@ -1,5 +1,10 @@
 // Aukora Spatial — AUMA · LIVE: true full-duplex voice. No chrome, no words.
 //
+// THE MANAGED VOICE IS THE VOICE. The older pipeline described below
+// (sidecar, Deepgram, browser recognition and browser speech) can no longer start: the orb asks only for the managed
+// voice, a typed turn is text only, and Auma Canvas has no voice of its own. Its code stays in this file, unreachable,
+// until a later change removes it.
+//
 // The entire interface is the living field and one orb. The field is a GPU
 // fragment shader now — smooth domain-warped aurora, no hard pixels — and it
 // is HER BODY: her replies can carry invisible [field …] tags that reshape its
@@ -48,6 +53,15 @@ const presenceFetch = genesisLiveFetch(window.fetch.bind(window), outcome => fen
 const selfIndex = createSelfIndexReader({ transport: () => findTransport() });
 const SIDECAR_WS = `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/stock-apps/auma-live/voice`;
 const WORKLET_URL = '/app/aumalive-audio.js';
+// MANAGED VOICE: loaded only when the orb is pressed, never at mount.
+const MANAGED_VOICE_MODULE = '/app/managed-voice.js';
+// THE MANAGED VOICE IS THE VOICE. When it cannot start, NO other voice starts: the orb
+// rests with one line and typing works. This is the controller's own line (managed-voice/policy.mjs LINES.unreachable),
+// copied here for the one case the controller cannot say it itself: its module did not load.
+const VOICE_UNREACHABLE_LINE = 'My voice is not reachable right now. Typing works.';
+// AUMA CANVAS HAS NO VOICE OF ITS OWN (2026-11-14): voice lives in Auma Live. Canvas offers no microphone and its orb
+// starts no voice; it says this instead.
+const CANVAS_VOICE_LINE = 'Voice lives in Auma Live.';
 const PRESENCE_FIRST_EVENT_TIMEOUT_MS = 18000;
 const PRESENCE_IDLE_TIMEOUT_MS = 22000;
 
@@ -747,8 +761,8 @@ export function mountAumaLive(root, options = {}) {
   if (canvasScene) app.append(canvasScene);
 
   // the one control: the orb
-  const orb = el('button', 'alv-orb'); orb.type = 'button'; orb.title = canvasMode ? 'open the channel' : 'Start Voice';
-  orb.setAttribute('aria-label', canvasMode ? 'Open voice channel' : 'Start Voice');
+  const orb = el('button', 'alv-orb'); orb.type = 'button'; orb.title = canvasMode ? CANVAS_VOICE_LINE : 'Start Voice';
+  orb.setAttribute('aria-label', canvasMode ? CANVAS_VOICE_LINE : 'Start Voice');
   orb.setAttribute('aria-pressed', 'false');
   orb.innerHTML = '<span class="alv-orb-halo"></span><span class="alv-orb-ring"></span><span class="alv-orb-core"></span>';
   app.append(orb);
@@ -787,7 +801,7 @@ export function mountAumaLive(root, options = {}) {
   const micOn = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
   const micOff = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 9v2a3 3 0 0 0 5.1 2.1M15 11V6a3 3 0 0 0-5.9-.7M5 11a7 7 0 0 0 10.3 6.2M12 18v3M19 11a7 7 0 0 1-.6 2.8"/><path d="M3 3l18 18"/></svg>';
   muteBtn.innerHTML = micOn;
-  app.append(muteBtn);
+  if (!canvasMode) app.append(muteBtn);   // Auma Canvas offers no microphone (voice lives in Auma Live)
 
   const panel = el('div', 'alv-panel');
   const mindGroup = el('div', 'alv-group');
@@ -800,7 +814,8 @@ export function mountAumaLive(root, options = {}) {
   voiceOffline.textContent = 'Voice organ · not connected yet. Start Voice connects it: Deepgram where this host provides it, otherwise a local sidecar where one runs, otherwise the browser fallback.';
   voiceGroup.append(Object.assign(el('div', 'alv-group-k'), { textContent: 'her voice' }), voiceOffline, voiceList);
   if (!canvasMode) panel.append(mindGroup);
-  panel.append(voiceGroup);
+  // The "her voice" picker is NOT shown (2026-11-14): it chose among the older voices and does nothing for the managed
+  // voice, whose voice is set at the provider. The group is built but never put in the panel; job 2 removes it.
   const personaGroup = el('div', 'alv-group');
   const personaForm = el('form', 'alv-persona-form');
   const personaInput = el('input', 'alv-log-input alv-persona-input');
@@ -899,7 +914,15 @@ export function mountAumaLive(root, options = {}) {
       personaProbe.disabled = false;
     }
   });
-  panel.append(personaGroup);
+  // Auma Canvas offers no microphone (voice lives in Auma Live): the PersonaPlex group, which opens one, is built but not
+  // put in Canvas's panel. Canvas's gear panel says where voice lives instead. Job 2 removes PersonaPlex from Live too.
+  if (canvasMode) {
+    const canvasVoiceGroup = el('div', 'alv-group');
+    canvasVoiceGroup.append(Object.assign(el('div', 'alv-note'), { textContent: CANVAS_VOICE_LINE }));
+    panel.append(canvasVoiceGroup);
+  } else {
+    panel.append(personaGroup);
+  }
   const providerGroup = el('div', 'alv-group');
   const providerState = el('div', 'alv-note');
   const providerScope = el('div', 'alv-note');
@@ -1004,6 +1027,10 @@ export function mountAumaLive(root, options = {}) {
   // does not contain it, so a remembered mind that is no longer offered is filtered out there.
   let chosenMind = initialMindChoice({ fallback: 'balanced' });
   let closed = false;
+  // MANAGED VOICE: the controller once loaded, its state, the press it answers, and her line per turn in the transcript.
+  let managedVoice = null, managedLoad = null, managedState = 'idle', managedTap = 0;
+  const managedLines = new Map(), managedCut = new WeakSet(), managedRecent = [];
+  let managedMarkCut = null, managedCorrectionMatches = null;
   const voiceOwnerId = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let voiceClaim = '';
   let voiceClaimSerial = 0;
@@ -1359,13 +1386,14 @@ export function mountAumaLive(root, options = {}) {
   let presenceBlocked = false;
   const setOrb = () => {
     const personaActive = Boolean(personaAudio?.running);
-    const active = channel || personaActive;
-    const label = personaActive ? 'Stop PersonaPlex' : canvasMode ? (channel ? 'close the channel' : 'open the channel') : (channel ? 'Stop Voice' : 'Start Voice');
+    const managedOn = managedState !== 'idle';
+    const active = channel || personaActive || managedOn;
+    const label = personaActive ? 'Stop PersonaPlex' : canvasMode ? CANVAS_VOICE_LINE : (channel || managedOn ? 'Stop Voice' : 'Start Voice');
     orb.className = 'alv-orb'
       + (active ? ' live' : '')
       + (field.mode === 'thinking' ? ' thinking' : '')
       + (field.mode === 'speaking' ? ' speaking' : '')
-      + (!duplex && !personaActive ? ' fb' : '')
+      + (!duplex && !personaActive && !managedOn ? ' fb' : '')
       + (presenceBlocked ? ' presence-blocked' : '');
     orb.title = label;
     orb.setAttribute('aria-label', label);
@@ -2023,6 +2051,7 @@ export function mountAumaLive(root, options = {}) {
     e.preventDefault();
     const v = composeInput.value.trim(); if (!v) return;
     composeInput.value = '';
+    if (managedVoice?.sendText(v) === 'sent') return;   // a live managed call takes typing into the same conversation
     requestTurn(v);   // rides the same governed door; addTurn('you') fires inside requestTurn
   });
 
@@ -2353,6 +2382,11 @@ export function mountAumaLive(root, options = {}) {
     if (streaming) return;
     streaming = true;
     clearReplyWatchdog();
+    // A TYPED TURN IS TEXT ONLY (2026-11-14): no audio context is built for it and nothing reads it aloud. Only a turn on
+    // the older channel (`channel`, which nothing opens any more: the managed voice is the voice) would still be spoken;
+    // that path stays in the file, unreachable, until job 2 removes it. A typed line sent INTO a live managed call never
+    // comes here: the call takes it (compose → managedVoice.sendText).
+    const voiced = channel;
 
     if (canvasMode) {
       if (window.parent === window) {
@@ -2363,7 +2397,7 @@ export function mountAumaLive(root, options = {}) {
       field.burst = 1;
       field.alien('[field teal energy=0.24 storm=0.04 form=flow]');
       setMode(channel ? 'listening' : 'idle');
-      await ensureAudio();
+      if (voiced) await ensureAudio();
       if (!turnSessionNow()) await home.waitForHome(HOME_WAIT_MS);
       if (closed) { streaming = false; return; }
       const sessionId = turnSessionNow();
@@ -2405,13 +2439,13 @@ export function mountAumaLive(root, options = {}) {
     field.burst = 1; field.think = 1; setMode('thinking');
     const clock = heard && duplex ? turnTimes.claim() : null; // timing stamp
     if (!clock) turnTimes.close(); // timing stamp
-    await ensureAudio();
+    if (voiced) await ensureAudio();
 
     const failTurn = (message) => {
       const clean = sanitizeForVoice(message);
       if (!clean) return;
       addTurn('auma', clean);
-      speakVoiceText(clean);
+      if (voiced) speakVoiceText(clean);
     };
     // **A QUESTION ABOUT HERSELF IS ANSWERED FROM HER OWN INDEX, SPOKEN OR TYPED**.
     // `self-index.js` decides, from the words alone, whether this is such a question; if it is, the answer is built from
@@ -2419,7 +2453,12 @@ export function mountAumaLive(root, options = {}) {
     // recollection, and it names its sources. A typed and a spoken question get the same answer object. Barge-in rules
     // are the reply's: a cut while she reads her index says nothing, and her words go out only through speakChunk.
     const selfAsk = classifySelfQuestion(text);
-    if (selfAsk) {
+    // VOICE LEVEL open (2026-11-14): when her worker says open, no index answers for her; the turn goes to her, typed or
+    // spoken alike (as the managed voice's governed turn does). Any other level, or none in the probe's bound, keeps the
+    // closed list exactly as before.
+    const herLevel = selfAsk ? await (presenceFetch.voiceLevel?.() ?? 'unknown') : 'unknown';
+    if (closed) { streaming = false; return; }
+    if (selfAsk && herLevel !== 'open') {
       const selfCtl = new AbortController(); curAbort = selfCtl;
       let selfAnswer;
       try {
@@ -2438,7 +2477,7 @@ export function mountAumaLive(root, options = {}) {
         { const at = performance.now(); turnTimes.mark(clock, 'firstText', at); turnTimes.mark(clock, 'firstPhrase', at); } // timing stamp
         // Never hand the voice a text its sanitizer would cut words from: the answer is in the transcript whole instead.
         const selfSpoken = renderSelfAnswer(selfAnswer, 'spoken');
-        speakVoiceText(speechWouldDelete(selfSpoken) ? 'My full answer is in the transcript; part of it cannot be read aloud.' : selfSpoken);
+        if (voiced) speakVoiceText(speechWouldDelete(selfSpoken) ? 'My full answer is in the transcript; part of it cannot be read aloud.' : selfSpoken);
         addTurn('auma', renderSelfAnswer(selfAnswer, 'written'));
         endTurn();
         return;
@@ -2489,6 +2528,7 @@ export function mountAumaLive(root, options = {}) {
       // stream after the person spoke over her (the abort is answered with a later `done` frame, not at once): they are
       // never handed to the voice, and neither is anything once a newer turn owns the channel.
       if (abortCtl.signal.aborted || curAbort !== abortCtl) return;
+      if (!voiced) return;   // a typed turn is text only
       const tail = full.slice(sentTo);
       if (!tail) return;
       if (!duplex && !endOfTurn) return;
@@ -2824,6 +2864,7 @@ export function mountAumaLive(root, options = {}) {
     }
   }
   function closeChannel() {
+    stopManagedVoice();
     clearTimeout(voiceExpiryTimer); voiceExpiryTimer = 0;
     voiceExpired = false;
     presenceBlocked = false;
@@ -2849,9 +2890,122 @@ export function mountAumaLive(root, options = {}) {
   }
   orb.addEventListener('click', () => {
     if (personaAudio?.running || personaStarting) void stopPersonaPlex();
+    else if (managedState !== 'idle') stopManagedVoice();
     else if (channel) closeChannel();
-    else void openChannel();
+    else void openVoice();
   });
+
+  // ---- managed voice ----
+  // THE EDGE DECIDES THE TRANSPORT, ONCE PER PRESS. With a managed session, one provider call owns the microphone,
+  // hearing, turn-taking, interruption and her spoken voice, and HER governed session still writes every word: each turn
+  // the edge hands over runs here through bridgedSpokenTurn (genesis-live.js). THE MANAGED VOICE IS THE VOICE: when it cannot start, NO other voice starts. Every answer that is not a call rests the orb with
+  // one line from the controller's closed lists (the switch off: "not set up"; 401/403: the fingerprint sign-in line;
+  // a 5xx, a bad body or no answer: "not reachable"), typing keeps working, and nothing reconnects by itself. A module
+  // that does not load says the "not reachable" line here. Auma Canvas has no voice of its own: its orb says so.
+  async function openVoice() {
+    if (canvasMode) { toast(CANVAS_VOICE_LINE, 7000); return; }
+    const tap = ++managedTap;
+    managedState = 'connecting';
+    orb.setAttribute('aria-busy', 'true');
+    setMode('thinking');
+    const controller = await loadManagedVoice();
+    if (tap !== managedTap || closed) return;
+    if (!controller) { managedSettled(); toast(VOICE_UNREACHABLE_LINE, 7000); return; }
+    controller.setMuted(micMuted);   // the owner may have muted before this press, or while the module loaded
+    await controller.start();        // a call, or the orb rests with the controller's one line (onNotice)
+  }
+  function stopManagedVoice() {
+    managedTap += 1;
+    if (managedVoice && managedVoice.state !== 'idle') managedVoice.stop();
+    else if (managedState !== 'idle') managedSettled();
+  }
+  function managedSettled() {
+    managedState = 'idle';
+    orb.setAttribute('aria-busy', 'false');
+    field.micEnv = 0; field.sayEnv = 0;
+    for (const [turnId, line] of managedLines) managedHerLine(turnId, line.entry.text, true);
+    if (!channel) setMode('idle'); else setOrb();
+  }
+  /** Her line for one turn: made at her first words, updated as she streams, stored at the end. */
+  function managedHerLine(turnId, text, final) {
+    const clean = String(text || '').trim();
+    let line = managedLines.get(turnId);
+    if (!line) {
+      if (!clean) return;
+      const entry = addTurn('auma', clean);
+      if (!entry) return;
+      line = { entry, row: logBody.lastElementChild };
+      managedLines.set(turnId, line);
+      managedRecent.push(line);
+      if (managedRecent.length > 4) managedRecent.shift();
+    } else if (clean && !managedCut.has(line.entry)) {
+      line.entry.text = clean;
+      const shown = line.row?.querySelector?.('.alv-log-txt');
+      if (shown) shown.textContent = clean;
+    }
+    if (final) { managedLines.delete(turnId); saveLog(); }
+  }
+  /** The provider cut her off: the line of hers it belongs to (one of her last few, matched on its words) shows what
+   *  she actually said, and where she stopped. A correction that matches none of her lines changes nothing. */
+  function managedCorrection(original, corrected) {
+    if (!managedMarkCut || !managedCorrectionMatches) return;
+    const line = managedRecent.slice().reverse()
+      .find((candidate) => !managedCut.has(candidate.entry) && managedCorrectionMatches(candidate.entry.text, original, corrected));
+    if (!line) return;
+    line.entry.text = managedMarkCut(corrected);
+    managedCut.add(line.entry);
+    const shown = line.row?.querySelector?.('.alv-log-txt');
+    if (shown) shown.textContent = line.entry.text;
+    saveLog();
+  }
+  function loadManagedVoice() {
+    managedLoad ??= import(MANAGED_VOICE_MODULE).then((mod) => {
+      managedMarkCut = mod.markCut;
+      managedCorrectionMatches = mod.correctionMatches;
+      const runTurn = mod.createGovernedTurnRunner({
+        bridged: (turn) => presenceFetch.bridgedSpokenTurn({ ...turn, onFence: (outcome) => fenceNotice?.(outcome) }),
+        selfQuestion: {
+          classify: classifySelfQuestion,
+          gather: (ask, { signal }) => selfIndex.gather(ask, { signal, excludeSessionIds: [home.id].filter(Boolean) }),
+          answer: answerSelfQuestion, render: renderSelfAnswer, wouldDelete: speechWouldDelete,
+        },
+        sanitize: sanitizeForVoice,
+        directives: () => makeDirectiveFilter((tag) => field.alien(tag)),
+        mind: () => chosenMind,
+        // At the worker's level open the self-index shortcut is off: every spoken turn goes to her.
+        voiceLevel: () => presenceFetch.voiceLevel?.() ?? Promise.resolve('unknown'),
+        onFirstText: () => { field.think = 0.4; },
+        onHer: managedHerLine,
+      });
+      // Her first words when the voice opens are hers (an arrival turn in her voice thread), or the call opens silent.
+      const arrival = typeof mod.createArrivalRunner === 'function' ? mod.createArrivalRunner({
+        arrive: (turn) => presenceFetch.arrivalTurn?.(turn) ?? Promise.resolve({ reason: 'voice-arrival-closed', text: '' }),
+        sanitize: sanitizeForVoice,
+        directives: () => makeDirectiveFilter((tag) => field.alien(tag)),
+        mind: () => chosenMind,
+      }) : null;
+      managedVoice = mod.createManagedVoice({
+        muted: micMuted,   // the page's mute state now; setMute keeps the call in step from here on
+        runTurn,
+        arrival,
+        onState: (next) => {
+          if (next === 'idle') { managedSettled(); return; }
+          managedState = next;
+          orb.setAttribute('aria-busy', String(next === 'connecting'));
+          setMode(next === 'connecting' ? 'thinking' : next);
+        },
+        onTranscript: (role, text) => { if (addTurn(role, text)) field.burst = Math.max(field.burst, 0.6); },
+        onCorrection: managedCorrection,
+        onLevels: (mic, say, thinking) => {
+          field.micEnv = mic; field.sayEnv = say;   // each volume x3, clamped at 1, by the controller
+          if (thinking) field.think = 1;
+        },
+        onNotice: (line) => toast(line, 7000),
+      });
+      return managedVoice;
+    }).catch(() => { managedLoad = null; return null; });   // no module: the orb rests with one line; the next press asks again
+    return managedLoad;
+  }
 
   // mute toggle — stop her hearing you without closing the channel
   function setMute(on) {
@@ -2872,6 +3026,7 @@ export function mountAumaLive(root, options = {}) {
       micHeard = false;
       beginMicSignalWatch();
     }
+    managedVoice?.setMuted(on);         // a managed call mutes its own capture; no second recorder is opened
   }
   muteBtn.addEventListener('click', (e) => { e.stopPropagation(); setMute(!micMuted); });
 
@@ -2883,10 +3038,11 @@ export function mountAumaLive(root, options = {}) {
   // stops emitting the audible→false tick — so tell the sidecar she's done NOW,
   // over the WS, before that happens. This is the #1 real-world latch trigger.
   const onVis = () => {
-    if (document.hidden) dropHer();
+    if (document.hidden) { dropHer(); stopManagedVoice(); }   // a managed call ends when the page is hidden
     else if (channel) onAudioStateChange();
   };
   document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('pagehide', stopManagedVoice);
   activeCleanup = () => {
     closed = true;
     home.stop();
@@ -2900,6 +3056,7 @@ export function mountAumaLive(root, options = {}) {
     window.removeEventListener('message', onShellMessage);
     window.removeEventListener('storage', onSelectionStored);
     document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('pagehide', stopManagedVoice);
     stopLaneTurns();
     dropHer();
     closeChannel();

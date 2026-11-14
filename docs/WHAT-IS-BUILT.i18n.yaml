@@ -3,47 +3,53 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/WHAT-IS-BUILT.md
 /what-is-built:
-  en: 4982bdab9913de86
-  zh: 43121c586d345d0f
+  en: 1b756ad868a82977
+  zh: cd6071f35e16e3f9
 /what-is-built/summary:
-  en: d6004033e82476f6
-  zh: b608f65378419981
+  en: 412343828bc6ce3b
+  zh: a131a9dec859ba91
+/what-is-built/capabilities-by-the-three-labels:
+  en: 90fea0be18430ba7
+  zh: 1d96631cabd716f3
 /what-is-built/what-is-built:
-  en: 0950aad34b32b50e
-  zh: 44d03439d3eb8fe3
+  en: e2a20606c795a1d5
+  zh: 4e3c33202c240777
 /what-is-built/what-is-built/authority-aumlok-and-the-owner-s-passkey:
-  en: 1ae4676feb5beba8
-  zh: 8f7b9cb52e1e84dc
+  en: d6206804a9d20fea
+  zh: e3ff7c4f27bfc5c1
 /what-is-built/what-is-built/the-organism-organs-balls-the-scion-and-pearl:
-  en: 5613ff353a567a80
-  zh: 7b75c7b740936ae5
+  en: b9fc93bfe2c7cc71
+  zh: 1690c1c9dfeed0a4
 /what-is-built/what-is-built/the-edge-one-worker-head-and-mirror:
-  en: 7656e935d25a2203
-  zh: fe272c4dd154c607
+  en: b3d14ca151d07b70
+  zh: b9cfcc517ce1aff5
 /what-is-built/what-is-built/the-app-spatial:
-  en: 5af4435516522a73
-  zh: c80a007228964615
+  en: 47b92c73fda2e65d
+  zh: 4e50f6e9bc690aef
 /what-is-built/check-it-yourself:
   en: 9f9b88ac4915a5ae
   zh: ddf86305d59eb44e
 /what-is-built/the-names-in-plain-words:
-  en: a09f325a54ff2039
-  zh: 1618b679dcdccc91
+  en: d982a5bbeb297eca
+  zh: 942fd88ac7c0f219
 /what-is-built/read-this-then-this:
   en: 1899f05cdb5fb8c5
   zh: 464da6871ce918cf
 /what-is-built/what-is-not-here-and-what-is-not-proven:
-  en: 6df337746c7cb9d4
-  zh: e0720dbec3d84b15
+  en: ecfac093d0cb9c10
+  zh: 8f6828d0d3ec8a09
 /what-is-built/run-it:
-  en: 0f65ccae39893d18
-  zh: e30c329ada407b69
+  en: 3e6474d444e48d63
+  zh: 0881762c93196a01
 /what-is-built/where-it-is-going:
-  en: b9b993e358e7463e
-  zh: d9ef3c834db1d187
+  en: 6e2b78984e37cbca
+  zh: 2986d03d09e661f8
 /what-is-built/licence-and-what-this-tree-does-not-hold:
-  en: 4c00799beb6eff8a
-  zh: 305c0089d182d2e5
+  en: befb318b62f84340
+  zh: 2cdc3ad268722468
 /what-is-built/claim-source-test-evidence:
-  en: d6f9e5c1544d5ade
-  zh: fa659adce410996a
+  en: 6280bc4c18470a3a
+  zh: f8ea22b4fa67ec7a
+/what-is-built/next-the-argument-in-full:
+  en: ff7696be52e5c715
+  zh: 19192482d5fdd2e0

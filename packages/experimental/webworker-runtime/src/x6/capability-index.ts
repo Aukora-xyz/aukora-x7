@@ -9,6 +9,7 @@
  * @module x6/capability-index
  */
 import { sha256HexSync } from '../module-system/module-loader.ts'
+import { VOICE_SWITCH_TABLE } from './voice-read-only.ts'
 
 export const CAPABILITY_INDEX_SCHEMA = 'aukora.capability-index.v1' as const
 
@@ -23,6 +24,7 @@ export interface CapabilityToolSummary {
   readonly name: string
   readonly readOnly: boolean
   readonly mutating: boolean
+  readonly actions?: { read: string[]; write: string[] }
   readonly description: string
   readonly parameters: ReadonlyArray<CapabilityParameter>
 }
@@ -43,7 +45,15 @@ export interface CapabilityIndex {
   readonly ballId: string
   readonly registeredTools: readonly CapabilityToolSummary[]
   readonly organs: readonly CapabilityOrganSummary[]
-  readonly counts: { readonly tools: number; readonly readOnlyTools: number; readonly mutatingTools: number; readonly organs: number }
+  readonly counts: {
+    readonly tools: number
+    readonly readOnlyTools: number
+    readonly mutatingTools: number
+    readonly organs: number
+    readonly mixedTools: number
+    readonly readActions: number
+    readonly writeActions: number
+  }
   readonly digest: string
   readonly computedAt: number
 }
@@ -51,16 +61,22 @@ export interface CapabilityIndex {
 export interface CapabilitySource {
   readonly epoch: number
   readonly ballId: string
-  readonly tools: ReadonlyArray<{ readonly name: string; readonly description?: unknown; readonly parameters?: unknown }>
+  readonly tools: ReadonlyArray<{
+    readonly name: string
+    readonly description?: unknown
+    readonly parameters?: unknown
+    readonly readOnly?: unknown
+    readonly mutating?: unknown
+  }>
   readonly entries: Readonly<Record<string, { readonly specifier: string; readonly disabled?: boolean }>>
   readonly modules: Readonly<Record<string, { readonly sha256: string; readonly size: number; readonly specifier?: string }>>
 }
 
 /** Verbs whose action can only read. A tool is `readOnly` only when its name or every action it exposes is one of these. */
-const READ_VERB = new RegExp('^(list|read|get|status|show|search|inspect|describe|query|lookup|snapshot|view|facts|estate|digest|index|help|verify|check|'
-  + 'diff|history|peek|health|whoami|ls|cat|stat|look)$')
+const READ_VERB = new RegExp('^(list|read|get|status|show|search|inspect|describe|query|lookup|snapshot|view|facts|estate|digest|index|'
+  + 'help|verify|check|diff|history|peek|health|whoami|ls|cat|stat|look|journal|tail|tree|grep|log|forged|info|versions)$')
 /** Names of tools known to be read-only surfaces as a whole. */
-const READ_ONLY_TOOLS = new Set(['x6_capability_index', 'x6_browser_estate', 'x6_status', 'x6_facts', 'x6_host_facts'])
+const READ_ONLY_TOOLS = new Set(['x6_capability_index', 'x6_browser_estate', 'x6_facts', 'x6_host_facts', 'x6_self_state', 'x6_voice_status', 'x6_self_check'])
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -71,23 +87,40 @@ function summarizeParameters(parameters: unknown): CapabilityToolSummary['parame
   // JSON-schema shape `{ type: 'object', properties, required }` or the defineTool map `{ name: { type, required, enum } }`.
   const properties = record(parameters.properties) ? parameters.properties : parameters
   const requiredList = Array.isArray(parameters.required) ? parameters.required.filter((item): item is string => typeof item === 'string') : []
-  return Object.keys(properties).sort().slice(0, 32).flatMap((name) => {
+  return Object.keys(properties).sort().filter((name, index) => index < 32 || name === 'action' || name === 'subAction').flatMap((name) => {
     const spec = properties[name]
     if (!record(spec)) return []
-    const enumValues = Array.isArray(spec.enum) ? spec.enum.filter((item): item is string => typeof item === 'string').slice(0, 24) : undefined
+    const action = name === 'action' || name === 'subAction'
+    const values = Array.isArray(spec.enum) ? spec.enum.filter((item): item is string => typeof item === 'string') : undefined
+    const enumValues = action ? values : values?.slice(0, 24)
     return [{ name, type: typeof spec.type === 'string' ? spec.type : 'unknown', required: spec.required === true || requiredList.includes(name),
-      ...(enumValues && enumValues.length > 0 ? { enum: enumValues } : {}) }]
+      ...(enumValues && (action || enumValues.length > 0) ? { enum: enumValues } : {}) }]
   })
 }
 
 /** Conservative: anything not provably read-only is `mutating`. */
-export function classifyToolMutation(name: string, parameters: CapabilityToolSummary['parameters']): { readOnly: boolean; mutating: boolean } {
-  if (READ_ONLY_TOOLS.has(name)) return { readOnly: true, mutating: false }
-  const action = parameters.find(parameter => parameter.name === 'action' || parameter.name === 'subAction')
-  const verbs = action?.enum ?? []
+export function classifyToolMutation(
+  name: string,
+  parameters: CapabilityToolSummary['parameters'],
+  declaration: { readonly readOnly?: unknown; readonly mutating?: unknown } = {},
+): Pick<CapabilityToolSummary, 'readOnly' | 'mutating' | 'actions'> {
+  const row = Object.hasOwn(VOICE_SWITCH_TABLE, name) ? VOICE_SWITCH_TABLE[name] : undefined
+  const whole = row?.selector === 'whole' && Object.hasOwn(row.values, '*')
+  const action = parameters.filter(parameter => (parameter.name === 'action' || parameter.name === 'subAction') && parameter.enum)
+  const verbs = [...new Set(action.flatMap(parameter => parameter.enum ?? []))].sort()
+  const actions = action.length > 0 ? { read: [] as string[], write: [] as string[] } : undefined
+  if (actions) {
+    for (const verb of verbs) {
+      // A voice value that holds only for some argument values (argEquals) does not make every call of that action a read.
+      const value = row !== undefined && Object.hasOwn(row.values, verb) ? row.values[verb] : undefined
+      const read = whole || READ_VERB.test(verb) || (value !== undefined && value.argEquals === undefined)
+      actions[read ? 'read' : 'write'].push(verb)
+    }
+  }
   const tail = name.replace(/^x6_/, '').split(/[_-]/).pop() ?? ''
-  const readOnly = verbs.length > 0 ? verbs.every(verb => READ_VERB.test(verb)) : READ_VERB.test(tail)
-  return { readOnly, mutating: !readOnly }
+  const readOnly = READ_ONLY_TOOLS.has(name) || whole || (actions !== undefined ? actions.write.length === 0
+    : (declaration.readOnly === true && declaration.mutating !== true) || READ_VERB.test(tail))
+  return { readOnly, mutating: !readOnly, ...(actions ? { actions } : {}) }
 }
 
 function deepFreeze<T>(value: T): T {
@@ -111,7 +144,7 @@ export function buildCapabilityIndex(source: CapabilitySource, computedAt = Date
   const registeredTools = source.tools.filter(tool => typeof tool.name === 'string' && !seen.has(tool.name) && seen.add(tool.name))
     .map((tool) => {
       const parameters = summarizeParameters(tool.parameters)
-      return { name: tool.name, ...classifyToolMutation(tool.name, parameters), description: clip(tool.description, 240), parameters }
+      return { name: tool.name, ...classifyToolMutation(tool.name, parameters, tool), description: clip(tool.description, 240), parameters }
     })
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
   const organs = Object.keys(source.entries).sort().flatMap((id) => {
@@ -133,7 +166,10 @@ export function buildCapabilityIndex(source: CapabilitySource, computedAt = Date
     registeredTools,
     organs,
     counts: { tools: registeredTools.length, readOnlyTools: registeredTools.filter(tool => tool.readOnly).length,
-      mutatingTools: registeredTools.filter(tool => tool.mutating).length, organs: organs.length },
+      mutatingTools: registeredTools.filter(tool => tool.mutating).length, organs: organs.length,
+      mixedTools: registeredTools.filter(tool => tool.actions && tool.actions.read.length > 0 && tool.actions.write.length > 0).length,
+      readActions: registeredTools.reduce((count, tool) => count + (tool.actions?.read.length ?? 0), 0),
+      writeActions: registeredTools.reduce((count, tool) => count + (tool.actions?.write.length ?? 0), 0) },
   }
   return deepFreeze({ ...body, digest: sha256HexSync(canonicalJson(body)), computedAt })
 }

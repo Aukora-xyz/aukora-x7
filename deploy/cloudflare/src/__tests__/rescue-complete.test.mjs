@@ -430,7 +430,7 @@ const emptyListingCatches = text => {
 test('M2 the source scan: no catch in the kit (or the vault) turns a failed listing into an empty one without recording it; it bites on each old form', () => {
   assert.deepEqual(emptyListingCatches(KIT_TEXT), [], 'rescue-kit.mjs')
   assert.deepEqual(emptyListingCatches(SOURCE('vault.mjs')), [], 'vault.mjs')
-  // Biting on the three forms the review found (87069752, rescue-kit.mjs :465, :556, :561), put back into today's kit.
+  // Biting on the three forms the review found (an earlier commit, rescue-kit.mjs :465, :556, :561), put back into today's kit.
   const restore = [
     ['} catch (error) { noteUnlisted(lost, UNLISTED.failed) }', '} catch (error) { return [] }'],
     ["try { stat = fs.statSync(path) } catch (error) { noteUnlisted(lost, 'a file or folder could not be examined (' + whereOf(path) + ')') }", 'try { stat = fs.statSync(path) } catch (error) { continue }'],

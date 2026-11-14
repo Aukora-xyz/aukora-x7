@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 /**
  * The owner sees, without asking, that a newer Auma is published or that a new build of the app is live,
- * on the Work and Aura surfaces' existing Reload button, and one press reloads. A reload already pressed for the same
- * edge revision that still differs shows nothing again. Local stand-ins only (fetch, page tunnel, sockets).
+ * and one press reloads. A reload already pressed for the same edge revision that still differs shows nothing again.
+ * Work and Aura draw no Reload button any more (The owner pointed at Aura's gold one as a
+ * pop-up). Each says one quiet line in its own flow, and its read is the row in Notices whose Reload is the press.
+ * Local stand-ins only (fetch, page tunnel, sockets).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
@@ -19,6 +21,8 @@ import { AURA_SURFACE } from '../src/client/spatial/aura/model.ts'
 import {
   BUILD_MISMATCH_ROUTE, BUILD_RELOAD_FOR_KEY, BUILD_SUPPRESSED_KEY, EDGE_BUILD_ROUTE, HEAD_LAG_ROUTE, pageReload,
 } from '../src/client/spatial/portal/build-notice.ts'
+import { NoticesSurface } from '../src/client/spatial/portal/NoticesSurface.tsx'
+import { NEW_BUILD_LINE, NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
 
 class FakeChannel implements LiveChannel {
   onmessage: LiveChannel['onmessage'] = null
@@ -62,7 +66,7 @@ beforeEach(() => {
   vi.stubGlobal('__X6_BUILD_IDENTITY__', { sourceRevision: PAGE, sourceDirty: false })
   sessionStorage.clear()
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); sessionStorage.clear() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); sessionStorage.clear(); resetNoticesForTests() })
 
 const notFound = async (): Promise<FileRead> => ({ ok: false, reason: 'not-found' })
 function sessionHooks() {
@@ -74,28 +78,36 @@ function sessionHooks() {
     useSessionStatus: bindSnapshotSelector(createSnapshotStore<StatusSnapshot>(new Map())),
   }
 }
+/** Notices as the shell mounts it, open beside the surface (its own `activeSurface`), so its rows can be pressed. */
+const notices = () => <NoticesSurface {...({ activeSurface: NOTICES_SURFACE } as unknown as Parameters<typeof NoticesSurface>[0])} />
 const surfaces = {
-  Work: () => render(<WorkSurface {...({ activeSurface: WORK_SURFACE, ...sessionHooks(), reader: { whole: notFound },
+  Work: () => render(<><WorkSurface {...({ activeSurface: WORK_SURFACE, ...sessionHooks(), reader: { whole: notFound },
     labels: (key: string) => (en as Record<string, string>)[key] ?? key, t: (key: string) => key } as unknown as
-    PropsRuntime<'shell.surface'> & PropsLocale<'layout'> & Parameters<typeof WorkSurface>[0])} />),
-  Aura: () => render(<AuraPentoraSurface {...({ activeSurface: AURA_SURFACE, closeSurface: () => {}, ...sessionHooks(),
-    reader: { whole: notFound } } as unknown as Parameters<typeof AuraPentoraSurface>[0])} />),
+    PropsRuntime<'shell.surface'> & PropsLocale<'layout'> & Parameters<typeof WorkSurface>[0])} />{notices()}</>),
+  Aura: () => render(<><AuraPentoraSurface {...({ activeSurface: AURA_SURFACE, closeSurface: () => {}, ...sessionHooks(),
+    reader: { whole: notFound } } as unknown as Parameters<typeof AuraPentoraSurface>[0])} />{notices()}</>),
 }
+const surfaceOf = (container: HTMLElement, name: string): HTMLElement =>
+  container.querySelector<HTMLElement>(name === 'Work' ? '[data-work-surface]' : '[data-aura-coherence-surface]')!
 
 for (const [name, mount] of Object.entries(surfaces)) {
-  describe(`${name} surface: the existing Reload button carries both notices`, () => {
+  describe(`${name} surface: one quiet line, and the row in Notices carries both notices`, () => {
     it('a newer Auma is published: one sentence, and a press reloads', async () => {
       edgeServes(PAGE)
       runtimeSays({ published: PUBLISHED, running: RUNNING, newer: true })
       const reload = vi.spyOn(pageReload, 'now').mockImplementation(() => {})
       const { container } = mount()
       const button = await waitFor(() => {
-        const found = container.querySelector<HTMLButtonElement>(`[data-new-build="${PUBLISHED.ballId}"]`)
+        const found = container.querySelector<HTMLButtonElement>(`[data-notice-id="auma:${PUBLISHED.ballId}"] [data-notice-action="auma"]`)
         expect(found).not.toBeNull()
         return found as HTMLButtonElement
       })
-      expect(button.textContent).toBe('Newer Auma · epoch 172 · Reload')
-      expect(button.title).toContain('A newer Auma is published (epoch 172); this tab runs epoch 171. One reload brings her.')
+      expect(button.textContent).toBe('Reload')
+      expect(container.querySelector(`[data-notice-id="auma:${PUBLISHED.ballId}"]`)?.textContent)
+        .toContain('A newer Auma is published (epoch 172); this tab runs epoch 171. One reload brings her.')
+      // The surface itself: one quiet line in its own flow, and no button.
+      expect(surfaceOf(container, name).querySelector('[data-new-build-line]')?.textContent).toBe(NEW_BUILD_LINE)
+      expect(container.querySelector('[data-new-build]')).toBeNull()
       fireEvent.click(button)
       expect(reload).toHaveBeenCalledTimes(1)
       expect(sessionStorage.getItem(BUILD_RELOAD_FOR_KEY)).toBeNull()
@@ -107,12 +119,14 @@ for (const [name, mount] of Object.entries(surfaces)) {
       const reload = vi.spyOn(pageReload, 'now').mockImplementation(() => {})
       const { container } = mount()
       const button = await waitFor(() => {
-        const found = container.querySelector<HTMLButtonElement>(`[data-new-build="${EDGE}"]`)
+        const found = container.querySelector<HTMLButtonElement>(`[data-notice-id="build:${EDGE}"] [data-notice-action="build"]`)
         expect(found).not.toBeNull()
         return found as HTMLButtonElement
       })
-      expect(button.textContent).toBe('New build · Reload')
-      expect(button.title).toContain('A new build of the app is live. One reload brings it.')
+      expect(button.textContent).toBe('Reload')
+      expect(container.querySelector(`[data-notice-id="build:${EDGE}"]`)?.textContent).toContain('A new build of the app is live. One reload brings it.')
+      expect(surfaceOf(container, name).querySelector('[data-new-build-line]')?.textContent).toBe(NEW_BUILD_LINE)
+      expect(container.querySelector('[data-new-build]')).toBeNull()
       fireEvent.click(button)
       expect(reload).toHaveBeenCalledTimes(1)
       expect(sessionStorage.getItem(BUILD_RELOAD_FOR_KEY)).toBe(EDGE)
@@ -126,6 +140,8 @@ for (const [name, mount] of Object.entries(surfaces)) {
       await waitFor(() => { expect(reports).toEqual([JSON.stringify({ page: PAGE, edge: EDGE })]) })
       expect(sessionStorage.getItem(BUILD_SUPPRESSED_KEY)).toBe(EDGE)
       expect(container.querySelector('[data-new-build]')).toBeNull()
+      expect(container.querySelector('[data-new-build-line]')).toBeNull()
+      expect(container.querySelector('[data-notice]')).toBeNull()
     })
   })
 }

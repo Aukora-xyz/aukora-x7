@@ -2,7 +2,7 @@
 
 [English](WHAT-IS-BUILT.md) | 中文
 
-本页是这棵树的清单：Aukora 今天已有的主要机制、承载每个机制的文件、固定它的测试，以及它被证明到了什么程度。它写成可以逐行核对的形式；首页（[README.md](../README.zh.md)）是简短版本，[ARCHITECTURE-MAP.md](ARCHITECTURE-MAP.zh.md) 画出各部分如何配合。
+你是从 `DIRECTION.md` 来的，那一页展示了项目要去哪里。本页是这棵树的清单：Aukora 已有的主要机制、承载每个机制的文件、固定它的测试，以及它被证明到了什么程度。第一节按首页的三个标签给这些能力分类。它写成可以逐行核对的形式；首页（[README.md](../README.zh.md)）是简短版本，[ARCHITECTURE-MAP.md](ARCHITECTURE-MAP.zh.md) 画出各部分如何配合。
 
 **成熟度标签。** 每一项带有下列标签中的一个或多个，不使用其他标签：
 
@@ -16,19 +16,41 @@
 
 Aukora 是一个由一个人拥有的个人 AI 节点。它的 AI 名叫 Auma，由称为 organ 的小型可替换模块组成，能够编写、编译、测试并暂存自己的下一个版本。提议者永远不是许可者：修改她自己的裁判、向她的仓库合并，或向 GitHub 发帖，都要等所有者用 passkey 批准那些精确的字节，而做这项检查的是边缘端，不是 Auma。
 
-边缘端是带有两个 Durable Object（它的存储）的 Cloudflare Worker：HEAD 选定运行她的哪个版本，MIRROR 保存她家目录的一份副本。智能体运行在所有者的浏览器中，跑在继承来的 DeepSeek Harness 运行时上，`packages/` 的大部分就是它；Aukora 自己的一层是下文点名的权限、自我修改与恢复代码。这棵树是一个原型，由脚本从一个运行中的私有节点导出，不含该节点的世界（它的数据、密钥、名称和历史）。每个节点都从同一个初始版本开始，即 genesis head。
+边缘端是带有三个 Durable Object（它的存储）的 Cloudflare Worker：HEAD 选定运行她的哪个版本，MIRROR 保存她家目录的一份副本，语音桥负责她的语音通话。智能体运行在所有者的浏览器中，跑在继承来的 DeepSeek Harness 运行时上，`packages/` 的大部分就是它；Aukora 自己的一层是下文点名的权限、自我修改与恢复代码。这棵树是一个原型，由脚本从一个运行中的私有节点导出，不含该节点的世界（它的数据、密钥、名称和历史）。每个节点都从同一个初始版本开始，即 genesis head。
 
 分量在哪里，按文件列出：
 
 - **一次批准覆盖精确字节，并且只能用一次。** IMPLEMENTED；测试文件在 RECORDED RUN（属于较早的一棵树） 中为绿。边缘端把每个 passkey 挑战绑定到一个请求的来源、方法、路径和请求体哈希。对于 head 的移动和 GitHub 发帖，它在与该效果自身记录相同的存储事务中消耗这次批准；其他获批请求在效果运行之前由边缘端消耗。`deploy/cloudflare/src/aumlok.mjs`、`deploy/cloudflare/src/head-do.mjs`。
-- **一条规则决定什么算失败的证明，一个测试读取源码来守住它。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。只有经过检查且确实错误的证明才能推动锁定。一个 1,093 行的测试解析所有者身份相关的源码，追踪别名，只要在别处调用了验证器就失败；它的豁免清单是空的。`deploy/cloudflare/src/proof-failure-rule.mjs`。
-- **她编译自己的候选版本，父版本再给它们打一次分。** 重新评分是 IMPLEMENTED（`scion-growth.spec.ts`，一个无关用例已知为红）。编译步骤本身没有测试调用它：UNVERIFIED。候选 organ 由 scion（她的 organ 编译器）在一个独立的 worker 中编译，并对照 Pearl 的保留套件运行，Pearl 就是她用来避免破坏已有能力的东西。候选版本自己报告的通过会被忽略。`packages/experimental/webworker-runtime/src/x6/scion.ts`、`mirror/home/auma/seed/organs/seed-pearl.js`。
-- **身份、密钥和裁判位于 25 个密封的 Wasm 单元中，Auma 把它们当作工具来调用。** 边缘端一个也不调用：它自己的身份和批准代码是 JavaScript（`deploy/cloudflare/src/aumlok.mjs`）。加载器是 IMPLEMENTED（`wasm-cells.spec.ts`，为绿）。25 个单元中有 24 个以不带源码的二进制文件随附，因此任何单元与某份源码相符都是 UNVERIFIED。每个单元都按大小和 SHA-256 固定（不必运行任何东西就能核对），零导入，并在一个 worker 中按燃料配额运行，该 worker 在 5 秒后被结束。`packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`。
+- **一条规则决定什么算失败的证明，一个测试读取源码来守住它。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。只有经过检查且确实错误的证明才能推动锁定。一个 1,095 行的测试解析所有者身份相关的源码，追踪别名，只要在别处调用了验证器就失败；它的豁免清单是空的。`deploy/cloudflare/src/proof-failure-rule.mjs`。
+- **她编译自己的候选版本，父版本再给它们打一次分。** 重新评分是 IMPLEMENTED（`scion-growth.spec.ts`）。编译步骤本身没有测试调用它：UNVERIFIED。候选 organ 由 scion（她的 organ 编译器）在一个独立的 worker 中编译，并对照 Pearl 的保留套件运行，Pearl 就是她用来避免破坏已有能力的东西。候选版本自己报告的通过会被忽略。`packages/experimental/webworker-runtime/src/x6/scion.ts`、`mirror/home/auma/seed/organs/seed-pearl.js`。
+- **身份、密钥和裁判位于 30 个密封的 Wasm 单元中，Auma 把它们当作工具来调用。** 边缘端不调用任何身份、密钥或裁判单元：它自己的身份和批准代码是 JavaScript（`deploy/cloudflare/src/aumlok.mjs`）。加载器是 IMPLEMENTED（`wasm-cells.spec.ts`，为绿）。30 个单元中有 24 个以不带源码的二进制文件随附（六个是手写的 WAT，源码就在旁边），因此任何单元与某份源码相符都是 UNVERIFIED。每个单元都按大小和 SHA-256 固定（不必运行任何东西就能核对），零导入，并在一个 worker 中按燃料配额运行，该 worker 在 5 秒后被结束。`packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`。
 - **所有者有一条回来的路。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。没有针对真实边缘端的恢复记录。一个救援页面、一个 vault、一个有界归档，以及一个只写入空边缘端的恢复。`deploy/cloudflare/src/rescue-kit.mjs`、`deploy/cloudflare/src/recovery-restore.mjs`。
 
-这棵树中统计的数量：genesis head 中有 26 个 organ，25 个 Wasm 单元共 169 个具名操作，27 个智能体工具，15 个只有所有者的 passkey 才能更改的治理 id，58 个边缘端模块共超过 22,000 行，附 94 个测试文件，应用和浏览器运行时共 175 个 spec 文件，以及超过 3,500 个已编写的测试用例。
+这棵树中统计的数量：genesis head 中有 26 个 organ，30 个 Wasm 单元共 187 个具名操作，32 个智能体工具，15 个只有所有者的 passkey 才能更改的治理 id，76 个边缘端模块共超过 38,000 行，附 138 个测试文件，应用和浏览器运行时共 229 个 spec 文件，以及 5,506 个已编写的测试用例。
 
 状态：测试就在树中，等待运行。其中一些已知为红，每个都连同数量和原因列在 [docs/KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.zh.md) 中。作者在一台机器上对本仓库较早的一棵树做的一次运行记录在 [docs/RUN-RECORD.md](RUN-RECORD.zh.md) 中：一次离线安装、构建、本地主机的一次启动和 5,502 个测试用例，其中 90 个失败：89 个已知为红，1 个由那次运行发现且仍为红。那次运行还发现了另一个失败，由本仓库的导出造成；导出已被更正，该测试套件再次运行后没有失败。它没有显示已部署的节点，也没有浏览器会话，所以依赖它之前请先自己运行。
+
+## 按三个标签排列的能力
+
+首页的三个能力标签，逐行列出，每行带一个固定它的测试文件以及运行方法。Built and on main（已构建并在 main 上）：代码和它的测试在这里；对线上节点不做任何声明。Exercised from inside by Auma（Auma 从内部运行过）：已构建并在 main 上，并且作者报告 Auma 在他们的线上节点上亲自运行过它，这棵树无法复现这一点。Not yet proven live（尚未在线上证明）：在这棵树中，也许在替身上测试过，但还没有在线上节点上完成过。“作者报告”标出在作者的线上节点上看到的情况；它从来不是这棵树的事实。本页其余部分使用上面的五个证据标签；`AI-START-HERE.md` 第 5 节给出两组标签的对应关系。
+
+| 能力 | 代码 | 测试文件 | 标签 |
+| --- | --- | --- | --- |
+| 她读取自己的仓库，并提交到她自己的分支（`auma/sandbox/…`、`auma/proposal/…`） | `cloud-brokers.mjs` | `repo-brokers.test.mjs` | Built and on main |
+| 一个受保护的 organ 版本只有在 passkey 批准了它的 ball id、epoch、organ 和代码哈希之后才会上线，只用一次，在移动 HEAD 的事务中用掉 | `head-do.mjs`、`owner-grant-policy.mjs` | `head-hardening.test.mjs` | Built and on main |
+| 合并卡片修复后的路径：一个读取时间窗，最后再读一次两个引用，一个新的执行时间窗，在可合并的卡片暂存期间暂缓 head 同步 | `cloud-brokers.mjs` | `merge1-read-window.test.mjs`、`merge1-sync-hold.test.mjs` | Not yet proven live：作者报告：在这条路径上还没有任何卡片被批准过 |
+| `withdraw_proposal`：她撤回自己指名的一张已暂存的卡片，不需要 passkey，不合并任何东西 | `cloud-brokers.mjs` | `merge1-withdraw.test.mjs` | Exercised from inside by Auma（一次） |
+| 她自己的只读工具：提议、在密封单元中做资格检查、由所有者的会话挂载、页面重新加载后仍可调用 | `ball-loader.ts` | `tools-mount-realhost-redteam.spec.ts` | Exercised from inside by Auma |
+| 没有标签页时的唤醒：有界的步骤（每步 4 轮模型调用、8 次工具调用、30 秒；每个 UTC 日最多 48 步），以及她为下一步写下的笔记 | `head-do.mjs`（`CLOUD_WAKE_LIMITS`、`CLOUD_WAKE_DAILY_STEPS`） | `wake-notes-wake1.test.mjs` | Not yet proven live：作者报告：还没有任何唤醒步骤在他们的线上节点上完成过；那里的失败之后有过几次修复，最后一次尚未证明 |
+| 失败或受阻的唤醒步骤给出 19 个封闭原因之一，从不给出提供方的原文 | `head-do.mjs`（`CLOUD_WAKE_CAUSES`） | `cloud-wake-off-switch.test.mjs`（其中一个原因）；完整清单：wake2-reasons.test.mjs | Built and on main；作者报告：这些原因在线上出现过 |
+| 没有标签页时的行动，由所有者的 Away mandate 支付 | `owner-mandate.mjs`、`head-do.mjs` | `owner-mandate.test.mjs`、`wake3-review.test.mjs` | Not yet proven live：已关闭，`deploy/cloudflare/wrangler.toml` 中为 `WAKE_ACTS_ENABLED = "0"` |
+| 等待中的批准是一个 Notices 控件后面的行；聊天上方没有任何浮动的东西；一行从不批准任何事 | `notices.ts`、`NoticesSurface.tsx` | `portal-approval-notices.client.spec.tsx` | Built and on main；作者报告：所有者在线上看到过 |
+| 她的 runner 任务：每个 UTC 日 600 分钟 runner 时间，在派发之前于 HEAD 预留 | `runner-budget.mjs`、`cloud-brokers.mjs` | `runner-budget.test.mjs`、`auma-exec-door.test.mjs` | Not yet proven live |
+| Pentora 观察器：根据部分读数提出的声明返回 KNOWN、UNDETERMINED 或 DISAGREE，不改变任何东西（它的引擎文件不导入任何东西） | `pentora-epistemic.ts` | `pentora-epistemic.test.mjs` | Built and on main |
+| Prime 模型门，带有按 UTC 日和月的持久花费上限 | `provider-budget.mjs`、`worker.mjs` | `prime-door.test.mjs` | Not yet proven live：作者报告：它唯一一次真实调用因余额不足被提供方拒绝 |
+| Continuity Diamond：她写下下一个问题，宿主核对实际发生了什么，下一次唤醒必须接着回答那个确切的问题 | 无 | 无 | DIRECTION：规格正在设计中；尚未构建任何部分（[DIRECTION.zh.md](DIRECTION.zh.md)） |
+
+如何运行它们。`runner-budget.test.mjs` 和 `pentora-epistemic.test.mjs` 只用 Node 就能运行。其余的需要 npm 包：在 `pnpm install --frozen-lockfile` 之后，对边缘端测试运行 `node --test deploy/cloudflare/src/__tests__/<file>`，对 `.spec.ts` 或 `.spec.tsx` 文件运行 `pnpm exec vitest run <file>`。作者在线上看到的东西无法从这里运行。
 
 ## 已构建的内容
 
@@ -37,57 +59,57 @@ Aukora 是一个由一个人拥有的个人 AI 节点。它的 AI 名叫 Auma，
 这些数字，以及如何重新计数。这些是对树本身的计数，不是对任何运行的计数：
 
 - **Organ：26。** `ls mirror/home/auma/seed/organs | wc -l`。同样的 26 个名称是 `mirror/home/balls/HEAD.json` 的条目。
-- **Wasm 单元：25 个，共 169 个具名操作。** `ls apps/web/public/cells/*.wasm | wc -l`。25 个固定值在 `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts` 中，169 个名称在这些固定值的 `ops` 列表中。24 个由 Rust 编译，1 个，即 `aura-focus`，由 WAT 编译。当每个固定值都与其文件相符时，这条命令不输出任何内容：`for f in apps/web/public/cells/*.wasm; do grep -q $(shasum -a 256 $f | cut -c1-64) packages/experimental/webworker-runtime/src/x6/wasm-cells.ts || echo $f; done`。（树中没有 Rust 源码，所以“由 Rust 编译”在这里是 UNVERIFIED。）
-- **智能体工具：27。** 在 `packages/experimental/webworker-runtime/src/x6/` 中运行 `grep -cE "^      name: '[a-z_0-9]+'," ball-loader.ts`。按 `wc -l`，该加载器有 7,957 行。
+- **Wasm 单元：30 个，共 187 个具名操作。** `ls apps/web/public/cells/*.wasm | wc -l`。30 个固定值在 `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts` 中，187 个名称在这些固定值的 `ops` 列表中。24 个由 Rust 编译，6 个由手写的 WAT 编译，源码就在旁边（`aura-focus`、`cord-echo`、`kyber-cpu`、`menger-hive`、`nucleus`、`pentora-codec`）。当每个固定值都与其文件相符时，这条命令不输出任何内容：`for f in apps/web/public/cells/*.wasm; do grep -q $(shasum -a 256 $f | cut -c1-64) packages/experimental/webworker-runtime/src/x6/wasm-cells.ts || echo $f; done`。（树中没有 Rust 源码，所以“由 Rust 编译”在这里是 UNVERIFIED。）
+- **智能体工具：32。** 在 `packages/experimental/webworker-runtime/src/x6/` 中运行 `grep -cE "^      name: '[a-z_0-9]+'," ball-loader.ts`。另有少数工具以别的写法注册，她自己挂载的工具再加在上面。按 `wc -l`，该加载器有 9,577 行。
 - **治理 id：15。** `server/ball-transition.mjs` 中 `T2_ONLY_ORGANS` 里的名称：genesis head 的十个 organ 和五个 Wasm 单元。
-- **边缘端：58 个模块，94 个测试文件。** `ls deploy/cloudflare/src/*.mjs | wc -l`，合计超过 22,000 行。测试文件以 `.test.mjs` 或 `.spec.ts` 结尾，位于 `deploy/cloudflare/src/__tests__/`，合计超过 31,000 行。
-- **应用和运行时：69 个和 106 个 spec 文件。** `packages/client/ui-layout/tests/` 中的 `*.spec.*` 文件，以及 `packages/experimental/webworker-runtime/tests/` 下的 `*.spec.ts` 文件。
-- **已编写的测试用例：4,383。** 边缘端 1,490，应用 1,115，运行时 1,069，`server/` 的 31 个测试文件中 526，`deploy/ci/` 的 12 个测试文件中 183。
+- **边缘端：76 个模块，138 个测试文件。** `ls deploy/cloudflare/src/*.mjs | wc -l`，合计超过 38,000 行。测试文件以 `.test.mjs` 或 `.spec.ts` 结尾，位于 `deploy/cloudflare/src/__tests__/`，合计超过 61,000 行。
+- **应用和运行时：80 个和 149 个 spec 文件。** `packages/client/ui-layout/tests/` 中的 `*.spec.*` 文件，以及 `packages/experimental/webworker-runtime/tests/` 下的 `*.spec.ts` 文件。
+- **已编写的测试用例：5,506。** 边缘端 2,083，应用 1,245，运行时 1,459，`server/` 的 31 个测试文件中 527，`deploy/ci/` 的 13 个测试文件中 192。
 
 ### 权限：AUMLOK 与所有者的 passkey
 
 AUMLOK 是身份之门：passkey 注册、所有者登录、设备、七个词（所有者的恢复短语）、邀请和精确字节批准。除非给出更长的路径，代码在 `deploy/cloudflare/src/`，测试在 `deploy/cloudflare/src/__tests__/`。
 
-- **精确字节，只用一次。** IMPLEMENTED；测试文件在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录真实的认证器。passkey 对一个随机挑战签名，边缘端把该挑战绑定到一个请求的来源、方法、路径和请求体哈希（`aumlok.mjs` 中的 `aumlokClass3Binding`），所以这次批准只能花在那些字节上。它的有效期为五分钟，只能用一次。对于她的 GitHub 发帖，`head-do.mjs` 中的 `consumeClass3` 在一个存储事务中消耗这次批准并预留请求体哈希。该预留不会自动释放，结果未知时也一样，所以重新加载不会造成重复发帖。账本容纳 4,096 个预留，之后拒绝。测试：`convergence-approval-fencing.test.mjs`（5 个用例）、`cloud-brokers.test.mjs`（29 个用例）。
-- **页面请求的是它所展示的字节。** IMPLEMENTED；测试 `packages/client/ui-layout/tests/outward-class3.client.spec.tsx`（3 个用例，jsdom），在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录浏览器会话。对于一个已暂存的 GitHub 发帖，页面严格地读取该请求，展示它的全文，在点击时再读一次文件，只有它仍是同一个请求时才请求 passkey。`packages/client/ui-layout/src/client/spatial/aumlok/outward-class3.ts`。
+- **精确字节，只用一次。** IMPLEMENTED；测试文件在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录真实的认证器。passkey 对一个随机挑战签名，边缘端把该挑战绑定到一个请求的来源、方法、路径和请求体哈希（`aumlok.mjs` 中的 `aumlokClass3Binding`），所以这次批准只能花在那些字节上。它的有效期为五分钟，只能用一次。对于她的 GitHub 发帖，`head-do.mjs` 中的 `consumeClass3` 在一个存储事务中消耗这次批准并预留请求体哈希。该预留不会自动释放，结果未知时也一样，所以重新加载不会造成重复发帖。账本容纳 4,096 个预留，之后拒绝。测试：`convergence-approval-fencing.test.mjs`（5 个用例）、`cloud-brokers.test.mjs`（35 个用例）。
+- **页面请求的是它所展示的字节。** IMPLEMENTED；测试 `packages/client/ui-layout/tests/outward-class3.client.spec.tsx`（4 个用例，jsdom），在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录浏览器会话。对于一个已暂存的 GitHub 发帖，页面严格地读取该请求，展示它的全文，在点击时再读一次文件，只有它仍是同一个请求时才请求 passkey。`packages/client/ui-layout/src/client/spatial/aumlok/outward-class3.ts`。
 - **用绑定的 passkey 登录，并设有闸门。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录所有者登录。会话最长持续 8 小时，并不是一次批准。60 秒内五次签名错误的凭证会把门锁住 300 秒。有一个用例发送 100 个重叠的错误凭证，并断言最多启动五次签名检查。`aumlok.mjs`、`gate-lockout.mjs`、`owner-login-slots.mjs`。测试：`owner-passkey-signin.test.mjs`（31 个用例）、`owner-login-gate.test.mjs`（14 个用例）。
-- **失败证明的一条规则，做成结构性的。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。只有当一个密码学证明经过检查且确实错误时，锁定计数器才会移动。垃圾输入、过期的挑战或库错误从不计数，所以外人无法把所有者锁在门外。在 `proof-failure-rule.mjs` 中，只有 `proofOutcome` 调用验证器，只有 `countFailure` 移动计数器，并且一个结果带有其他模块造不出来的私有标记。passkey 的回答先由项目自己的解析筛查（`webauthn-screen.mjs`），那里的不匹配会被拒绝且不计数。`proof-failure-rule.test.mjs`（11 个用例，1,093 行）用 TypeScript 解析器解析所有者身份相关的源码，追踪重命名和命名空间的导入、别名、解构和 `bind`，只要在别处调用了验证器或写了计数器就失败。有一个用例要求每个调用验证器的边缘端文件都被列为身份代码或非身份代码并附上理由，而未决例外的清单（`OPEN`）是空的。它的六个用例植入已知的绕过规则的办法，例如重命名、解构或绑定的验证器，或通过 `Reflect` 写入的计数器，并断言扫描能抓住每一个。
+- **失败证明的一条规则，做成结构性的。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。只有当一个密码学证明经过检查且确实错误时，锁定计数器才会移动。垃圾输入、过期的挑战或库错误从不计数，所以外人无法把所有者锁在门外。在 `proof-failure-rule.mjs` 中，只有 `proofOutcome` 调用验证器，只有 `countFailure` 移动计数器，并且一个结果带有其他模块造不出来的私有标记。passkey 的回答先由项目自己的解析筛查（`webauthn-screen.mjs`），那里的不匹配会被拒绝且不计数。`proof-failure-rule.test.mjs`（11 个用例，1,095 行）用 TypeScript 解析器解析所有者身份相关的源码，追踪重命名和命名空间的导入、别名、解构和 `bind`，只要在别处调用了验证器或写了计数器就失败。有一个用例要求每个调用验证器的边缘端文件都被列为身份代码或非身份代码并附上理由，而未决例外的清单（`OPEN`）是空的。它的六个用例植入已知的绕过规则的办法，例如重命名、解构或绑定的验证器，或通过 `Reflect` 写入的计数器，并断言扫描能抓住每一个。
 - **第二台设备的 passkey。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有在真实认证器上运行。一个已注册的 passkey 批准“添加设备”，并得到一个一次性代码：256 个随机比特，只以哈希存储，十分钟有效，输错五次即作废。新电脑注册一个 passkey，但只是加入。在已注册的 passkey 确认该确切密钥之前它无法登录，该密钥以六位数的短语展示。`passkey-devices.mjs`。测试：`passkey-devices.test.mjs`（69 个用例）。
 - **七个词。** IMPLEMENTED；测试在 `packages/client/ui-layout/tests/host-facts.client.spec.tsx` 中（它的“AUMLOK phrase”和“AUMLOK root sealed by the seven words”两组），在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录仪式。页面用 `crypto.getRandomValues` 抽取七个词，在 11,253,636,424,086 个有效短语上均匀抽取（43.36 比特），并只展示一次。它保留的承诺是 600,000 次迭代的 PBKDF2-SHA256，以节点的公钥作盐。文件头给出了这两个选择的理由。`packages/client/ui-layout/src/client/spatial/aumlok/aumlok-ceremony.ts`。这些词用 AES-256-GCM 封存一个 32 字节的根。节点的 Ed25519 密钥由该根派生，封存的根只在绑定的 passkey 断言之后才被释放。`packages/client/ui-layout/src/client/spatial/aumlok/aumlok-root.ts`。
-- **夜间授权。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录在已部署节点上使用授权。轻点一次 passkey，她就可以在 12 小时内、12 次使用内、每次使用最多 8 个 organ 的范围内，独自添加或替换普通 organ。治理 id 永远不在覆盖范围内。`night-grant.mjs`、`night-grant.test.mjs`（21 个用例）。
+- **夜间授权。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录在已部署节点上使用授权。轻点一次 passkey，她就可以在 12 小时内、12 次使用内、每次使用最多 8 个 organ 的范围内，独自添加或替换普通 organ。治理 id 永远不在覆盖范围内。`night-grant.mjs`、`night-grant.test.mjs`（22 个用例）。
 - **她不能更改自己的裁判。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。该清单本身是 Worker 源码，所以更改它是一次代码部署。`server/deploy-cloudflare.mjs` 不要求 passkey；谁持有部署凭证是 UNVERIFIED。十五个 id 按名称仅限所有者，任何声明自己属于治理的条目也一样。十个是 organ：receipts、Pearl（她的保留套件和奠基教训）、Aura（她的连贯性读数）、prediction、recall、memory、body map、superagent、scion（organ 编译器）和 boot。五个是 Wasm 单元：两个裁判、授权账本、身份和密钥。对其中任何一个的更改，都需要 passkey 作用于精确的候选字节。所有者授权必须带有 Ed25519 和 ML-DSA-65 两个签名。`server/ball-transition.mjs`、`deploy/cloudflare/src/owner-grant-policy.mjs`、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`。测试：`deploy/ci/authority-preflight.test.mjs`（10 个用例）、`hybrid-envelope.test.mjs`（6 个用例）。
 
 ### 有机体：organ、ball、scion 与 Pearl
 
 organ 是她的一个可替换模块；ball 是按哈希列出每个 organ 的清单；epoch 是 ball 的版本号。Organ 在 `mirror/home/auma/seed/organs/`。运行时代码在 `packages/experimental/webworker-runtime/src/x6/`，它的测试在 `packages/experimental/webworker-runtime/tests/x6/`。
 
-- **genesis head。** RECORDED RUN（属于较早的一棵树）：空跑打印出了它在 epoch 1 的 ball id，本地主机对它作出了应答。断言一个长期运行节点的 head 的测试（`organ-entry-states.spec.ts`，“her real head”）因此已知为红。每个节点都从同一个 head 开始：epoch 1，没有父版本，26 个条目，作者为 `genesis`（`mirror/home/balls/HEAD.json`），带有 Pearl 套件和六个 scar（被记录的失败，各附一条教训）。节点此后长出的东西就是它的世界，`.gitignore` 把它挡在仓库之外。
+- **genesis head。** RECORDED RUN（属于较早的一棵树）：空跑打印出了它在 epoch 1 的 ball id，本地主机对它作出了应答。断言一个长期运行节点的 head 的测试（`organ-entry-states.spec.ts`，“her real head”）读取的是放在测试旁边的一个冻结的替身 head，而不是这个 head。每个节点都从同一个 head 开始：epoch 1，没有父版本，26 个条目，作者为 `genesis`（`mirror/home/balls/HEAD.json`），带有 Pearl 套件和六个 scar（被记录的失败，各附一条教训）。节点此后长出的东西就是它的世界，`.gitignore` 把它挡在仓库之外。
 - **Ball 与 epoch。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。ball 是一份清单，按每个 organ 代码的 SHA-256 列出它们，它的 id 就是它自己的哈希。新的 head 必须把当前 ball 作为父版本，并且恰好高出一个 epoch。过期的调用方会得到 `REBASE_REQUIRED`。`server/ball-head.mjs`、`deploy/cloudflare/src/head-do.mjs`。测试：`server/ball-manifest.test.mjs`（6 个用例）。
 - **她暂存自己的下一个版本。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录在已部署节点上的暂存。三个工具为所有者暂存它。`stage_organ_promotion` 更改一个 organ，`stage_organ_set_promotion` 添加一到八个普通 organ。两者都克隆当前的 head，加上一个 epoch，并把候选版本发到 `/_head/stage`。`stage_head_promotion` 把一个治理候选版本写入一个审阅文件交给所有者。它们都不发布也不批准。`ball-loader.ts`。测试：`stage-organ-promotion.spec.ts`（10 个用例）。
 - **可撤销的实时自我修改。** `tree_patch` 和 `tree_undo` 是 IMPLEMENTED（由 `head-promotion.spec.ts`，34 个用例，和 `open-tab-adoption.spec.ts`，17 个用例执行；在 RECORDED RUN（属于较早的一棵树） 中为绿）。`self_apply` 和 `self_undo` 没有测试调用它们：UNVERIFIED。`tree_patch` 在不重新加载页面的情况下，在运行中的智能体里挂载或热替换一个 organ，失败的激活会被回滚。`tree_undo` 把一个 organ 恢复到它之前的版本，并按相反顺序释放它注册过的东西。`self_apply` 把新代码存储并换入，作为一步完成，`self_undo` 撤销最后一次更改。`ball-loader.ts`。
 - **scion 与一个自我构建步骤。** UNVERIFIED：树中没有测试调用 `scion.ts` 中的编译器或 organ `seed-cycle.js`；把它们连起来的代码在 `scion-growth.spec.ts` 中有测试。`scion.ts` 最多接收 128 个源文件和 2 MiB，并用固定的离线 esbuild-wasm 在一个独立的 worker 中编译它们。编译不会运行或选定结果。随后 `seed-cycle.js` 写入该 organ，计算它的哈希，安装它，运行它的验收用例，并保留或撤销它。`scion_grow` 工具把两者连起来（`scion-growth.ts`）。
-- **Pearl，以及攻击裁判的测试。** IMPLEMENTED；`server/pearl.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中为绿。不是已证明的隔离，且是自我证明：已部署的 HEAD 不读取 Pearl 的结果（`deploy/cloudflare/src/head-do.mjs`：已部署的 Durable Object 没有提供 `verifyTransitionQualification`）。Pearl 是她用来避免破坏已有能力的东西：一个保留套件，加上称为 scar 的奠基教训。一个含 23 个用例的保留套件和六个 scar 以种子文件随附（`mirror/home/auma/seed/pearl/retention-suite.v1.json`、`mirror/home/auma/seed/scars.jsonl`）。每个 scar 记录一次失败及其教训。六个中有五个点名了现在守护它们的检查，共 14 个，这 14 个每一个都是该套件的一个用例。`scar-aura-silent-calm` 还没有点名任何检查。`seed-pearl.js` 在一个一次性的试验 worker 中，用整个套件运行一个 organ 的两个构建。在 `scion-growth.spec.ts`（73 个用例，其中一个在已知红清单上）中，一个候选版本试图提交伪造的通过，而父版本忽略 worker 的通过标志并重新给输出评分。另有 `server/pearl.test.mjs`（38 个用例）。
+- **Pearl，以及攻击裁判的测试。** IMPLEMENTED；`server/pearl.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中为绿。不是已证明的隔离，且是自我证明：已部署的 HEAD 不读取 Pearl 的结果（`deploy/cloudflare/src/head-do.mjs`：已部署的 Durable Object 没有提供 `verifyTransitionQualification`）。Pearl 是她用来避免破坏已有能力的东西：一个保留套件，加上称为 scar 的奠基教训。一个含 23 个用例的保留套件和六个 scar 以种子文件随附（`mirror/home/auma/seed/pearl/retention-suite.v1.json`、`mirror/home/auma/seed/scars.jsonl`）。每个 scar 记录一次失败及其教训。六个中有五个点名了现在守护它们的检查，共 14 个，这 14 个每一个都是该套件的一个用例。`scar-aura-silent-calm` 还没有点名任何检查。`seed-pearl.js` 在一个一次性的试验 worker 中，用整个套件运行一个 organ 的两个构建。在 `scion-growth.spec.ts`（74 个用例）中，一个候选版本试图提交伪造的通过，而父版本忽略 worker 的通过标志并重新给输出评分。另有 `server/pearl.test.mjs`（38 个用例）。
 - **保留测试的运行器保留自己的记录。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中。当一个候选版本对保留套件运行时，运行器自己记录 import、guard、dependency、factory、export、setup 和 timeout 失败，即使候选代码捕获或改写了它们；只有已挂载、处于活动状态、且属于确切 head 的 `seed-pearl` 才能记录一次准入。该包的 README 说这不是隔离边界。`scion-growth.ts`、`packages/experimental/webworker-runtime/README.md`。测试：`retention-infrastructure.spec.ts`（8 个用例）、`retention-runtime-parity.spec.ts`（11 个用例）、`retention-export-admission.spec.ts`（9 个用例）、`retention-real-head.spec.ts`（4 个用例）。
 - **Receipts、prediction 与 Aura。** IMPLEMENTED。部分为红：`server/aura.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中为绿；`server/receipts.test.mjs` 在那里失败 6 个用例，`server/receipts-policy.test.mjs` 失败 3 个，`server/predict.test.mjs` 失败 6 个，均已列出，原因未调查。`seed-receipts.js` 保存一条哈希链接的收据日志，带有 Ed25519 签名的检查点。`seed-predict.js` 在任何东西改变之前，把对下一次晋升的预测作为收据封存，并且不存储分数：读者根据链重新计算意外程度。`seed-aura.js` 按固定规则计算她的连贯性，它的权限层级始终是 `peripheral-hint`。测试：`server/aura.test.mjs`（16 个用例）、`server/receipts.test.mjs`（10 个用例，6 个在已知红清单上）。
-- **25 个密封的 Wasm 单元。** 加载器是 IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。25 个单元中有 24 个以不带源码的二进制文件随附。`apps/web/public/cells/` 中的每个文件都在 `wasm-cells.ts` 中按大小、SHA-256 和燃料配额固定。加载器按固定顺序接纳一个单元，并在第一次失败时停下：先查大小，再在私有副本上查哈希，然后读取二进制中的内存限制（一块不共享的 32 位内存，带有声明的上限），这一切都在编译之前。然后它要求零导入和恰好是带计量的导出集合。每次调用都在一个独立的 worker 中、以全新的燃料配额运行，该 worker 在 5,000 毫秒后被结束，并且每次调用之后都会再次检查实时内存。这些单元承载身份、密钥、四个裁判、授权账本、风险、记忆策略、Nostr 签名与加密，以及布局。她用 `x6_cell` 工具调用它们。其中一个单元 skillsmith 把 WAT 文本编译成一个新的带计量单元：`aura-focus.wasm` 就是这样由 `aura-focus.wat` 构建的，并且如果检入的字节不同，`server/aura-focus-cell.build.mjs` 以 1 退出。测试：`wasm-cells.spec.ts`（13 个用例）。
-- **26 个工具。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。对外的工具没有针对已部署的节点运行过：UNVERIFIED。除了暂存和自我修改，加载器还注册了这些工具：自我检查（`x6_capability_index`、`x6_browser_estate`、`auma_snapshot`），通过主机持有的门向外伸展（`x6_repo`、`x6_github`、`x6_cloudflare`、`x6_web_eyes`），同时向最多六个其他模型征求意见（`x6_consult`），最多六个并行的子智能体任务（`x6_swarm`），带验收标准和步数上限的持久愿望（`x6_wish`），以及她的 Nostr 身份（`x6_nostr`）。`ball-loader.ts`。测试：`capability-index.spec.ts`（6 个用例）。
-- **没有打开标签页时醒来。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；在已部署的边缘端上是 UNVERIFIED。一个 Durable Object 闹钟可以唤醒她进行一次有界会话：3 轮、6 次工具调用、15 秒（`deploy/cloudflare/src/head-do.mjs` 中的 `CLOUD_WAKE_LIMITS`）。`deploy/cloudflare/src/cloud-wake-tools.mjs` 增加三个只读的仓库工具，并通过 `deploy/cloudflare/src/cloud-model-door.mjs` 增加一次模型轮次，它自己不写入、不暂存、不晋升、不批准也不发布任何东西。只有在设置恰好为 `WAKE_EXECUTOR_ENABLED=1`（`deploy/cloudflare/README.md`）时，唤醒才运行模型。`deploy/cloudflare/src/__tests__/` 中的测试：`cloud-wake-bounds.test.mjs`（23 个用例）、`cloud-wake-off-switch.test.mjs`（5 个用例）。打开标签页一侧是 `wake-loop.spec.ts`（11 个用例）。
+- **30 个密封的 Wasm 单元。** 加载器是 IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。30 个单元中有 24 个以不带源码的二进制文件随附。`apps/web/public/cells/` 中的每个文件都在 `wasm-cells.ts` 中按大小、SHA-256 和燃料配额固定。加载器按固定顺序接纳一个单元，并在第一次失败时停下：先查大小，再在私有副本上查哈希，然后读取二进制中的内存限制（一块不共享的 32 位内存，带有声明的上限），这一切都在编译之前。然后它要求零导入和恰好是带计量的导出集合。每次调用都在一个独立的 worker 中、以全新的燃料配额运行，该 worker 在 5,000 毫秒后被结束，并且每次调用之后都会再次检查实时内存。这些单元承载身份、密钥、四个裁判、授权账本、风险、记忆策略、Nostr 签名与加密，以及布局。她用 `x6_cell` 工具调用它们。其中一个单元 skillsmith 把 WAT 文本编译成一个新的带计量单元：`aura-focus.wasm` 就是这样由 `aura-focus.wat` 构建的，并且如果检入的字节不同，`server/aura-focus-cell.build.mjs` 以 1 退出；其余五个 WAT 单元在 `server/` 中也有构建脚本。边缘端把其中三个（`kyber-cpu`、`cord-echo`、`menger-hive`）作为工具运行，从不运行身份、密钥或裁判单元。测试：`wasm-cells.spec.ts`（13 个用例）。
+- **她的工具。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。对外的工具没有针对已部署的节点运行过：UNVERIFIED。除了暂存和自我修改，加载器还注册了这些工具：自我检查（`x6_capability_index`、`x6_browser_estate`、`auma_snapshot`），通过主机持有的门向外伸展（`x6_repo`、`x6_github`、`x6_cloudflare`、`x6_web_eyes`），同时向最多十二个其他模型征求意见（`x6_consult`），并行的子智能体任务（`x6_swarm`），带验收标准和步数上限的持久愿望（`x6_wish`），以及她的 Nostr 身份（`x6_nostr`）。`ball-loader.ts`。测试：`capability-index.spec.ts`（8 个用例）。
+- **没有打开标签页时醒来。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；在已部署的边缘端上是 UNVERIFIED。一个 Durable Object 闹钟可以唤醒她进行一个有界的步骤：4 轮模型调用、8 次工具调用、30 秒（`deploy/cloudflare/src/head-do.mjs` 中的 `CLOUD_WAKE_LIMITS`）。`deploy/cloudflare/src/cloud-wake-tools.mjs` 给这个步骤只读工具，并通过 `deploy/cloudflare/src/cloud-model-door.mjs` 每次进行一轮模型调用；这个步骤写下一个检查点和她的笔记，而它的行动（分支、提交、补丁、runner 任务、暂存的卡片、一条 Linear 评论）只在所有者的 Away mandate 有效且 `WAKE_ACTS_ENABLED` 恰好为 "1" 时才提供。只有在设置恰好为 `WAKE_EXECUTOR_ENABLED=1` 时，唤醒才运行模型。随附的 `deploy/cloudflare/wrangler.toml` 设置 `WAKE_EXECUTOR_ENABLED = "1"` 和 `WAKE_ACTS_ENABLED = "0"`。`deploy/cloudflare/src/__tests__/` 中的测试：`cloud-wake-bounds.test.mjs`（23 个用例）、`cloud-wake-off-switch.test.mjs`（5 个用例）。打开标签页一侧是 `wake-loop.spec.ts`（11 个用例）。
 
 ### 边缘端：一个 Worker，HEAD 与 MIRROR
 
 HEAD 是选定运行哪个 ball 的边缘端存储；MIRROR 是保存她家目录一份副本的边缘端存储。除非给出更长的路径，代码在 `deploy/cloudflare/src/`，测试在 `deploy/cloudflare/src/__tests__/`。没有这棵树的部署记录。
 
-- **一个 Worker，两个 Durable Object。** IMPLEMENTED；`head-hardening.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中为绿，`worker.spec.ts` 在那里 98 个中失败 5 个（已列出）。`worker.mjs`（2,124 行）检查调用者是谁并进行路由。HEAD（`head-do.mjs`，3,000 行）保存选定的是哪个 ball 以及登录锁定。MIRROR（`mirror-do.mjs`）把她家目录的副本存为有序的更新，并拒绝形似机密的文件名。测试：`head-hardening.test.mjs`（20 个用例）、`worker.spec.ts`（写出的有 96 个用例，运行时是 98 个，因为有些是在循环中生成的；5 个在已知红清单上）。
+- **一个 Worker，三个 Durable Object。** IMPLEMENTED；`head-hardening.test.mjs` 在 RECORDED RUN（属于较早的一棵树） 中为绿，`worker.spec.ts` 在那里 98 个中失败 5 个（已列出）。`worker.mjs`（2,183 行）检查调用者是谁并进行路由。HEAD（`head-do.mjs`，4,317 行）保存选定的是哪个 ball 以及登录锁定。MIRROR（`mirror-do.mjs`）把她家目录的副本存为有序的更新，并拒绝形似机密的文件名。测试：`head-hardening.test.mjs`（20 个用例）、`worker.spec.ts`（写出的有 96 个用例，运行时是 98 个，因为有些是在循环中生成的；5 个在已知红清单上）。
 - **线程日志，以及同一时间只有一个写入者。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有在已部署的边缘端上运行过。一个云端线程是一份只追加的日志：存储桶中按内容命名的 2 MiB 密封分片，加上存在 MIRROR 中的一小段开放末尾。MIRROR 中的一份租约指明哪一个浏览器可以写入她的世界。它在最后一次续期后存活 90 秒，过期的租约永远不会被恢复。默认情况下租约只被观察；只有在设置 `WRITER_LEASE=enforce` 时才会强制执行。`thread-log.mjs`、`thread-mount.mjs`、`world-lease.mjs`。测试：`thread-log.test.mjs`（32 个用例）、`world-lease.test.mjs`（34 个用例）、`mirror-world-mount.test.mjs`（23 个用例）。
 - **救援页面与 vault。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。`/rescue` 在不启动她的应用、也不向该浏览器写入的情况下，复制一个浏览器所持有的 Auma。它把副本以按 SHA-256 命名的分片发送到 vault，或保存成一个由 `server/rescue-verify.mjs` 重新哈希的包文件。`rescue-kit.mjs`、`rescue-page.mjs`、`vault.mjs`、`world-budget.mjs`。测试：`rescue-pack.test.mjs`（22 个用例）、`rescue-page.test.mjs`（31 个用例）。
-- **有界归档，以及只恢复到空的边缘端。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录针对真实边缘端的恢复。`cold-archive.mjs`（2,055 行）把边缘端状态写成绑定到所有者的内容寻址归档，并带有一个在自己的对象名下运行的重建演练。`recovery-restore.mjs` 只写入没有 HEAD 也没有 mirror 的边缘端。运行中的边缘端只做比较。测试：`cold-archive-bounded.test.mjs`（44 个用例）、`recovery-restore.test.mjs`（34 个用例）。
-- **模型之门，以及在调用之前写下的日志。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录模型调用。模型调用经由七个门、六家供应商，发往同一来源上的 `/door/<provider>/`：`deepseek`、`moonshot`（两个门）、`openrouter`、`openai`、`anthropic` 和 `xai`（`packages/experimental/webworker-runtime/src/model-doors.ts`）。门让主机添加一个只有它持有的密钥。`turn-journal.mjs` 在调用供应商之前，把这一轮和请求的 SHA-256 提交到存储，所以标签页崩溃不会丢失所问的内容。当调用在发出之后失败，`provider-dispatch.mjs` 回答 `PROVIDER_OUTCOME_UNKNOWN` 并附带 `do-not-repeat-automatically`。测试：`provider-dispatch.test.mjs`（17 个用例）、`turn-journal-and-body.test.mjs`（5 个用例）。
-- **对外工作的代理。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录 GitHub 发帖。她通过 `/_host/repo` 读取仓库，并在名为 `auma/proposal/<name>` 的分支上工作。发布需要 passkey 批准，未知的结果被如实回答为未知。`cloud-brokers.mjs`。测试：`repo-brokers.test.mjs`（43 个用例）。
-- **她的提案不能修改评判它们的东西。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；这里没有在 GitHub 上运行过（工作流的触发器是关闭的）。`deploy/ci/frozen-paths.mjs` 保存一份提案永远不能修改的路径清单，以及一份提案可以修改的小小的开放路径清单；边缘端的仓库代理、提案卡片和 `proposal-checks.yml` 工作流都读取它，而 CI 读取的是 main 上的副本，从不读取提案里的副本。`deploy/ci/retention.mjs` 只有在 main 上通过的每个测试按名字再次通过时，才让一个受保护的套件通过。测试：`deploy/ci/frozen-paths.test.mjs`（17 个用例）、`deploy/ci/retention.test.mjs`（23 个用例）。
-- **她说出的话轮只能看，不能改。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有用真实的语音运行过。语音话轮的每一次工具调用都要经过一道只会拒绝的守卫，它只放行清单上的读取操作，而且说出的话轮从不为所有者暂存卡片。经由边缘端代理的读取在边缘端测试证明它不写任何东西之前保持关闭；每个 organ 操作都钉在经过检查的 organ 字节上，而本树中的这些钉值指向一个长期运行节点的 organ，而不是创世种子（见 [docs/KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.zh.md)）。`packages/experimental/webworker-runtime/src/x6/voice-read-only.ts`、`voice-marks.ts`、`voice-organ-pins.ts`；边缘端证明 `deploy/cloudflare/src/__tests__/voice-edge-reads.test.mjs`。
+- **有界归档，以及只恢复到空的边缘端。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录针对真实边缘端的恢复。`cold-archive.mjs`（2,063 行）把边缘端状态写成绑定到所有者的内容寻址归档，并带有一个在自己的对象名下运行的重建演练。`recovery-restore.mjs` 只写入没有 HEAD 也没有 mirror 的边缘端。运行中的边缘端只做比较。测试：`cold-archive-bounded.test.mjs`（44 个用例）、`recovery-restore.test.mjs`（34 个用例）。
+- **模型之门，以及在调用之前写下的日志。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录模型调用。模型调用经由八个门、七家供应商，发往同一来源上的 `/door/<provider>/`：`deepseek`、`moonshot`（两个门）、`openrouter`、`openai`、`anthropic`、`xai` 和 `prime`（`packages/experimental/webworker-runtime/src/model-doors.ts`）。门让主机添加一个只有它持有的密钥。`turn-journal.mjs` 在调用供应商之前，把这一轮和请求的 SHA-256 提交到存储，所以标签页崩溃不会丢失所问的内容。当调用在发出之后失败，`provider-dispatch.mjs` 回答 `PROVIDER_OUTCOME_UNKNOWN` 并附带 `do-not-repeat-automatically`。测试：`provider-dispatch.test.mjs`（17 个用例）、`turn-journal-and-body.test.mjs`（5 个用例）。
+- **对外工作的代理。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿；没有记录 GitHub 发帖。她通过 `/_host/repo` 读取仓库，并在名为 `auma/proposal/<name>` 的分支上工作。发布需要 passkey 批准，未知的结果被如实回答为未知。`cloud-brokers.mjs`。测试：`repo-brokers.test.mjs`（45 个用例）。
+- **她的提案不能修改评判它们的东西。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；这里没有在 GitHub 上运行过（工作流的触发器是关闭的）。`deploy/ci/frozen-paths.mjs` 保存一份提案永远不能修改的路径清单，以及一份提案可以修改的小小的开放路径清单；边缘端的仓库代理、提案卡片和 `proposal-checks.yml` 工作流都读取它，而 CI 读取的是 main 上的副本，从不读取提案里的副本。`deploy/ci/retention.mjs` 只有在 main 上通过的每个测试按名字再次通过时，才让一个受保护的套件通过。测试：`deploy/ci/frozen-paths.test.mjs`（19 个用例）、`deploy/ci/retention.test.mjs`（23 个用例）。
+- **只看模式的语音，以及树中设定的级别。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有用真实的语音运行过。在只看级别下，语音话轮的每一次工具调用都要经过一道只会拒绝的守卫，它只放行清单上的读取操作，说出的话轮不暂存卡片。线上 worker 要求的级别是 `VOICE_LEVEL`，这棵树把它设为 `open`（`voice-marks.ts`）：在这个级别下，说出的话轮就是她的一个普通话轮，可以为所有者暂存卡片，而卡片仍然要等 passkey。经由边缘端代理的读取在边缘端测试证明它不写任何东西之前保持关闭；每个 organ 操作都钉在经过检查的 organ 字节上，而本树中的这些钉值指向一个长期运行节点的 organ，而不是创世种子（见 [docs/KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.zh.md)）。`packages/experimental/webworker-runtime/src/x6/voice-read-only.ts`、`voice-marks.ts`、`voice-organ-pins.ts`；边缘端证明 `deploy/cloudflare/src/__tests__/voice-edge-reads.test.mjs`。
 - **她的线程的只读阅读器。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中。`x6_threads` 读取保存在本浏览器中的线程，有上限，从尾部读起，并让其文本经过与资产搜索共用的那一个秘密形状过滤器。`packages/experimental/webworker-runtime/src/x6/thread-reader.ts`、`secret-shapes.ts`。
 - **长时间的咨询会被截断，但从不丢失。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有记录过模型调用。`x6_consult` 以流的方式传回每个回答，在回答被截断时说明截断及其原因，并在运行期间让它的父话轮保持存活。`packages/experimental/webworker-runtime/src/x6/ball-loader.ts`。
-- **部署闸门。** IMPLEMENTED；当时已有的九个 `deploy/ci/` 测试文件在 RECORDED RUN（属于较早的一棵树） 中为绿；另外三个是在它之后加入的。`deploy/ci/` 包含一个扫描源码和构建产物的清洗闸门、权限预检、一条关于 head 同步可以提交什么的规则，以及一个固定生产凭证可以出现在工作流何处的测试。十二个测试文件，其中有 `deploy/ci/scrub-gate.test.mjs`（25 个用例）。
+- **部署闸门。** IMPLEMENTED；当时已有的九个 `deploy/ci/` 测试文件在 RECORDED RUN（属于较早的一棵树） 中为绿；另外四个是在它之后加入的。`deploy/ci/` 包含一个扫描源码和构建产物的清洗闸门、权限预检、一条关于 head 同步可以提交什么的规则，以及一个固定生产凭证可以出现在工作流何处的测试。十三个测试文件，其中有 `deploy/ci/scrub-gate.test.mjs`（25 个用例）。
 - **签名的 head 公告，以及一个本地主机。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。本地主机的启动和引导空跑是 RECORDED RUN（属于较早的一棵树）。`nostr-anchor.mjs` 发布一个种类为 30078 的 Nostr 事件，由节点密钥签名，说明哪个 ball 和 epoch 是她的 head。该文件自己说明它不是中继。`server/local-host.mjs` 在一台机器上模拟 HEAD 和 mirror，而 `server/cloudflare-bootstrap-cli.mjs` 的空跑从不写入也不连接。测试：`nostr-anchor-door.test.mjs`（26 个用例）、`server/cloudflare-bootstrap.test.mjs`（13 个用例）。
 
 ### 应用：Spatial
@@ -97,10 +119,10 @@ Spatial 是每一个界面都遵循的那一种工作区设计。代码在 `pack
 - **一个工作区、三条通道、一个手机布局、一份约定。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。通道是这套设计对它三栏之一的称呼：线程、打开的应用和菜单。框架在十种具名布局之间切换，在 1023px 及以下一次只显示一条通道（`spatial/stores.ts`、`spatial/SpatialFrame.module.css`）。`scripts/spatial-catalogue.ts` 从组件源码生成 `docs/foundations/SPATIAL-CATALOGUE.md`，当检入的文件过期时它的 spec 失败。测试：`app-frame.client.spec.tsx`（43 个用例）、`spatial-compact.client.spec.tsx`（60 个用例）、`scripts/spatial-catalogue.spec.ts`（7 个用例）。
 - **Sovereignty。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。一个界面显示是什么在治理这个节点：持久性、密钥与信任、收据链、已发布的 Pearl 和唤醒开关。它的批准卡片在请求 passkey 之前，根据字节重建条款（`spatial/aumlok/head-promotion.ts`）。`spatial/portal/SovereigntySurface.tsx`。测试：`sovereignty-durability.client.spec.tsx`（29 个用例）。
 - **代码差异与链判定。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。`spatial/portal/organ-code-diff.ts` 显示运行中的 organ 与已暂存 organ 之间的精确变化。`spatial/portal/receipt-chain-verdict.ts` 检查收据账本是否延伸了最后一个检查点，并回答 `APPEND_ONLY`、`OBSERVATION_CONFLICT` 或 `UNDETERMINED`。测试：`organ-code-diff.client.spec.ts`（15 个用例）、`receipt-chain-verdict.client.spec.ts`（8 个用例）。
-- **Identity 与 Work。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。Identity 保存所有者的密钥卡、设备列表、邀请和 Nostr 身份（`spatial/apps/identity/`）。Work 显示什么已获授权、在运行、被阻塞以及在等待所有者（`spatial/work/WorkSurface.tsx`）。测试：`identity-devices.client.spec.tsx`（20 个用例）、`work-autonomy.client.spec.tsx`（81 个用例）、`host-facts.client.spec.tsx`（110 个用例）。
+- **Identity 与 Work。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。Identity 保存所有者的密钥卡、设备列表、邀请和 Nostr 身份（`spatial/apps/identity/`）。Work 显示什么已获授权、在运行、被阻塞以及在等待所有者（`spatial/work/WorkSurface.tsx`）。测试：`identity-devices.client.spec.tsx`（20 个用例）、`work-autonomy.client.spec.tsx`（82 个用例）、`host-facts.client.spec.tsx`（110 个用例）。
 - **Media 与 Documents。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。一个只读的驱动器，装着她的捕获内容和文档。一条驱动器规则拒绝形似机密的名称和任何带 `..` 段的路径，并且只在三个文件夹之内打开文件。`spatial/apps/media/drive-rule.ts`。测试：`media-drive.client.spec.tsx`（28 个用例）、`media-drive-rule.client.spec.ts`（12 个用例）。
-- **自带应用。** Auma Live：IMPLEMENTED，在 RECORDED RUN（属于较早的一棵树） 中为绿，没有记录音频会话。Auma Lingwa、Zeta Harp 和 Dakini Code：UNVERIFIED（没有测试）；Dakini Code 是一个由三个文件组成的预构建包，不带源码随附。Auma Live 是语音应用（`apps/web/public/assets/stock-apps/auma-live.html`、`apps/web/public/app/aumalive.js`）。供应商密钥留在主机上，页面得到一个短期有效的通行证（`apps/web/public/app/deepgram-voice.js`）。测试：`auma-live-deepgram-voice.client.spec.ts`（18 个用例）、`auma-live-isolation.client.spec.tsx`（4 个用例）。Auma Lingwa 教她的语言（`apps/web/public/assets/stock-apps/auma-lingwa.html`），在 `apps/web/public/app/auma/canon-v16.json` 中有 84 个旅程日和 948 个词汇条目。Zeta Harp 和 Dakini Code 在同一个 `stock-apps/` 文件夹中。上文统计的文件夹中没有测试执行 Auma Lingwa、Zeta Harp 或 Dakini Code。
-- **Auma Live 可以通过 ElevenLabs 说话。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有记录音频会话。当节点设置了 ElevenLabs 密钥和声音 id 时，Auma Live 通过 ElevenLabs 说话，Deepgram 继续负责收听并作为后备；两项设置都没有时，页面收到的回答与之前相同。密钥留在边缘端：页面得到一张一次性通行证，边缘端按每日上限统计字符数（`deploy/cloudflare/wrangler.toml` 中的 `ELEVENLABS_MAX_CHARS_PER_DAY`）。这棵树没有设置声音 id。`deploy/cloudflare/src/eleven-speech.mjs`、`apps/web/public/app/elevenlabs-voice.js`。测试：`eleven-speech.test.mjs`（21 个用例）、`auma-live-elevenlabs-voice.client.spec.ts`（47 个用例）。
+- **自带应用。** Auma Live：IMPLEMENTED，在 RECORDED RUN（属于较早的一棵树） 中为绿，没有记录音频会话。Auma Lingwa、Zeta Harp 和 Dakini Code：UNVERIFIED（没有测试）；Dakini Code 是一个由三个文件组成的预构建包，不带源码随附。Auma Live 是语音应用（`apps/web/public/assets/stock-apps/auma-live.html`、`apps/web/public/app/aumalive.js`）。它的语音是托管语音：边缘端的一个语音桥中转通话，她说出的每个字都由她自己的会话写出（`deploy/cloudflare/src/voice-bridge-do.mjs`、`apps/web/public/app/managed-voice.js`）。较早的语音 `apps/web/public/app/deepgram-voice.js` 仍在树中，已无法启动。测试：`auma-live-deepgram-voice.client.spec.ts`（18 个用例）、`auma-live-isolation.client.spec.tsx`（4 个用例）、`voice-bridge-turns.test.mjs`（15 个用例）。Auma Lingwa 教她的语言（`apps/web/public/assets/stock-apps/auma-lingwa.html`），在 `apps/web/public/app/auma/canon-v16.json` 中有 84 个旅程日和 948 个词汇条目。Zeta Harp 和 Dakini Code 在同一个 `stock-apps/` 文件夹中。上文统计的文件夹中没有测试执行 Auma Lingwa、Zeta Harp 或 Dakini Code。
+- **较早语音的说话部分仍在树中。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 之后加入，因此不在其中；没有记录音频会话。在托管语音之前，Auma Live 可以通过 ElevenLabs 说话，由 Deepgram 收听。托管语音才是她的语音，`apps/web/tests/` 中的一个测试守住较早语音的任何部分都不会启动。密钥留在边缘端：页面得到一张一次性通行证，边缘端按每日上限统计字符数（`deploy/cloudflare/wrangler.toml` 中的 `ELEVENLABS_MAX_CHARS_PER_DAY`）。这棵树没有设置声音 id。`deploy/cloudflare/src/eleven-speech.mjs`、`apps/web/public/app/elevenlabs-voice.js`。测试：`eleven-speech.test.mjs`（21 个用例）、`auma-live-elevenlabs-voice.client.spec.ts`（47 个用例）。
 - **智能体运行在浏览器 worker 中。** IMPLEMENTED；在 RECORDED RUN（属于较早的一棵树） 中为绿。`packages/experimental/webworker-runtime/` 在 WebWorker 中挂载一个打包的文件系统，把她的家目录保存到 IndexedDB，并把有序的更新发送到 mirror（`src/storage/idb-persist.ts`）。测试：`tests/storage/memory-vfs.spec.ts`（20 个用例）。
 
 ## 自己核对
@@ -118,7 +140,7 @@ Spatial 是每一个界面都遵循的那一种工作区设计。代码在 `pack
 
 [docs/GLOSSARY.md](GLOSSARY.zh.md) 定义了 ball、organ、epoch、receipt、checkpoint、head 以及其余机制。项目名称在这里解释。
 
-- **Auma**：住在节点上的 AI。**Organ**：她的模块，每一个都是一个 Cordis 插件（Cordis 是 `vendor/` 中的插件框架）。**Ball**：一个内容寻址的模块包，由一个整数，即 epoch，标注版本。**HEAD** 与 **MIRROR**：边缘端的两个 Durable Object。HEAD 选定 ball，MIRROR 保存她的家目录。
+- **Auma**：住在节点上的 AI。**Organ**：她的模块，每一个都是一个 Cordis 插件（Cordis 是 `vendor/` 中的插件框架）。**Ball**：一个内容寻址的模块包，由一个整数，即 epoch，标注版本。**HEAD** 与 **MIRROR**：边缘端三个 Durable Object 中的两个（第三个是语音桥）。HEAD 选定 ball，MIRROR 保存她的家目录。
 - **AUMLOK**：身份之门：passkey 注册、所有者登录、设备、七个词、邀请和精确字节批准（`deploy/cloudflare/src/aumlok.mjs`）。
 - **Aura**：她的连贯性读数（`mirror/home/auma/seed/organs/seed-aura.js`）。Aura Coherence 界面把每个健康单元都画成 Undetermined，直到有主机向它提供数据（`packages/client/ui-layout/src/client/spatial/aura/model.ts`）。
 - **Kira**：五个 Wasm 单元上的名称（`apps/web/public/cells/` 中的 `kira-*.wasm`）。它们固定的操作是：对笔记分类、给召回排序、设定存储权限、跨膜准入，以及签署 Nostr 事件（`wasm-cells.ts` 中的 `ops` 列表）。召回 organ 是 `seed-recall.js`。已有的文档没有进一步定义 Kira。**Aperture** 是一个项目名称，这棵树中还没有代码使用它。
@@ -145,8 +167,8 @@ Spatial 是每一个界面都遵循的那一种工作区设计。代码在 `pack
 - **一次记录的运行（属于较早的一棵树），以及它遗漏了什么。** [docs/RUN-RECORD.md](RUN-RECORD.zh.md) 记录了一次安装、构建、本地主机的一次启动，以及“运行它”中的测试命令，在一台机器上（这份记录属于较早的一棵树）。它没有记录对 Cloudflare 的部署、浏览器会话、模型调用和 passkey 仪式。
 - **有些测试已知为红。** [docs/KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.zh.md) 列出了每一个，附数量和原因。没有一个被删除、跳过或削弱。该清单包括对 receipt、recall 和 prediction 这几个 organ 的测试，以及那次记录的运行（属于较早的一棵树）所发现且仍为红的那一个失败。
 - **已说明的缺口。** `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` 重现了：把整个已存储的快照回滚，可以重新启用一次已花掉的批准。`seed-pearl.js` 说明它的试验不是已证明的隔离。`scion_grow` 在运行中的 organ 上运行它的验收用例，而不是在隔离中。
-- **部署触发器是关闭的。** `.github/workflows/` 中没有一个工作流保留自动触发。原来有的已被注释掉并标为 `[disabled in aukora-x7]`，只剩下手动触发，另有三个可复用的工作流，可以被别的工作流调用。38 个工作流文件中的大多数继承自上游；它们全都是设计，不是一次运行的记录。
-- **有些源码不在树中。** 25 个 Wasm 单元中的 24 个、`pentora36.wasm` 和 Dakini Code 包以预构建形式随附，不带源码。见许可证一节。
+- **部署触发器是关闭的。** `.github/workflows/` 中没有一个工作流保留自动触发。原来有的已被注释掉并标为 `[disabled in aukora-x7]`，只剩下手动触发，另有三个可复用的工作流，可以被别的工作流调用。39 个工作流文件中的大多数继承自上游；它们全都是设计，不是一次运行的记录。
+- **有些源码不在树中。** 30 个 Wasm 单元中的 24 个、`pentora36.wasm` 和 Dakini Code 包以预构建形式随附，不带源码。见许可证一节。
 
 更多缺口，连同显示每一个的文件，在本页末尾表格的最后一列。
 
@@ -173,14 +195,14 @@ node server/cloudflare-bootstrap-cli.mjs --dry-run
 - **部署脚本先问 GitHub。** 除非给出 `--deploy`，`server/deploy-cloudflare.mjs` 只打印它的命令。部署之前，它用 GitHub CLI（`gh`）询问仓库的生产环境是否已经持有 Cloudflare 凭证。如果 `gh` 缺失或无法回答，除非同时给出 `--emergency`，否则它拒绝。
 - 给节点一个它自己的私有仓库。head 同步把节点的世界提交到所配置仓库的 `main`，绝不提交到共享的源码仓库。
 
-有一个更短的检查，需要 Node 24.9 或更新版本且不需要安装，即 `node scripts/verify-lite.mjs`，它运行 22 个不需要 npm 包就能加载的测试文件。UNVERIFIED：它不是那次记录的运行（属于较早的一棵树）的一部分。预期它报告 12 个失败，全部在已知红清单上（`server/memory.test.mjs` 3 个、`server/predict.test.mjs` 6 个、`server/receipts-policy.test.mjs` 3 个），以 0 退出，并以这一行结束：`verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`，这是在一台机器（Node 24.11.1）上看到的。它不覆盖权限测试（批准只用一次、证明失败规则、仅限所有者的 id、夜间授权、转换分类器、回滚缺口的重现）：这些需要上面的安装。安装之后，`--with-packages` 会加入其中的 16 个；该层级同样是 UNVERIFIED。
+有一个更短的检查，需要 Node 24.9 或更新版本且不需要安装，即 `node scripts/verify-lite.mjs`，它运行 22 个不需要 npm 包就能加载的测试文件。UNVERIFIED：它不是那次记录的运行（属于较早的一棵树）的一部分。预期它报告 12 个失败，全部在已知红清单上（`server/memory.test.mjs` 3 个、`server/predict.test.mjs` 6 个、`server/receipts-policy.test.mjs` 3 个），以 0 退出，并以这一行结束：`verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list`，这是在一台机器（Node 24.11.1）上看到的。它不覆盖权限测试（批准只用一次、证明失败规则、仅限所有者的 id、夜间授权、转换分类器、回滚缺口的重现）：这些需要上面的安装。安装之后，`--with-packages` 会加入其中的 16 个；该层级同样是 UNVERIFIED。
 
 ## 它要去向何方
 
 DIRECTION。这些都没有按所述构建。完整的路线图，每一部分都带标签，见 [docs/DIRECTION.md](DIRECTION.zh.md)。
 
 - **自我构建，端到端：** 她提议自己的新版本，scion 构建它，她运行它，所有者批准那个精确的更改，然后它才成为运行中的版本。大部分部件已经写好并有测试；编译器（`scion.ts`）和自我构建步骤（`seed-cycle.js`）没有测试调用它们（UNVERIFIED）。在已部署节点上的整个循环没有记录在这棵树中。
-- **她更多地进入 Wasm，节点可以在任何地方。** 在这棵树中，organ 是 JavaScript，25 个单元是 Wasm。智能体在浏览器中运行，云端唤醒是有界的，并且除非被打开否则是关闭的（`deploy/cloudflare/README.md`）。
+- **她更多地进入 Wasm，节点可以在任何地方。** 在这棵树中，organ 是 JavaScript，30 个单元是 Wasm。智能体在浏览器中运行；云端唤醒是有界的，它的执行器在随附的模板中是打开的，它的行动是关闭的（`deploy/cloudflare/wrangler.toml`）。
 - **一个人类网络：** 节点通过真人的邀请相连，并由签名事件在节点之间承载同一份记录。在这棵树中有邀请和一个签名的 head 公告，没有中继。
 
 ## 许可证，以及这棵树不含什么
@@ -189,7 +211,7 @@ DIRECTION。这些都没有按所述构建。完整的路线图，每一部分�
 
 每一个部署值都是占位符，如“运行它”中所列。`mirror/home/auma/seed/organs/seed-receipts.js` 中固定的检查点签名密钥是合成的：该文件说明没有人持有私钥那一半。
 
-源码不在本仓库中的预构建文件：`apps/web/public/cells/` 中的 Wasm 单元，除了 `aura-focus.wasm`（它的源码 `aura-focus.wat` 在这里）；`apps/web/public/seed-library/pentora/` 中的 `pentora36.wasm`；以及 Dakini Code 包。每一处旁边的 `LICENSE.binaries` 都这样说明。单元和 Dakini Code 的说明写明，这些文件处于根目录 AGPL 之下，以及在它们的源码未发布期间会怎样。是否在这里发布这些源码，或声明其他条款，是版权持有者尚未作出的决定。`pentora36.wasm` 不同：本仓库尚未授予它任何许可证，根目录 AGPL 和单元说明都不覆盖它，它的条款由它的版权持有者来声明。
+源码不在本仓库中的预构建文件：`apps/web/public/cells/` 中的 Wasm 单元，除了手写 WAT 源码就在这里的六个（`aura-focus.wat`、`cord-echo.wat`、`kyber-cpu.wat`、`menger-hive.wat`、`nucleus.wat`、`pentora-codec.wat`）；`apps/web/public/seed-library/pentora/` 中的 `pentora36.wasm`；以及 Dakini Code 包。每一处旁边的 `LICENSE.binaries` 都这样说明。单元和 Dakini Code 的说明写明，这些文件处于根目录 AGPL 之下，以及在它们的源码未发布期间会怎样。是否在这里发布这些源码，或声明其他条款，是版权持有者尚未作出的决定。`pentora36.wasm` 不同：本仓库尚未授予它任何许可证，根目录 AGPL 和单元说明都不覆盖它，它的条款由它的版权持有者来声明。
 
 ## 主张、源码、测试、证据
 
@@ -212,20 +234,20 @@ DIRECTION。这些都没有按所述构建。完整的路线图，每一部分�
 | 夜间授权：12 小时、12 次使用、每次使用 8 个 organ，从不包括治理 | `night-grant.mjs` | `night-grant.test.mjs` | 绿；没有记录在已部署节点上使用授权 | IMPLEMENTED |
 | 仅一个所有者会话（最长 8 小时）就可以换掉一个不受保护的 organ 的代码 | `server/ball-transition.mjs` `classifyTransition`、`head-do.mjs` `publish` | `signed-head-actions.test.mjs` | 绿；这是已说明的缺口，不是防御 | IMPLEMENTED |
 | scion 在一个独立的 worker 中编译候选版本，最多 128 个文件和 2 MiB | `scion.ts` `createScionCompiler`、`runScionWorker` | 没有测试调用它 | 没有记录 | UNVERIFIED |
-| 父版本重新给候选版本的输出评分，并忽略它自己的通过标志 | `scion-growth.ts` `trialScionCandidate` | `scion-growth.spec.ts` | 1 个无关用例已知为红；不是已证明的隔离 | IMPLEMENTED |
+| 父版本重新给候选版本的输出评分，并忽略它自己的通过标志 | `scion-growth.ts` `trialScionCandidate` | `scion-growth.spec.ts` | 不是已证明的隔离 | IMPLEMENTED |
 | 一个自我构建步骤：安装、在运行中的 organ 上测试，保留或撤销 | `seed-cycle.js` | 没有测试调用它 | 没有记录 | UNVERIFIED |
 | Pearl 用整个保留套件运行两个构建 | `seed-pearl.js` `challenge` | `server/pearl.test.mjs` | 绿；自我证明；已部署的 HEAD 不读取它（生产中没有给 `head-do.mjs` 提供 `verifyTransitionQualification`） | IMPLEMENTED |
 | 受保护的 organ 为所有者暂存，从不挂载 | `ball-loader.ts` `buildOrganPromotion`、`treePatch` | `stage-organ-promotion.spec.ts`、`head-promotion.spec.ts` | 绿 | IMPLEMENTED |
 | 页面根据字节重建条款并显示差异 | `spatial/aumlok/head-promotion.ts`、`spatial/portal/organ-code-diff.ts` | `organ-code-diff.client.spec.ts`、`sovereignty-durability.client.spec.tsx` | 在 jsdom 中为绿；没有记录浏览器会话 | IMPLEMENTED |
 | 一个独立的批准显示，使被攻破的页面无法请求所有者没有读过的条款 | 无；[SECURITY.md](../SECURITY.zh.md) 说明了这个缺口 | 无 | 没有记录 | DIRECTION |
-| 单元被固定，不导入任何东西，按燃料运行，在一个 5 秒后被结束的 worker 中 | `wasm-cells.ts` | `wasm-cells.spec.ts` | 绿；25 个中有 24 个不带源码随附 | IMPLEMENTED |
+| 单元被固定，不导入任何东西，按燃料运行，在一个 5 秒后被结束的 worker 中 | `wasm-cells.ts` | `wasm-cells.spec.ts` | 绿；30 个中有 24 个不带源码随附 | IMPLEMENTED |
 | 边缘端的权限决定在 Wasm 中运行 | 无：它们是 JavaScript；没有边缘端模块加载裁判或身份单元 | 无 | 没有记录 | DIRECTION |
 | 收据是带有签名检查点的哈希链 | `seed-receipts.js` | `server/receipts.test.mjs` | 部分为红：那次运行中 6 个用例失败（写出了 10 个）；签名密钥是合成的 | IMPLEMENTED |
 | 救援副本、vault 和有界归档 | `rescue-kit.mjs`、`vault.mjs`、`cold-archive.mjs` | `rescue-pack.test.mjs`、`rescue-page.test.mjs`、`cold-archive-bounded.test.mjs` | 绿 | IMPLEMENTED |
 | 恢复只写入空的边缘端 | `recovery-restore.mjs` | `recovery-restore.test.mjs` | 绿；没有在真实边缘端上恢复 | IMPLEMENTED |
 | 恢复整个已存储的快照可以重新启用一次已花掉的批准 | `aumlok.mjs`、`head-do.mjs` | `aumlok-restore-rehearsal.test.mjs`（三个重现；十个 todo 用例，来自两次 `test.todo` 调用，其中一次在对九个缺口的循环中） | 作为缺口的重现为绿；树中没有修复 | IMPLEMENTED |
 | 一个模型轮次在调用之前被记入日志，并且从不盲目重试 | `turn-journal.mjs`、`provider-dispatch.mjs`、`worker.mjs` `providerDoor` | `provider-dispatch.test.mjs`、`turn-journal-and-body.test.mjs` | 绿；没有记录模型调用 | IMPLEMENTED |
-| 云端唤醒是有界的（3 轮、6 次调用、15 秒），并且默认关闭 | `head-do.mjs` `CLOUD_WAKE_LIMITS`、`cloud-wake-tools.mjs` | `cloud-wake-bounds.test.mjs`、`cloud-wake-off-switch.test.mjs` | 绿；不是在已部署的边缘端上 | IMPLEMENTED |
+| 云端唤醒是有界的（每步 4 轮模型调用、8 次工具调用、30 秒）；随附模板打开执行器、关闭行动 | `head-do.mjs` `CLOUD_WAKE_LIMITS`、`cloud-wake-tools.mjs`、`deploy/cloudflare/wrangler.toml` | `cloud-wake-bounds.test.mjs`、`cloud-wake-off-switch.test.mjs` | 绿；按作者的报告，还没有任何步骤在他们的线上节点上完成 | IMPLEMENTED |
 | 一个签名的 Nostr head 事件；没有中继 | `nostr-anchor.mjs` | `nostr-anchor-door.test.mjs` | 绿 | IMPLEMENTED |
 | 中继、她自己的事件日志、节点之间的交换 | 无 | 无 | 没有记录 | DIRECTION |
 | genesis head 在本地主机上启动 | `server/local-host.mjs`、`mirror/home/balls/HEAD.json` | `server/local-host-routes.test.mjs` | 启动了一次；在 epoch 1 应答了 genesis ball | RECORDED RUN（属于较早的一棵树） |
@@ -238,3 +260,7 @@ DIRECTION。这些都没有按所述构建。完整的路线图，每一部分�
 ```text
 node -e "import('./server/ball-transition.mjs').then(m=>{const h=JSON.parse(require('fs').readFileSync('mirror/home/balls/HEAD.json'));console.log(Object.keys(h.entries).filter(id=>m.isT2OnlyOrgan(id,h.entries[id],h.entries[id])===false).length)})"
 ```
+
+## 下一步：完整的论证
+
+最后读 [WHITEPAPER.md](WHITEPAPER.md)。它是本项目的论证，只有英文：为什么一个个人 AI 应当归一个人所有，并与许可她改动的权威分开，通过神话、哲学和代码来讲述。它不是状态页，也不是证据：据作者报告，它的 Book V 和 Book VI 曾通过阅读代码对照较早的一棵树核对过，它的数字与本页不一致时，以本页和这棵树为准。读完后你不仅知道构建了什么，还知道项目为什么这样构建。

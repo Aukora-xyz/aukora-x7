@@ -260,14 +260,14 @@ test('x6_host_facts: GET /_head/promotion-status, /_host/aumlok/status and /__x6
   await staleTurnUntouched(fx)
 })
 
-// ── Rows 1-2, the one accepted write. When the staged record names a Pearl that
-// landed and HEAD has since moved past it, and an older build left that record unmarked, GET /_head/promotion-status marks
-// it once (head-do.mjs readStaged :1110-1118: `publishedEpoch`, idempotent bookkeeping the page's own reads already cause).
-// Exactly that one put, of exactly that key, adding exactly `publishedEpoch`; a second read writes nothing.
-test('promotion-status on an unmarked published ancestor: exactly one put of head:staged-promotion adding publishedEpoch, then none', async t => {
+// ── Rows 1-2: no accepted write is left (the earlier ruling allowed exactly one). When the staged record names a Pearl
+// that landed and HEAD has since moved past it, and an older build left that record unmarked, GET /_head/promotion-status
+// recognises it from HEAD's own chain and answers `published` WITHOUT writing; the mark is persisted only by the next
+// successful publication, in that publication's own transaction (head-do.mjs readStaged and publish).
+test('promotion-status on an unmarked published ancestor: answers published and writes nothing, read after read', async t => {
   const fx = await stack(t)
-  // Setup (unwatched), through HEAD's own routes as head-staged-settled.test.mjs does: land the staged Pearl, take its mark
-  // away to stand for the record an older build left, then publish one more Pearl directly so the record is an ancestor.
+  // Setup (unwatched), through HEAD's own routes as head-staged-settled.test.mjs does: land the staged Pearl, then publish
+  // one more Pearl directly so the record is an ancestor.
   fx.head.aumlokStore = { consumeApprovalInTransaction: async () => ({ ok: true, expiresAt: Date.now() + 60000 }) }
   const internal = async (path, body, extra = {}) => {
     const response = await fx.head.fetch(new Request(ORIGIN + path, { method: 'POST',
@@ -278,8 +278,6 @@ test('promotion-status on an unmarked published ancestor: exactly one put of hea
   }
   const promoted = await internal('/_head/promote', { ballId: fx.candidate.ball.ballId }, { 'x-x6-class3-approval': 'approved' })
   assert.equal(promoted.status, 200, JSON.stringify(promoted.body))
-  const { publishedEpoch: _mark, ...unmarked } = await fx.hs.storage.get('head:staged-promotion')
-  await fx.hs.storage.put('head:staged-promotion', unmarked)
   const parent = fx.candidate.ball, code = 'export const bodyMap = "made-up next";\n', sha = await digest(code)
   const next = { ...parent, epoch: parent.epoch + 1, parentBallId: parent.ballId, createdAt: '2026-11-13T00:02:00.000Z',
     entries: { ...parent.entries, 'auma-body-map': { ...parent.entries['auma-body-map'], specifier: `ball:${sha}` } },
@@ -290,19 +288,17 @@ test('promotion-status on an unmarked published ancestor: exactly one put of hea
   const published = await internal('/_head/ball', { ...following, writerLease: lease }, { 'x-x6-class3-approval': 'approved' })
   assert.equal(published.status, 200, JSON.stringify(published.body))
   await fx.head.store.lease({ action: 'release', ownerPeerId: lease.ownerPeerId, generation: lease.generation })
+  // The record an older build left: unmarked, and surviving until this read, after every publication (a publication
+  // persists the mark in its own transaction; a read never does).
+  const { publishedEpoch: _mark, ...unmarked } = await fx.hs.storage.get('head:staged-promotion')
+  await fx.hs.storage.put('head:staged-promotion', unmarked)
   assert.equal((await fx.hs.storage.get('head:staged-promotion')).publishedEpoch, undefined, 'the record is unmarked before the read')
   // The read her voice makes (x6_host_facts, x6_repo promotion_status), through the Worker.
   const first = await fx.watch(() => fx.send('GET', '/_head/promotion-status'))
   assert.equal(first.answer.status, 200, JSON.stringify(first.answer.body))
   assert.deepEqual([first.answer.body.supersededStaged.ballId, first.answer.body.supersededStaged.state], [fx.candidate.ball.ballId, 'published'])
-  assert.deepEqual(first.writes, [{ object: 'HEAD', op: 'put', key: 'head:staged-promotion' }], 'exactly one put, of exactly that key')
-  const { 'head:staged-promotion': markedAfter, ...restAfter } = Object.fromEntries(first.after.head)
-  const { 'head:staged-promotion': markedBefore, ...restBefore } = Object.fromEntries(first.before.head)
-  assert.deepEqual(markedAfter, { ...markedBefore, publishedEpoch: fx.candidate.ball.epoch }, 'it adds exactly publishedEpoch')
-  assert.deepEqual(restAfter, restBefore, 'no other HEAD key changes')
-  assert.deepEqual(first.after.mirror, first.before.mirror, 'Mirror unchanged')
-  assert.deepEqual(first.calls, [], 'no outward call')
-  assert.deepEqual(first.ambient, [], 'no ambient fetch')
+  provenRead(fx, first, [], 'promotion-status on an unmarked published ancestor')
+  assert.equal((await fx.hs.storage.get('head:staged-promotion')).publishedEpoch, undefined, 'the read leaves the record unmarked')
   const second = await fx.watch(() => fx.send('GET', '/_head/promotion-status'))
   provenRead(fx, second, [], 'promotion-status, second read')
   assert.deepEqual(second.answer.body.supersededStaged, first.answer.body.supersededStaged)

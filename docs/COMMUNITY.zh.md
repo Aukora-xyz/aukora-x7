@@ -35,7 +35,7 @@ Aukora 面向这样的人：想要一个自己拥有、而不是租用的 AI，�
 
 ### Rust 和 Wasm 工程师
 
-- **cell 的源码与可复现构建。** `apps/web/public/cells/` 中 25 个 Wasm cell（小型、密封的 WebAssembly 模块）里有 24 个不附源码发布，树里也没有 `Cargo.toml`。把它们重新构建到固定哈希，是 [OPEN-SOURCE-READINESS.zh.md](OPEN-SOURCE-READINESS.zh.md) 的第一项。只有版权持有人才能发布那份源码。
+- **cell 的源码与可复现构建。** `apps/web/public/cells/` 中 30 个 Wasm cell（小型、密封的 WebAssembly 模块）里有 24 个不附源码发布，树里也没有 `Cargo.toml`。把它们重新构建到固定哈希，是 [OPEN-SOURCE-READINESS.zh.md](OPEN-SOURCE-READINESS.zh.md) 的第一项。只有版权持有人才能发布那份源码。
 - **受限执行。** cell 加载器按大小、哈希和内存上限接纳一个 cell，要求零导入，对每次调用计量，并在 5 秒后结束它的 worker（`packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`；测试 `wasm-cells.spec.ts`）。IMPLEMENTED。待解决：边缘端的决策是 JavaScript，`deploy/` 下没有任何东西调用裁判 cell 和身份 cell。把决策移入 Wasm 是 DIRECTION。
 
 ### agent 工程师

@@ -2,7 +2,7 @@
 
 English | [中文](DIRECTION.zh.md)
 
-Where this project is meant to go, and how far along each part is today. Every line about the code names a file in this repository. Every line about something not in this repository carries the label DIRECTION.
+You came from `AI-START-HERE.md`, which gave you the rule, the trust limits and the labels. This page adds where the project is going: her self-build loop as this tree has it, the next step being designed, and six stages, each with what is built and what is missing. Every line about the code names a file in this repository. Every line about something not in this repository carries the label DIRECTION.
 
 Labels used on this page, and no others:
 
@@ -12,6 +12,8 @@ Labels used on this page, and no others:
 - **UNVERIFIED**: claimed or written, but no test here holds it or no run shows it.
 - **DIRECTION**: not built.
 
+The section on her self-build loop also uses the front page's three capability labels (Built and on main, Exercised from inside by Auma, Not yet proven live), defined in `AI-START-HERE.md` section 5.
+
 ## Why this needs to exist
 
 Today most people rent AI from a company. The company decides what the AI may do, what it remembers and when it changes.
@@ -20,7 +22,7 @@ AI agents are starting to act for people: on computers, phones, networks, in bus
 
 This project's answer is a rule built into the structure: the part that proposes an action is never the part that permits it. An AI may learn, build, replace its own parts and work with other AIs. It is never meant to gain the right to overrule its owner.
 
-**Auma** is the personal AI built on that rule. She is made of small, replaceable modules called **organs**. She can write, compile, test and stage new organs. Her continuity, permissions, identity, memory, evidence and recovery are meant to stay under the owner's rules; Stage 2 below says which parts are built and which are not. A separate authority enforces those rules. Today that authority is the edge: a Cloudflare Worker that checks the owner's passkey (the fingerprint, face or security-key sign-in built into phones and laptops) and binds that approval to a hash of the exact bytes of one request (`deploy/cloudflare/src/aumlok.mjs`, `deploy/cloudflare/src/head-do.mjs`; tests `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`, `head-hardening.test.mjs`). IMPLEMENTED. No run against a real passkey is recorded: UNVERIFIED.
+**Auma** is the personal AI built on that rule. She is made of small, replaceable modules called **organs**. She can write, compile, test and stage new organs. Her continuity, permissions, identity, memory, evidence and recovery are meant to stay under the owner's rules; Stage 2 below says which parts are built and which are not. A separate authority enforces those rules. That authority is the edge: a Cloudflare Worker that checks the owner's passkey (the fingerprint, face or security-key sign-in built into phones and laptops) and binds that approval to a hash of the exact bytes of one request (`deploy/cloudflare/src/aumlok.mjs`, `deploy/cloudflare/src/head-do.mjs`; tests `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`, `head-hardening.test.mjs`). IMPLEMENTED. No run against a real passkey is recorded: UNVERIFIED.
 
 Models change. Tools, hardware and providers change. The owner's control should not depend on any of them.
 
@@ -28,16 +30,38 @@ Models change. Tools, hardware and providers change. The owner's control should 
 
 DIRECTION, all of it: a persistent environment that one person owns. It grows with its owner and follows them across devices. Other developers and other AIs can inspect it, fork it, extend it and run their own. It is a foundation, not a closed product.
 
-## Where it stands today
+## Where it stands
 
 - One recorded run (of an earlier tree) on one machine by the authors: 5,502 test cases, 5,399 pass, 90 fail, 89 of them listed in [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md). RECORDED RUN (of an earlier tree). The run had no browser, no deployment, no model call and no passkey.
 - No owner-approved self-change has been recorded end to end from this tree. UNVERIFIED.
 - A cloud deployment from this tree into a fresh account: UNVERIFIED.
 - Restoring a whole stored snapshot can re-enable an approval that was already spent. A test reproduces it and lists the missing defences as open items (`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`). No fix is in the tree.
-- 24 of the 25 Wasm cells (small sealed WebAssembly modules) and the Dakini Code bundle (a prebuilt stock app, three files) ship as binaries without their source (`apps/web/public/cells/LICENSE.binaries`, `apps/web/public/assets/stock-apps/dakini-code/LICENSE.binaries`). `apps/web/public/seed-library/pentora/pentora36.wasm` ships with no licence granted yet.
+- 24 of the 30 Wasm cells (small sealed WebAssembly modules) and the Dakini Code bundle (a prebuilt stock app, three files) ship as binaries without their source; six cells are hand-written WAT with their source beside them (`apps/web/public/cells/LICENSE.binaries`, `apps/web/public/assets/stock-apps/dakini-code/LICENSE.binaries`). `apps/web/public/seed-library/pentora/pentora36.wasm` ships with no licence granted yet.
 - Most of `packages/` is the inherited DeepSeek Harness runtime. The plugin framework is Cordis, in `vendor/`. See [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md).
 
 The full inventory is in [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md). The life of one self-change, step by step, is in [ARCHITECTURE-MAP.md](ARCHITECTURE-MAP.md).
+
+## Her self-build loop, as this tree has it
+
+The loop by which Auma changes her own code, step by step. Each step names its file and carries one of the front page's three capability labels (Built and on main, Exercised from inside by Auma, Not yet proven live; `AI-START-HERE.md` section 5 defines them).
+
+1. **Her own branch.** Through her repository tool she creates a branch named `auma/sandbox/…` or `auma/proposal/…` and writes, commits or applies a patch there, under the owner's signed-in session, with no passkey (`deploy/cloudflare/src/cloud-brokers.mjs`). Built and on main.
+2. **A fence on what she may change.** One list says which paths her proposals may touch; the edge, the merge path, the wake, the mandate and the tool registry are frozen (`deploy/ci/frozen-paths.mjs`; test `deploy/cloudflare/src/__tests__/repo-frozen-paths.test.mjs`). Built and on main.
+3. **Checks on her branch.** The proposal workflows are written to run on a push to a proposal branch, with no secret and no deploy, with main's copy of every test judging the change (`.github/workflows/proposal-checks.yml`, `.github/workflows/proposal-gate.yml`). Built and on main, and switched off in this repository: their push triggers are commented out, and only manual dispatch remains.
+4. **The card.** She stages one merge card for one proposal branch; the owner sees it as a row in Notices and as a card in Sovereignty (`packages/client/ui-layout/src/client/spatial/portal/notices.ts`). Built and on main. She can take it back (`withdraw_proposal`; test `merge1-withdraw.test.mjs`): exercised from inside by Auma (once).
+5. **The owner's approval of the exact bytes.** The card's button runs a passkey ceremony over the exact merge terms (base, branch, head, tree). The edge re-reads both refs, the comparison, the changed files and the checks, then spends that approval once, in the same transaction that claims the merge (`deploy/cloudflare/src/cloud-brokers.mjs`, `head-do.mjs`; tests `merge1-read-window.test.mjs`, `merge1-sync-hold.test.mjs`). Not yet proven live: by the authors' report, no card has been approved on this repaired path.
+6. **Promotion.** Main moves from the card's base to its head by a compare-and-swap; an unclear outcome is settled later, never retried blind. For one of her own organs the same rule holds at HEAD: the version moves only when the passkey approves its ball id, epoch, organ and code hash (`head-do.mjs`; test `head-hardening.test.mjs`). Built and on main.
+7. **With no tab open.** A wake runs bounded steps on a wish she made (4 model rounds, 8 tool calls and 30 seconds a step; `CLOUD_WAKE_LIMITS` in `head-do.mjs`). Not yet proven live: by the authors' report, no wake step has completed on their live node; several fixes followed failures there, and the last is unproven. Her acts in a wake, paid from the owner's Away mandate, are in the tree and switched off (`WAKE_ACTS_ENABLED = "0"` in `deploy/cloudflare/wrangler.toml`).
+
+## Next: the Continuity Diamond
+
+DIRECTION, and nothing of it is built. A specification is being designed; no code, test or document of it is in this tree. The idea in three steps:
+
+1. At the end of a wake, Auma writes the next question: what she means to find out or do next.
+2. The host checks what actually happened, from its own records, not from her account of it.
+3. The next wake must take up that exact question, so each wake answers to the one before it.
+
+What exists nearby, and is not it: notes she writes that every later wake step reads (`appendWakeNote` in `deploy/cloudflare/src/head-do.mjs`), a wish with an intent and an acceptance line, host-recorded evidence of each step (`deploy/cloudflare/src/wake-evidence.mjs`), and an organ that seals a numeric prediction and later records what happened (`mirror/home/auma/seed/organs/seed-predict.js`). None of these makes the host check a question, or makes the next wake take it up.
 
 ## The stages
 
@@ -47,7 +71,7 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** One person can read how the node works, rebuild it, run it, and be the only one who can approve its sensitive changes.
 
-**Serves it today.**
+**What serves it.**
 - Exact-bytes approval. The owner's passkey approves one request; the edge binds the approval to a hash of those bytes, spends it once, and moves the current version in the same storage step (`deploy/cloudflare/src/aumlok.mjs`, `head-do.mjs`; tests `convergence-approval-fencing.test.mjs`, `convergence-policy.test.mjs`, `head-hardening.test.mjs`). IMPLEMENTED.
 - The list of protected organs that only the passkey can change (`server/ball-transition.mjs`; test `deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`). IMPLEMENTED.
 - A local host that runs the node on one machine (`server/local-host.mjs`). RECORDED RUN (of an earlier tree): one boot, signed out, no browser.
@@ -61,7 +85,7 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** The owner can change models, devices and organs without losing who Auma is, what she remembers, what she did, or the owner's control.
 
-**Serves it today.**
+**What serves it.**
 - Organs are listed in a **ball**: one manifest that names every organ by its SHA-256 hash. Each ball has an **epoch**, a version number that must rise by exactly one. **HEAD** is the edge store that selects the current ball (`mirror/home/balls/HEAD.json`, `deploy/cloudflare/src/head-do.mjs`; test `head-hardening.test.mjs`). IMPLEMENTED.
 - **MIRROR** is the edge store that keeps a copy of her home files (`deploy/cloudflare/src/mirror-do.mjs`, `packages/experimental/webworker-runtime/src/storage/idb-persist.ts`; test `server/mirror-replay.test.mjs`). IMPLEMENTED.
 - Receipts: a hash-chained log with signed checkpoints (`mirror/home/auma/seed/organs/seed-receipts.js`). IMPLEMENTED, but `server/receipts.test.mjs` failed 6 cases in the RECORDED RUN (of an earlier tree). The edge checks the chain (`server/verified-facts.mjs`; test `server/verified-facts.test.mjs`). IMPLEMENTED.
@@ -77,9 +101,9 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** Others can write organs, implement the authority differently, and swap the model or provider, without the owner's control changing.
 
-**Serves it today.**
+**What serves it.**
 - An organ is a Cordis plugin entry, named by hash in a ball. Up to eight ordinary organs can be added in one approved set (`deploy/cloudflare/src/organ-set-rule.mjs`; test `organ-set.test.mjs`). IMPLEMENTED as a mechanism.
-- Model doors: same-origin paths in front of six providers, where the host adds the key it holds (`packages/experimental/webworker-runtime/src/model-doors.ts`; test `packages/experimental/webworker-runtime/tests/model-doors.spec.ts`). A turn is journalled before the call and an unknown outcome is not retried (`deploy/cloudflare/src/turn-journal.mjs`, `provider-dispatch.mjs`; tests `provider-dispatch.test.mjs`, `turn-journal-and-body.test.mjs`). IMPLEMENTED. No call to a real provider is recorded.
+- Model doors: same-origin paths in front of seven providers, through eight doors, where the host adds the key it holds (`packages/experimental/webworker-runtime/src/model-doors.ts`; test `packages/experimental/webworker-runtime/tests/model-doors.spec.ts`). A turn is journalled before the call and an unknown outcome is not retried (`deploy/cloudflare/src/turn-journal.mjs`, `provider-dispatch.mjs`; tests `provider-dispatch.test.mjs`, `turn-journal-and-body.test.mjs`). IMPLEMENTED. No call to a real provider is recorded.
 - **Pearl** is the retention suite a candidate organ is graded against (`mirror/home/auma/seed/organs/seed-pearl.js`; test `server/pearl.test.mjs`). IMPLEMENTED. The file itself says its trial is "not proven containment".
 
 **Missing.** Author identity for an organ, a registry, signed distribution. Proof that a foreign organ is contained. A local-model door. The door table is a fixed list in source. A second, independent implementation of the authority. DIRECTION.
@@ -90,7 +114,7 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** What Auma does is written as signed events in the Nostr format. She keeps them locally as her own log and can exchange them with independently owned nodes. Her state can move between hosts.
 
-**Serves it today.**
+**What serves it.**
 - One signed head announcement in the Nostr format. The file says it is not a relay (`deploy/cloudflare/src/nostr-anchor.mjs`, organ `seed-nostr-anchor.js`; test `nostr-anchor-door.test.mjs`). IMPLEMENTED.
 - Local messages with optional signing; the relay list is empty (`deploy/cloudflare/src/messages-store.mjs`; test `server/messages-store.test.mjs`). IMPLEMENTED.
 - Pinned signing operations exist in the `nostr-core` cell (`apps/web/public/cells/nostr-core.wasm`), source not in the tree. IMPLEMENTED as a binary only; that it matches any source is UNVERIFIED.
@@ -103,8 +127,8 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** The same owner rule holds wherever Auma acts.
 
-**Serves it today.**
-- A voice app, Auma Live, through a hosted speech service the host proxies with a short-lived pass (`apps/web/public/assets/stock-apps/auma-live.html`; tests `deploy/cloudflare/src/__tests__/speech-pass.test.mjs`, `packages/client/ui-layout/tests/auma-live-isolation.client.spec.tsx`). A voice director keeps speech from approving anything (`deploy/cloudflare/src/voice-director.mjs`; test `voice-director-hardening.test.mjs`). IMPLEMENTED. No audio session is recorded.
+**What serves it.**
+- A voice app, Auma Live, through a managed voice: a voice bridge at the edge relays the call, and her own session writes every word she speaks (`deploy/cloudflare/src/voice-bridge-do.mjs`; test `deploy/cloudflare/src/__tests__/voice-bridge-turns.test.mjs`). The older voice can no longer start. At the voice level the tree sets (`open`), a spoken turn is an ordinary turn of hers and may stage a card for the owner; the card still waits for the passkey. IMPLEMENTED. No audio session is recorded.
 - A phone layout of **Spatial**, the app's one workspace layout (`packages/client/ui-layout/tests/spatial-compact.client.spec.tsx`). IMPLEMENTED.
 - A self-hosted voice renderer is described, with gateway unit tests, but no image build or GPU run is recorded (`deploy/personaplex/README.md`). UNVERIFIED.
 
@@ -116,7 +140,7 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 **Means.** Many people run their own nodes. The nodes find and trust each other without a central party granting identity.
 
-**Serves it today.** Signed invites (`deploy/cloudflare/src/aumlok.mjs`; tests `aumlok-invites.test.mjs`, `guest-redeem-door.test.mjs`). IMPLEMENTED. The edge page says "An invite grants no access today" (`deploy/cloudflare/src/worker.mjs`).
+**What serves it.** Signed invites (`deploy/cloudflare/src/aumlok.mjs`; tests `aumlok-invites.test.mjs`, `guest-redeem-door.test.mjs`). IMPLEMENTED. The edge page says "An invite grants no access today" (`deploy/cloudflare/src/worker.mjs`).
 
 **Missing.** Naming, peer discovery, multi-tenant hosting, trust between nodes. No code in the tree. DIRECTION.
 
@@ -124,10 +148,10 @@ Six stages. Each says what it means, what in the tree serves it, what is missing
 
 ## What would change our mind
 
-These findings would force a redesign, not a patch. Each would be recorded as a **scar**: a founding failure written down with its lesson and, for five of the six today, the checks that guard against it (`mirror/home/auma/seed/scars.jsonl`).
+These findings would force a redesign, not a patch. Each would be recorded as a **scar**: a founding failure written down with its lesson and, for five of the six, the checks that guard against it (`mirror/home/auma/seed/scars.jsonl`).
 
 - **The owner cannot see what they approve.** If no display independent of the page can show the exact bytes, a compromised page can ask for terms the owner never read. The approval model would need a different trusted display.
-- **Storage rollback cannot be fenced.** If a spent approval can always be revived by whoever can write the edge's storage, then the authority is the storage holder, not the passkey. `aumlok-restore-rehearsal.test.mjs` reproduces this today.
+- **Storage rollback cannot be fenced.** If a spent approval can always be revived by whoever can write the edge's storage, then the authority is the storage holder, not the passkey. `aumlok-restore-rehearsal.test.mjs` reproduces this.
 - **The deploy path outranks the passkey.** The protected list is code. If a code deploy cannot be brought under the owner's approval, the passkey guards less than it seems to.
 - **Unprotected organs can reach protected power.** An owner session alone can change an ordinary organ, including `seed-cycle.js`, the self-build step. If an ordinary organ can be shown to escalate, the split between ordinary and protected organs is wrong.
 - **Trials cannot be contained.** If a candidate organ's trial can never be isolated, self-change must leave the owner's node and run somewhere disposable.
@@ -148,3 +172,7 @@ The most useful single act is the independent run in Stage 1. Other starting poi
 ## What success means
 
 Success is not that everybody runs one company's Auma. Success is that independent people can build, inspect, extend, replace and run their own, and keep meaningful control while they do.
+
+## Next: what is built
+
+Read [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md) next. It is the inventory: every mechanism this page builds on, with its file, the test that pins it, one test file per capability you can run yourself, the counts and how to count them again, and the list of what is deliberately not done. After it you can check each claim of the last three pages that the tree can hold against the tree.

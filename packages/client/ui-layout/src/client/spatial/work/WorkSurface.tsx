@@ -28,15 +28,14 @@ import {
 } from './work-model.ts'
 import type { DagHeadView, HeadView, WorkGraph } from './work-model.ts'
 import { workBridge } from './bridge.ts'
-import {
-  APPROVAL_FINISHING_WORDS, holdReload, reloadUnlessHeld, useReloadHeld, type ReloadNotice,
-} from '../portal/build-notice.ts'
+import { holdReload } from '../portal/build-notice.ts'
 import { useReloadNoticeFeed } from '../portal/notices.ts'
+import { NewBuildLine } from '../portal/NoticesSurface.tsx'
 import type { BridgePhase, BridgeRead, BridgeReceipts, BridgeSnapshot, BridgeToolBody } from './bridge.ts'
 import css from './Work.module.css'
 import { foldAttention, headingKey, type AttentionRow } from './attention.ts'
 import {
-  bootRelease, COMMIT_FOLLOW_UPS, corpusStatus, countCorpus, DISCOVERY_CORPUS_PATH, MEMORY_DAG_DIR, postWake, readWake, touchesHer,
+  COMMIT_FOLLOW_UPS, corpusStatus, countCorpus, DISCOVERY_CORPUS_PATH, MEMORY_DAG_DIR, postWake, readWake, touchesHer,
   useDebounced, useLiveEvents,
   useNewBuild, verifyDag, wakeInterval,
   type CorpusCount, type DagCheck, type WakeRead, type WakeRequest,
@@ -338,37 +337,6 @@ function walkDag(
   }, new Map(), undefined, expected)
 }
 
-/**
- * The host selected a different runtime release than this page booted from: one inline button that reloads the page.
- * Not a popup, and it reloads only when clicked. "Different", not "newer": a selection can be a rollback, and the host
- * says a selection is no health proof. With no host selection, the same button carries `notice`
- * (portal/build-notice.ts): a new build of the app is live on the edge, or a newer Auma is published than this tab runs.
- */
-export function NewBuildButton({ release, words, notice }: {
-  readonly release: string | null
-  readonly words?: { readonly button: string; readonly what: string } | undefined
-  readonly notice?: ReloadNotice | null | undefined
-}): JSX.Element | null {
-  // NO RELOAD OVER AN APPROVAL IN FLIGHT (portal/build-notice.ts): both reloads check the shared guard when pressed, and
-  // while it holds the notice says so in one sentence.
-  const held = useReloadHeld()
-  const shown = release !== null ? { release, words, from: bootRelease(), reload: () => { reloadUnlessHeld() } } : notice ?? null
-  if (shown === null) return null
-  const boot = shown.from
-  const what = shown.words?.what ?? 'The host now selects a different runtime release than this page runs. A selection is not a health check; '
-    + 'reloading loads it.'
-  return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '6px 16px 0' }}>
-      {held ? <span role="status" data-reload-held="">{`${APPROVAL_FINISHING_WORDS}\u00a0`}</span> : null}
-      <button type="button" className="ak-badge ak-tone-gold" data-new-build={shown.release} style={{ cursor: 'pointer' }}
-        title={`${what} (${shown.release.slice(0, 12)} ← ${boot === null ? '?' : boot.slice(0, 12)})`}
-        onClick={shown.reload}>
-        {shown.words?.button ?? 'Build changed · Reload'}
-      </button>
-    </div>
-  )
-}
-
 /** Count her corpus file: absent, counted, or why it could not be read. */
 async function readCorpus(
   reader: WorkReader, sessionId: SessionId, signal: AbortSignal,
@@ -418,9 +386,10 @@ export function WorkSurface({ activeSurface, useSessions, reader, labels, t }: W
   /** Asks the verified reader for a fresh read now, or as soon as the read in flight settles (never two at once). */
   const liveRefreshRef = useRef<() => void>(() => {})
   const newBuild = useNewBuild(active)
-  // The edge's own build and her published head: the same Reload button, when the host selects nothing.
-  // The same read also feeds the Notices launcher (portal/notices.ts), so it is gold while Work is open.
-  const reloadNotice = useReloadNoticeFeed(active)
+  // The edge's own build, her published head and the host's selected release: one read each, published
+  // into Notices (portal/notices.ts), whose row carries Reload. Notices: Work draws no Reload button of its own any more,
+  // only one quiet line while a newer build exists.
+  const reloadNotice = useReloadNoticeFeed(active, {}, newBuild === null ? null : { release: newBuild, what: labels('build.what') })
   // Read only to show the edge's owner sign-in when it asks for one; where the page runs is Sovereignty's to say.
   const hostMode = useHostMode(active)
   // THE HOST'S OWN FACTS (Round 18): `/__x6/facts`, set beside this tab's recomputation below.
@@ -908,7 +877,7 @@ export function WorkSurface({ activeSurface, useSessions, reader, labels, t }: W
           ? { text: 'Reading', tone: 'muted' }
           : rows.source === 'verified' ? { text: 'Verified status', tone: 'mint' } : { text: 'File fallback', tone: 'gold' }]}
       />
-      <NewBuildButton release={newBuild} words={{ button: labels('build.button'), what: labels('build.what') }} notice={reloadNotice} />
+      <NewBuildLine shown={newBuild !== null || reloadNotice !== null} />
       <section className={css.work} data-auma-work aria-label={t('work.title')}>
         {hostMode.kind === 'signed-out' ? <EdgeOwnerSignIn host={hostMode.host} /> : null}
 

@@ -1,5 +1,6 @@
 /** HeadDO-owned provider transport. Controllers remain live until stream EOF or cancellation. */
 import { claimTurnJournalDispatch } from './turn-journal.mjs'
+import { PRIME_ORIGIN, primeTeamId, settlePrimeSpend } from './provider-budget.mjs'
 
 const PROVIDERS = {
   deepseek: ['https://api.deepseek.com', 'DEEPSEEK_API_KEY'],
@@ -9,6 +10,7 @@ const PROVIDERS = {
   openai: ['https://api.openai.com', 'OPENAI_API_KEY'],
   anthropic: ['https://api.anthropic.com', 'ANTHROPIC_API_KEY'],
   xai: ['https://api.x.ai', 'XAI_API_KEY'],
+  prime: [PRIME_ORIGIN, 'PRIME_API_KEY'], // The constant origin, never a setting
 }
 const MAX_BODY = 16 * 1024 * 1024
 const error = (code, status = 409) => Object.assign(new Error(code), { code, status })
@@ -33,14 +35,17 @@ export function createProviderDispatcher({ storage, env, networkFetch = fetch })
       const provider = request.headers.get('x-x6-provider')
       const endpoint = request.headers.get('x-x6-provider-endpoint')
       const target = Object.hasOwn(PROVIDERS, provider) ? PROVIDERS[provider] : null
+      // A prime charge whose call never leaves the edge is given back, once (the Worker sets this header itself).
+      const charge = provider === 'prime' ? request.headers.get('x-x6-spend-charge') : null
+      const refused = async (code, status) => { if (charge) await settlePrimeSpend(storage, charge, { inputUnits: 0, outputUnits: 0 }).catch(_error => {}); return failure(code, status) }
       if (!target) return failure('PROVIDER_UNAVAILABLE', 404)
       if (!/^\/(?:(?:anthropic\/)?v1\/)?(?:models|chat\/completions|messages|responses)$/.test(endpoint ?? '')
-        || (endpoint.endsWith('/models') ? request.method !== 'GET' : request.method !== 'POST')) return failure('PROVIDER_ENDPOINT_UNAVAILABLE', 404)
+        || (endpoint.endsWith('/models') ? request.method !== 'GET' : request.method !== 'POST')) return await refused('PROVIDER_ENDPOINT_UNAVAILABLE', 404)
       const turnId = request.headers.get('x-x6-turn-id')
       const parentTurnId = request.headers.get('x-x6-parent-turn-id')
-      if (request.method === 'POST' && !/^[A-Za-z0-9._:-]{1,128}$/.test(turnId ?? '')) return failure('TURN_JOURNAL_ID_INVALID', 400)
-      if (parentTurnId !== null && !/^[A-Za-z0-9._:-]{1,128}$/.test(parentTurnId)) return failure('TURN_JOURNAL_PARENT_ID_INVALID', 400)
-      if (turnId && controllers.has(turnId)) return failure('TURN_DISPATCH_ALREADY_STARTED', 409)
+      if (request.method === 'POST' && !/^[A-Za-z0-9._:-]{1,128}$/.test(turnId ?? '')) return await refused('TURN_JOURNAL_ID_INVALID', 400)
+      if (parentTurnId !== null && !/^[A-Za-z0-9._:-]{1,128}$/.test(parentTurnId)) return await refused('TURN_JOURNAL_PARENT_ID_INVALID', 400)
+      if (turnId && controllers.has(turnId)) return await refused('TURN_DISPATCH_ALREADY_STARTED', 409)
       const controller = new AbortController()
       // Registration precedes the first await, including body reads and durable checks.
       if (turnId) controllers.set(turnId, controller)
@@ -87,6 +92,8 @@ export function createProviderDispatcher({ storage, env, networkFetch = fetch })
         const anthropic = provider === 'anthropic' || endpoint.startsWith('/anthropic/')
         if (provider === 'anthropic' && !key.startsWith('sk-ant-oat')) headers.set('x-api-key', key)
         else headers.set('authorization', `Bearer ${key}`)
+        // The team that pays, only when PRIME_TEAM_ID is set and valid (an identifier, not a secret).
+        if (provider === 'prime' && primeTeamId(env)) headers.set('x-prime-team-id', primeTeamId(env))
         if (anthropic) {
           headers.set('anthropic-version', '2023-06-01')
           if (provider !== 'anthropic') headers.set('x-api-key', key)
@@ -152,9 +159,10 @@ export function createProviderDispatcher({ storage, env, networkFetch = fetch })
         retained = true
         return new Response(stream, { status: upstream.status, headers: upstream.headers })
       } catch (cause) {
-        if (controller.signal.aborted) return failure(cause?.code ?? 'TURN_CANCELLED', cause?.status ?? 409)
-        if (dispatched) return failure('PROVIDER_OUTCOME_UNKNOWN', 422)
-        return failure(cause?.code ?? 'PROVIDER_DISPATCH_UNAVAILABLE', cause?.status ?? 503)
+        if (dispatched) return controller.signal.aborted ? failure(cause?.code ?? 'TURN_CANCELLED', cause?.status ?? 409) : failure('PROVIDER_OUTCOME_UNKNOWN', 422)
+        // Nothing left the edge, so a prime charge is given back.
+        if (controller.signal.aborted) return await refused(cause?.code ?? 'TURN_CANCELLED', cause?.status ?? 409)
+        return await refused(cause?.code ?? 'PROVIDER_DISPATCH_UNAVAILABLE', cause?.status ?? 503)
       } finally {
         if (!retained) { void reader?.cancel().catch(_error => {}); cleanup() }
       }

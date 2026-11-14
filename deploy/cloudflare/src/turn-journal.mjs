@@ -31,6 +31,48 @@ const terminalCode = value => {
   return null
 }
 
+// The VoiceBridge's turn ids (voice-bridge-do.mjs BRIDGE_TURN_ID_RE, the same rule) and the retention of
+// their indexes. A bridge turn's index outlives its ring row as replay protection, so it is kept in a list of its own:
+// a terminal one goes 24 hours after its turn ended, and past 2,048 the oldest terminal ones go first; the index of a
+// turn that is still active is never removed. Each append of a bridge turn registers it and sweeps the oldest few.
+export const BRIDGE_TURN_ID_RE = /^eleven:[A-Za-z0-9_-]{1,96}:\d{1,10}$/
+export const BRIDGE_INDEX_KEY = 'head:turn-journal:bridge-turns'
+export const BRIDGE_INDEX_LIMITS = Object.freeze({ keepMs: 86_400_000, max: 2048, sweep: 64 })
+
+async function keepBridgeIndexes(storage, turnId, now) {
+  await storage.transaction(async tx => {
+    const at = now()
+    const stored = await tx.get(BRIDGE_INDEX_KEY)
+    const list = Array.isArray(stored) ? stored.filter(entry => Array.isArray(entry) && typeof entry[0] === 'string' && Number.isFinite(entry[1])) : []
+    if (!list.some(([id]) => id === turnId)) list.push([turnId, at])
+    const active = await tx.get('head:turn:active')
+    const kept = []
+    let count = list.length
+    let examined = 0
+    for (const entry of list) {
+      const [id, registeredAt] = entry
+      if (examined >= BRIDGE_INDEX_LIMITS.sweep || id === turnId) { kept.push(entry); continue }
+      examined++
+      const index = await tx.get(`${TURN_INDEX_PREFIX}${id}`)
+      const running = isObject(active) && active.turn_id === id && active.status === 'running'
+      if (index === undefined && !running) {
+        // Never appended (or already gone): only the list entry, once it is old.
+        if (registeredAt + BRIDGE_INDEX_LIMITS.keepMs <= at) { count--; continue }
+        kept.push(entry)
+        continue
+      }
+      const endedAt = Number.isFinite(index?.completedAt) ? index.completedAt : Number.isFinite(index?.cancelledAt) ? index.cancelledAt : registeredAt
+      if (!running && terminalCode(index) && (endedAt + BRIDGE_INDEX_LIMITS.keepMs <= at || count > BRIDGE_INDEX_LIMITS.max)) {
+        await tx.delete(`${TURN_INDEX_PREFIX}${id}`)
+        count--
+        continue
+      }
+      kept.push(entry)
+    }
+    await tx.put(BRIDGE_INDEX_KEY, kept)
+  })
+}
+
 async function parentTurnFailure(tx, parentTurnId) {
   if (parentTurnId === null) return null
   const terminal = terminalCode(await tx.get(`${TURN_INDEX_PREFIX}${parentTurnId}`))
@@ -196,6 +238,41 @@ export async function handleInternalTurnJournalRoute(storage, method, body, now 
       headers: { 'cache-control': 'no-store' },
     })
   }
+
+  // A spoken turn's reply finished (the VoiceBridge sends it after her last clause). Only a BRIDGE voice row
+  // (a turn id of the bridge's form) that is neither cancelled nor dispatched to a provider door is completed; any other
+  // turn id is refused; completing it again answers the same row.
+  if (isObject(body) && body.action === 'complete') {
+    const completeTurnId = typeof body.turnId === 'string' && BRIDGE_TURN_ID_RE.test(body.turnId) ? body.turnId : null
+    if (!completeTurnId) {
+      return Response.json({ ok: false, code: 'TURN_JOURNAL_ID_INVALID' }, { status: 400, headers: { 'cache-control': 'no-store' } })
+    }
+    const completedOutcome = await storage.transaction(async tx => {
+      const idx = await tx.get(`${TURN_INDEX_PREFIX}${completeTurnId}`)
+      if (!isObject(idx) || !Number.isSafeInteger(idx.seq)) return { ok: false, status: 404, code: 'TURN_JOURNAL_NOT_FOUND', turnId: completeTurnId }
+      const row = await tx.get(`${ROW_PREFIX}${idx.seq}`)
+      if (!isObject(row) || row.turnId !== completeTurnId || row.modality !== 'voice' || idx.dispatchedAt !== undefined) {
+        return { ok: false, status: 409, code: 'TURN_JOURNAL_CONFLICT', turnId: completeTurnId }
+      }
+      const terminal = terminalCode(idx) ?? terminalCode(row)
+      if (terminal === 'TURN_CANCELLED') return { ok: false, status: 409, code: terminal, turnId: completeTurnId }
+      const completedAt = terminal === 'TURN_COMPLETED' ? (idx.completedAt ?? row.completedAt ?? now()) : now()
+      // The browser half may run the same turn under HEAD's turn_start: settle THAT active turn too (as cancel does),
+      // so a later turn_complete finding the row completed never leaves head:turn:active 'running'.
+      const activeTurn = await tx.get('head:turn:active')
+      const activeTurnCompleted = isObject(activeTurn) && activeTurn.turn_id === completeTurnId && activeTurn.status === 'running'
+      if (activeTurnCompleted) await tx.put('head:turn:active', { ...activeTurn, status: 'completed', outcome: 'ok', completed_at: completedAt })
+      if (terminal === 'TURN_COMPLETED') return { ok: true, completed: true, idempotent: true, turnId: completeTurnId, activeTurnCompleted, entry: row }
+      const entry = { ...row, completed: true, completedAt }
+      await tx.put(`${ROW_PREFIX}${idx.seq}`, entry)
+      await tx.put(`${TURN_INDEX_PREFIX}${completeTurnId}`, { ...idx, completed: true, completedAt })
+      return { ok: true, completed: true, idempotent: false, turnId: completeTurnId, activeTurnCompleted, entry }
+    })
+    return Response.json(completedOutcome, { status: completedOutcome.status ?? 200, headers: { 'cache-control': 'no-store' } })
+  }
+
+  // An append of a bridge turn registers its index for retention and sweeps the oldest (see above).
+  if (isObject(body) && body.action === undefined && typeof body.turnId === 'string' && BRIDGE_TURN_ID_RE.test(body.turnId)) await keepBridgeIndexes(storage, body.turnId, now)
 
   if (!isObject(body)
     || typeof body.provider !== 'string' || !body.provider

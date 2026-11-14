@@ -236,3 +236,18 @@ test('Over HTTP: a new module whose declared size differs from its verified byte
   assert.equal(fx.approvals.length, 0)
   assert.equal((await fx.headNow()).ballId, before)
 })
+
+
+test('exact-byte passkey-approved ordinary additions remain exempt but do not initialize an absent id budget', async () => {
+  const fx = await fixture()
+  await fx.storage.delete('head:id-promotion-budget:initialized:v1')
+  await fx.storage.delete('head:id-promotion-budget:ledger:v1')
+  const { ball, staged } = await fx.stage(plainAdds(['voice-slot']))
+  assert.equal(staged.governanceClass, 1)
+  assert.equal((await fx.promote(staged.organSet, { 'x-x6-class3-approval': 'forged' })).body.code, 'CLASS3_WEBAUTHN_REQUIRED')
+  assert.equal((await fx.headNow()).ballId, fx.ball.ballId)
+  assert.equal((await fx.promote(staged.organSet)).status, 200)
+  assert.equal((await fx.headNow()).ballId, ball.ballId)
+  assert.equal(await fx.storage.get('head:id-promotion-budget:initialized:v1'), undefined)
+  assert.equal(await fx.storage.get('head:id-promotion-budget:ledger:v1'), undefined)
+})

@@ -17,6 +17,7 @@ import vm, { runInNewContext } from 'node:vm'
 import { rescueKit } from '../rescue-kit.mjs'
 import { RESCUE_PAGE } from '../rescue-page.mjs'
 import { handleThreadRequest, threadCommit, threadLimits, createR2PartStore, threadIdForPath } from '../thread-log.mjs'
+import { threadSyncOn } from '../thread-sync-mode.mjs' // The edge's switch, as thread-mount.mjs reads it
 import { leaseAction, checkLease, WORLD_LEASE } from '../world-lease.mjs'
 import { retiredReply } from '../mirror-slot-tombstone.mjs'
 import { chargeWorldBudgetIn } from '../world-budget.mjs'
@@ -26,7 +27,7 @@ import { waitFor } from './wait-for.mjs'
 
 const DB = 'aukora-x6-vfs'
 const WORLD = 'node-main-v1'
-const ORIGIN = 'https://x61.example.invalid'
+const ORIGIN = 'https://node.example.invalid'
 const PIECE = 4096
 const CLIENT = '1b4e28ba-2fa1-41d2-883f-0016d3cca427'
 const OTHER = '6fa459ea-ee8a-4ca4-894e-db77e160355e'
@@ -71,7 +72,7 @@ function storeEntries(journals, clientId = CLIENT) {
  * storage for the lease and the thread rows. `hooks.before(entry, init)` may answer first (to inject an edge answer);
  * `log` records every request (method, path, keepalive); `imports` counts the import requests in flight at once.
  */
-function edge({ piece = PIECE, clock = { t: T0 } } = {}) {
+function edge({ piece = PIECE, clock = { t: T0 }, threadSync } = {}) {
   const bucket = createVaultBucket()
   const budget = createVaultBudget({ now: () => clock.t })
   const vaultFetch = createVaultFetch({ bucket, budget, world: WORLD, now: () => clock.t, ...(piece === 2097152 ? {} : { limits: { piece } }) })
@@ -106,7 +107,8 @@ function edge({ piece = PIECE, clock = { t: T0 } } = {}) {
     if (url.pathname.startsWith('/_thread/')) {
       const headers = { ...(init.headers ?? {}), origin: ORIGIN, 'sec-fetch-site': 'same-origin' }
       const request = new Request(url, { method, headers, body: method === 'GET' || method === 'HEAD' ? null : init.body })
-      return handleThreadRequest({ request, url, mirror: e.threadMirror, parts, rescues, protocol })
+      // As thread-mount.mjs passes it: true only while THREAD_SYNC is exactly on (unset here, as on main).
+      return handleThreadRequest({ request, url, mirror: e.threadMirror, parts, rescues, protocol, tailInsideLine: threadSyncOn({ THREAD_SYNC: threadSync }) })
     }
     if (url.pathname === '/_mirror/lease' && method === 'POST') {
       const answer = await leaseAction(mirror, JSON.parse(init.body), { now: clock.t, ownerApproved: false, homeFreeze: 'record' })
@@ -294,7 +296,25 @@ test('the compared facts are her index\'s bytes, partCount, chain and tailSha, a
   assert.equal(again.done, true)
 })
 
-test('main\'s client never reads her thread index (no caller under apps/ or packages/)', () => {
+// Her thread sync reads her thread index on purpose: a reader pulls her threads
+// and her one writer reads it to know what her cloud holds. Those files, and only those, may name the route; any other
+// caller under apps/ or packages/ is still refused here.
+const THREAD_INDEX_READERS = new Set([
+  'packages/experimental/webworker-runtime/src/storage/thread-store-types.ts',
+  'packages/experimental/webworker-runtime/src/storage/thread-sync.ts',
+  'packages/experimental/webworker-runtime/src/storage/thread-writer.ts',
+  'packages/experimental/webworker-runtime/tests/x6/large-store-boot-sync.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/large-store-thread-writer.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-sync-host-boot.spec.ts', // Granted
+  'packages/experimental/webworker-runtime/tests/x6/reader-door.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-sync-edge.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-sync-fixture.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-sync.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-writer-fixture.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-writer.spec.ts',
+])
+
+test('thread sync: no caller under apps/ or packages/ reads her thread index except thread sync\'s own files', () => {
   const root = new URL('../../../../', import.meta.url)
   let found = ''
   try {
@@ -303,7 +323,7 @@ test('main\'s client never reads her thread index (no caller under apps/ or pack
     // git grep exits 1 when nothing matches.
     if (error.status !== 1) throw error
   }
-  assert.equal(found.trim(), '', found)
+  assert.deepEqual(found.split('\n').filter(Boolean).filter(path => !THREAD_INDEX_READERS.has(path)), [], found)
 })
 
 // ── MUST 3: the lease ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -1002,6 +1022,21 @@ test('an open end that starts with a line longer than 256 KiB: "Not checked", an
   assert.equal(checked.line, 'Not checked: the open end of this thread holds a line longer than this page can read back (256 KiB).')
   assert.equal(checked.equal, false)
   assert.deepEqual(checked.lines, ['Its 1 sealed pieces are equal.'])
+})
+
+// Main's case above holds with THREAD_SYNC unset; only with it exactly on does the tail answer inside a line.
+test('an open end that starts with a line longer than 256 KiB is read back whole (the tail answers inside a line, THREAD_SYNC on), every piece equal', async () => {
+  const PROTOCOL_PIECE = 2097152
+  const e = edge({ piece: PROTOCOL_PIECE, threadSync: 'on' })
+  const long = enc.encode('{"x":"' + 'a'.repeat(300000 - 9) + '"}\n')
+  assert.equal(long.length, 300000)
+  const bytes = join2(join2(journal(PROTOCOL_PIECE, 'p'), long), journal(5000, 'z'))
+  const made = await cloudThread(e, B, bytes)
+  const phone = rescueKit({ indexedDB: new FakeIndexedDb(), localStorage: null, fetch: e.fetch, sleep: async () => {} })
+  const checked = await phone.checkThread({ id: made.id })
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  assert.equal(checked.line, `Read back from her cloud: ${String(bytes.length)} bytes, SHA-256 ${digest}, every piece equal.`)
+  assert.equal(checked.equal, true)
 })
 
 // ── MUST 2 (never "equal" from a count) and the SHOULD (a run is done only when every thread is) ─────────

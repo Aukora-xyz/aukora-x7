@@ -2,7 +2,7 @@
 
 [English](OPEN-SOURCE-READINESS.md) | 中文
 
-本仓库以 AGPL-3.0-or-later 发布，但它**还不是任何人都能完整重建的一套系统。**一些做决定的部分只以编译后的文件形式提供，有一个编译文件完全没有许可证，还有一些构建输入在这棵树之外。本页按优先级列出每一个已知缺口，说明谁能补上，并说明读者今天能复现什么、不能复现什么。
+本仓库以 AGPL-3.0-or-later 发布，但它**还不是任何人都能完整重建的一套系统。**一些做决定的部分只以编译后的文件形式提供，有一个编译文件完全没有许可证，还有一些构建输入在这棵树之外。本页按优先级列出每一个已知缺口，说明谁能补上，并说明读者从这棵树能复现什么、不能复现什么。
 
 这些都还没有解决。只有当修复进入这棵树，某个缺口才会从本页消失。
 
@@ -12,11 +12,11 @@
 
 ## 缺口，按优先级排列
 
-### 1. 25 个 Wasm 单元中有 24 个无法重建
+### 1. 30 个 Wasm 单元中有 24 个无法重建
 
 这些单元是小型的、封存的 WebAssembly 模块（见 [GLOSSARY.zh.md](GLOSSARY.zh.md)）。它们保存身份、密钥、裁判、授权账本、记忆策略和 Nostr 签名。只有所有者的 passkey 才能更改的 15 个 id 中，有 5 个是单元（`server/ball-transition.mjs` 中的 `T2_ONLY_ORGANS`）。
 
-- 在树里：`apps/web/public/cells/` 中有 24 个编译文件（6,488,165 字节），每个都在 `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts` 中按大小和 SHA-256 钉住。只有 `aura-focus.wasm` 的源码在它旁边（`aura-focus.wat`），`server/aura-focus-cell.build.mjs` 检查发布的字节是否与它一致。这次重建用被钉住的 `skillsmith` 单元作编译器，而 `skillsmith` 正是没有源码的 24 个之一。
+- 在树里：`apps/web/public/cells/` 中有 30 个编译文件，每个都在 `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts` 中按大小和 SHA-256 钉住。其中 24 个（6,488,165 字节）在这里没有源码。六个的手写 WAT 源码就在旁边（`aura-focus.wat`、`cord-echo.wat`、`kyber-cpu.wat`、`menger-hive.wat`、`nucleus.wat`、`pentora-codec.wat`），每个在 `server/` 中都有一个构建脚本。这些重建用被钉住的 `skillsmith` 单元作编译器，而 `skillsmith` 正是没有源码的 24 个之一。
 - 不在树里：任何 Rust 源码。这里没有 `.rs` 文件，也没有 `Cargo.toml`（用 `find` 检查过）。大多数单元共用的 `mv_abi` crate 不在 crates.io 上，它的源码也不在这棵树里（`apps/web/public/cells/THIRD-PARTY.md`，第 10 行和第 11 行）。在那张表里，13 行第三方 crate 和 Rust 标准库一行的版本都写着“not visible”。树里没有写明编译器版本和目标平台。
 - 许可证后果：按 AGPL 第 5 条和第 6 条，转交目标代码的人必须同时提供它的源码。收到本仓库的人，仅凭本仓库无法履行这项义务（`apps/web/public/cells/LICENSE.binaries`）。
 - 需要：带有 `mv_abi` 的单元工作区、它的锁文件、编译器和目标平台版本、构建命令，以及 `wasm-cells.ts` 中每个钉住项的预期 SHA-256。或者在那份说明里为这些编译文件写明其他条款。
@@ -39,7 +39,7 @@
 
 ### 4. 没有具名的版权持有人，也没有贡献条款
 
-- 106 个 JavaScript 和 TypeScript 文件带有“The Aukora authors”文件头（用 `grep -rl` 统计）；树的其余部分依靠根目录的 [LICENSE](../LICENSE)。没有文件级的对照表说明哪些行是原创、哪些是继承的；[SIZE-AND-ORIGIN.zh.md](SIZE-AND-ORIGIN.zh.md) 按文件夹给出数量。
+- 131 个 JavaScript 和 TypeScript 文件带有“The Aukora authors”文件头（用 `grep -rl` 对 `*.js`、`*.ts`、`*.tsx` 和 `*.mjs` 统计）；树的其余部分依靠根目录的 [LICENSE](../LICENSE)。没有文件级的对照表说明哪些行是原创、哪些是继承的；[SIZE-AND-ORIGIN.zh.md](SIZE-AND-ORIGIN.zh.md) 按文件夹给出数量。
 - 除根目录外，有 17 个文件夹带有自己的 `LICENSE` 文件（用 `find . -name LICENSE` 统计，不含 `LICENSES/`），其中有 `native/system/` 里的 BSD-3-Clause，以及 `packages/fs/fs-patch/` 里对另一个项目的改编。
 - 没有贡献者协议，也没有签署规则。在有之前，[CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md) 要求每个拉取请求写明其许可证。
 - 需要：一个具名的持有人或实体、一条贡献规则、一份生成的来源对照表。由谁来做：版权持有人。
@@ -63,7 +63,7 @@
 
 ### 8. 部署值是写进代码里的占位符
 
-- `your-node`、`node.example.invalid` 和全零的账户 id 放在 `deploy/cloudflare/wrangler.toml` 里。同样的值，以及仓库占位符 `your_org_x/your-node`，也被写进了代码，其中包括 `server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 8、1700 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行）、`deploy/ci/deploy-guard.mjs`（第 44 行）和 `server/owner-grant.mjs`（第 116 行）。`grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 会把它们连同测试和文档全部列出。
+- `your-node`、`node.example.invalid` 和全零的账户 id 放在 `deploy/cloudflare/wrangler.toml` 里。同样的值，以及仓库占位符 `your_org_x/your-node`，也被写进了代码，其中包括 `server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、2866 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行）、`deploy/ci/deploy-guard.mjs`（第 44 行）和 `server/owner-grant.mjs`（第 116 行）。`grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 会把它们连同测试和文档全部列出。
 - 从这棵树部署到一个新账户，是 UNVERIFIED。
 - 由谁来做：维护者。
 
@@ -88,16 +88,16 @@
 | 部署值 | 为它们设一个来源，由代码读取 | 维护者 | 未完成 |
 | 外部源码 | 镜像或按哈希钉住 | 维护者 | 未完成 |
 
-## 读者今天能复现什么
+## 读者从这棵树能复现什么
 
 | 能做的事 | 怎么做 | 标签 |
 | --- | --- | --- |
-| 不用安装就运行 22 个测试文件；预期最后一行为 `verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs`（Node 24.9 或更新版本） | UNVERIFIED：在一台机器上看到过，不在记录的运行（属于较早的一棵树）里 |
+| 不用安装就运行 22 个测试文件；预期最后一行为 `verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list` | `node scripts/verify-lite.mjs`（Node 24.9 或更新版本） | UNVERIFIED：在一台机器上看到过，不在记录的运行（属于较早的一棵树）里 |
 | 对照钉住的值检查每个单元文件，不运行它 | 对 `apps/web/public/cells/*.wasm` 和 `wasm-cells.ts` 的 SHA-256 循环（见 [WHAT-IS-BUILT.zh.md](WHAT-IS-BUILT.zh.md)） | IMPLEMENTED |
-| 用没有源码的 `skillsmith` 单元作编译器，从 `aura-focus.wat` 重建 `aura-focus.wasm` | `server/aura-focus-cell.build.mjs`；测试 `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
+| 用没有源码的 `skillsmith` 单元作编译器，从 `aura-focus.wat` 重建 `aura-focus.wasm`（另外五个 WAT 单元也从各自的源码重建） | `server/aura-focus-cell.build.mjs`；测试 `server/aura-focus-cell-shadow.test.mjs` | IMPLEMENTED |
 | 安装、构建、启动本地宿主、运行四个测试套件、运行演练 | [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)，第 3 节 | 在一台机器上的 RECORDED RUN（属于较早的一棵树） |
 
-## 读者今天不能复现什么
+## 读者从这棵树不能复现什么
 
 - 重建 24 个单元、`pentora36.wasm` 或 Dakini Code 构建包，或者检查其中任何一个是否与任何源码相符。
 - 按 pentora 检查自己的定义文件所描述的方式运行这些检查：这些文件不存在。

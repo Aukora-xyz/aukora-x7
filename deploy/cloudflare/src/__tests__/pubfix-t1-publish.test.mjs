@@ -1,22 +1,39 @@
 /** Edge pin. An ordinary Pearl-admitted organ update, built as her runtime's treePatch builds it,
  * published to a REAL X61HeadDurableObject with production wiring (no options; PUBLIC_HOST + OWNER_PUBLIC_KEY_HEX present),
- * the mirrored epoch-173 head installed, a live writer lease, and the passkey-session x-x6-verified-access header.
+ * her epoch-173 head (060c73c2) installed from a FROZEN fixture, a live writer lease, and the passkey-session
+ * x-x6-verified-access header. The fixture, never the live mirror (re-synced to main on every published epoch), is the
+ * parent: epochs are asserted relative to it (parent N, published N + 1).
  * It guards the edge side of the fix: the edge admits a no-fingerprint ordinary organ update only under the canonical id
  * (server/ball-transition.mjs NON_CANONICAL_MANIFEST_ID). The old-style id (no createdAt, no authorPeerId) binds neither
  * author nor time, so it stays refused here: the fix lives in the runtime (ball-loader.ts treePatch), never at the edge. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { X61HeadDurableObject, BOOTSTRAP_VERSION, canonicalBootstrap, digest, manifestIdCanon, manifestId } from '../head-do.mjs'
 import { classifyTransition, isT2OnlyOrgan, stripOrganHashSuffix } from '../../../../server/ball-transition.mjs'
 
 const W = new URL('../../../../', import.meta.url).pathname
 const ORIGIN = 'https://head.example.invalid'
-const HEAD = JSON.parse(readFileSync(W + 'mirror/home/auma/HEAD.json', 'utf8'))
-const code = sha => readFileSync(`${W}mirror/home/balls/${sha}.js`, 'utf8')
 const sha256 = text => createHash('sha256').update(text).digest('hex')
 const TARGET = 'auma-cortex'
+// The frozen parent: her epoch-173 head manifest and the organ sources the tests run or edit, copied from mirror/home at
+// an earlier commit (shared with pubfix-runtime-publish.spec.ts). Every other module of that head is read by its sha from the
+// content-addressed ball store; each read is checked against its sha.
+// DEPENDENCY: the other 69 epoch-173 modules must stay in mirror/home/balls. The head sync only adds there, but people have
+// pruned it by hand before (several earlier commits); pruning any of them fails this file at load (ENOENT).
+const FIXTURE = W + 'packages/experimental/webworker-runtime/tests/x6/fixtures/frozen-head/'
+const HEAD = JSON.parse(readFileSync(FIXTURE + 'HEAD.json', 'utf8'))
+const N = HEAD.epoch
+const code = sha => {
+  const frozen = `${FIXTURE}balls/${sha}.js`
+  const text = readFileSync(existsSync(frozen) ? frozen : `${W}mirror/home/balls/${sha}.js`, 'utf8')
+  assert.equal(sha256(text), sha, `module ${sha} does not match its sha`)
+  return text
+}
+assert.equal(await manifestIdCanon(HEAD), HEAD.ballId, 'the frozen parent head is not its own canonical manifest')
+assert.equal(HEAD.ballId.slice(0, 8), '060c73c2')
+assert.ok(existsSync(`${FIXTURE}balls/${HEAD.entries[TARGET].specifier.slice(5)}.js`), 'the target organ source is frozen')
 
 // Mirrors ball-loader.ts computeBallId: the old-style id treePatch gave a NON-governance candidate before the fix.
 function runtimeLegacyBallId(parentBallId, epoch, entries, modules) {
@@ -27,7 +44,10 @@ function runtimeLegacyBallId(parentBallId, epoch, entries, modules) {
 // Mirrors treePatch (ball-loader.ts) for { id, specifier, qualificationId } with config/disabled undefined.
 function buildCandidate({ canonicalId = false, peerId = 'auma-peer' } = {}) {
   const prevEntry = HEAD.entries[TARGET]
-  const source = code(prevEntry.specifier.slice(5)).replace(/name:\s*'auma_cortex'/, "name: 'auma-cortex'") + '\n// repair\n'
+  const before = code(prevEntry.specifier.slice(5))
+  const renamed = before.replace(/name:\s*'auma_cortex'/, "name: 'auma-cortex'")
+  assert.notEqual(renamed, before, 'the repair edit did not apply to the frozen cortex source')
+  const source = renamed + '\n// repair\n'
   const sha = sha256(source), specifier = `ball:${sha}`
   const nextEntry = {
     id: TARGET, specifier,
@@ -81,13 +101,24 @@ async function productionHead() {
   return { head, call }
 }
 
-async function publish(candidate, peerId = 'auma-peer') {
-  const { call } = await productionHead()
+async function publish(candidate, peerId = 'auma-peer', reserve = true) {
+  const { head, call } = await productionHead()
   const lease = await call('/_head/lease', { action: 'acquire', ownerPeerId: peerId, ttlMs: 30000 })
   assert.equal(lease.body.ok, true, JSON.stringify(lease.body))
+  // The production reservation route charges this exact candidate under the active writer lease.
+  // bootstrapCommit initialized the fixture ledger, as a fresh real bootstrap does.
+  if (reserve) {
+    const reservation = await call('/_head/lease', { action: 'reserve-id-promotion', ownerPeerId: peerId,
+      generation: lease.body.lease.generation, expectedBallId: HEAD.ballId, organId: TARGET,
+      candidateSha: candidate.ball.entries[TARGET].specifier.slice(5) })
+    assert.equal(reservation.status, 200, JSON.stringify(reservation.body))
+    assert.equal(reservation.body.ok, true)
+    assert.equal(reservation.body.used, 1)
+  }
   // Exactly the body broadcastCommit sends (ball-loader.ts), minus presence `peer`.
-  return call('/_head/ball', { type: 'ball:commit', fromPeerId: peerId, ball: candidate.ball, codeBySha: candidate.codeBySha,
+  const out = await call('/_head/ball', { type: 'ball:commit', fromPeerId: peerId, ball: candidate.ball, codeBySha: candidate.codeBySha,
     expectedParentBallId: candidate.ball.parentBallId, expectedEpoch: candidate.ball.epoch - 1, writerLease: lease.body.lease })
+  return { ...out, selectedHead: (await head.store.read()).ball }
 }
 
 const ownerSessionFor = parent => ({ ballId: parent.ballId, epoch: parent.epoch, expiresAt: Date.now() + 3_600_000,
@@ -112,7 +143,7 @@ test('classifyTransition: the old-style id is T2 NON_CANONICAL_MANIFEST_ID; the 
   assert.deepEqual(admitted.t2Reasons, [])
 })
 
-test('production head: an ordinary single-entry update under the OLD-STYLE id is refused 403 and the head stays at epoch 173', async () => {
+test('production head: an ordinary single-entry update under the OLD-STYLE id is refused 403 and the head stays at the parent epoch N', async () => {
   const { call } = await productionHead()
   const lease = await call('/_head/lease', { action: 'acquire', ownerPeerId: 'auma-peer', ttlMs: 30000 })
   assert.equal(lease.body.ok, true, JSON.stringify(lease.body))
@@ -126,15 +157,27 @@ test('production head: an ordinary single-entry update under the OLD-STYLE id is
   assert.equal(after.body.ok, true)
   const reacquired = await call('/_head/lease', { action: 'acquire', ownerPeerId: 'auma-peer', ttlMs: 30000 })
   assert.equal(reacquired.body.ballId, HEAD.ballId)
-  assert.equal(reacquired.body.epoch, 173)
+  assert.equal(reacquired.body.epoch, N)
 })
 
-test('production head: the same candidate with ONLY the ballId made canonical is accepted as T1 at epoch 174', async () => {
+test('production head: the canonical candidate with an authorized reservation is accepted as T1 at epoch N + 1', async () => {
   const candidate = buildCandidate({ canonicalId: true })
   const out = await publish(candidate)
   assert.equal(out.status, 200, JSON.stringify(out.body))
   assert.equal(out.body.ok, true)
   assert.equal(out.body.tier, 'T1')
-  assert.equal(out.body.epoch, 174)
+  assert.equal(out.body.epoch, N + 1)
   assert.equal(out.body.ballId, candidate.ball.ballId)
+  assert.equal(out.selectedHead.ballId, candidate.ball.ballId)
+})
+
+
+test('production head: canonical id and valid session without reservation is refused and preserves HEAD', async () => {
+  const candidate = buildCandidate({ canonicalId: true })
+  const out = await publish(candidate, 'auma-peer', false)
+  assert.equal(out.status, 403)
+  assert.equal(out.body.ok, false)
+  assert.equal(out.body.code, 'ID_PROMOTION_RESERVATION_REQUIRED')
+  assert.equal(out.selectedHead.ballId, HEAD.ballId)
+  assert.equal(out.selectedHead.epoch, N)
 })

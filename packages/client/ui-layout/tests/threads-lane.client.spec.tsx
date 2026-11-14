@@ -8,7 +8,8 @@ import { act, cleanup, fireEvent, render, within } from '@testing-library/react'
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { ThreadsLane, type ThreadListState, type ThreadSummary } from '../src/client/spatial/portal/ThreadsLane.tsx'
+import { ThreadsLane, type ThreadListState, type ThreadPinState, type ThreadSummary } from '../src/client/spatial/portal/ThreadsLane.tsx'
+import css from '../src/client/spatial/portal/ThreadsLane.module.css'
 import { installSpatialChrome, SPATIAL_CHROME_GLOBAL } from '../src/client/spatial/thread-chrome.ts'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -143,5 +144,128 @@ describe('the Spatial thread chrome the one-line header reads (Round 23)', () =>
     expect((globalThis as Record<string, unknown>)[SPATIAL_CHROME_GLOBAL]).not.toBeUndefined()
     second()
     expect((globalThis as Record<string, unknown>)[SPATIAL_CHROME_GLOBAL]).toBeUndefined()
+  })
+})
+
+// ── One line under the source note saying where her conversation is (thread-sync-marks.ts) ─────────────
+
+/** A stand-in for BroadcastChannel: records what the page posts and lets a test deliver her worker's messages. */
+class FakeSyncChannel {
+  static opened: FakeSyncChannel[] = []
+  readonly posted: unknown[] = []
+  closed = false
+  private readonly listeners = new Set<(event: { readonly data: unknown }) => void>()
+  constructor(readonly name: string) { FakeSyncChannel.opened.push(this) }
+  postMessage(message: unknown): void { this.posted.push(message) }
+  close(): void { this.closed = true }
+  addEventListener(_type: 'message', listener: (event: { readonly data: unknown }) => void): void { this.listeners.add(listener) }
+  removeEventListener(_type: 'message', listener: (event: { readonly data: unknown }) => void): void { this.listeners.delete(listener) }
+  deliver(data: unknown): void { act(() => { for (const listener of this.listeners) listener({ data }) }) }
+}
+
+/** What main renders for the source note, for each `hostPins` value (ThreadsLane.tsx at an earlier commit). */
+const MAIN_SOURCE_NOTE = {
+  host: `<p class="${css.source}" data-threads-source-note="true">Pins and archive: saved on the DSH host · filters and unread marks: this browser</p>`,
+  viewer: `<p class="${css.source}" data-threads-source-note="true">Pins, archive, filters and unread marks: this browser only (host pin/archive not wired)</p>`,
+} as const
+
+function mountMarksLane(hostPins: boolean) {
+  const store = createSnapshotStore<ThreadListState>({
+    ids: [sid('t-1')],
+    byId: { [sid('t-1')]: row('t-1', 'hello', { title: 'hello', updatedAt: 3 }) },
+    phase: 'ready',
+  })
+  const pins = createSnapshotStore<ThreadPinState>({ pinnedSessionIds: [], archivedSessionIds: [] })
+  const view = render(
+    <ThreadsLane
+      useSessions={bindSnapshotSelector(store)}
+      openThread={() => {}}
+      openConversation={() => {}}
+      {...(hostPins
+        ? { useWorkspaces: bindSnapshotSelector(pins), setPinned: async () => {}, setArchived: async () => {} }
+        : {})}
+    />,
+  )
+  const note = (): HTMLElement => {
+    const element = view.container.querySelector<HTMLElement>('[data-threads-source-note]')
+    if (element === null) throw new Error('no source note')
+    return element
+  }
+  const cloudNotes = (): HTMLElement[] => Array.from(view.container.querySelectorAll<HTMLElement>('[data-threads-cloud-note]'))
+  return { view, note, cloudNotes }
+}
+
+/** The source note block exactly as main renders it: the same element, last in its block, with no line after it. */
+function expectMainSourceNote(lane: ReturnType<typeof mountMarksLane>, hostPins: boolean): void {
+  expect(lane.note().outerHTML).toBe(hostPins ? MAIN_SOURCE_NOTE.host : MAIN_SOURCE_NOTE.viewer)
+  expect(lane.note().nextElementSibling).toBeNull()
+  expect(lane.cloudNotes()).toHaveLength(0)
+}
+
+// The lane listens only on a page that has an id, which exists only while thread sync is on.
+const SYNC_PAGE = 'cccccccccccccccc'
+const state = (at: number, mode: string, role: string, footer: string) => ({ v: 1, kind: 'state', at, mode, role, footer, worker: SYNC_PAGE })
+const READER_CLOUD = 'Reading her from her cloud, read at 14:05. She answers in Chrome on Mac. Nothing typed here is saved.'
+const READER_OLDER = 'Reading the older copy kept in this browser. She answers in Chrome on Mac. Nothing typed here is saved.'
+
+describe('the Threads lane: where her conversation is', () => {
+  afterEach(() => { vi.unstubAllGlobals(); FakeSyncChannel.opened = [] })
+
+  it('no state: the source note block renders exactly as main, for both hostPins values', () => {
+    vi.stubGlobal('BroadcastChannel', FakeSyncChannel)
+    for (const hostPins of [true, false]) {
+      const lane = mountMarksLane(hostPins)
+      expect(lane.view.container.querySelector('[data-threads-source]')?.getAttribute('data-threads-source')).toBe(hostPins ? 'host' : 'viewer')
+      expectMainSourceNote(lane, hostPins)
+      cleanup()
+    }
+    // With no page id (thread sync off) the lane opens no channel at all, as on main.
+    expect(FakeSyncChannel.opened).toHaveLength(0)
+    // No BroadcastChannel at all: the same.
+    vi.stubGlobal('BroadcastChannel', undefined)
+    for (const hostPins of [true, false]) {
+      expectMainSourceNote(mountMarksLane(hostPins), hostPins)
+      cleanup()
+    }
+  })
+
+  it('writer state: one line under the note, the footer word for word, with its role', () => {
+    vi.stubGlobal('__DSH_THREAD_SYNC_PAGE__', SYNC_PAGE)
+    vi.stubGlobal('BroadcastChannel', FakeSyncChannel)
+    const lane = mountMarksLane(true)
+    const [channel] = FakeSyncChannel.opened
+    if (channel === undefined) throw new Error('no channel')
+    expect(channel.name).toBe('aukora-x6-thread-sync')
+    channel.deliver(state(1_000, 'on', 'writer', 'In her cloud 14:05.'))
+    const lines = lane.cloudNotes()
+    expect(lines).toHaveLength(1)
+    const [line] = lines
+    if (line === undefined) throw new Error('no cloud line')
+    expect(line.tagName).toBe('P')
+    expect(line.className).toBe(css.source)
+    expect(line.textContent).toBe('In her cloud 14:05.')
+    expect(line.getAttribute('data-threads-cloud-role')).toBe('writer')
+    // Directly under the source note, which is itself unchanged.
+    expect(lane.note().nextElementSibling).toBe(line)
+    expect(lane.note().outerHTML).toBe(MAIN_SOURCE_NOTE.host)
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('reader state: the long reader sentence shows whole; mode off still tells a reader; off with no footer is main', () => {
+    vi.stubGlobal('__DSH_THREAD_SYNC_PAGE__', SYNC_PAGE)
+    vi.stubGlobal('BroadcastChannel', FakeSyncChannel)
+    const lane = mountMarksLane(false)
+    const [channel] = FakeSyncChannel.opened
+    if (channel === undefined) throw new Error('no channel')
+    channel.deliver(state(1_000, 'pull', 'reader', READER_CLOUD))
+    expect(lane.cloudNotes().map(line => line.textContent)).toEqual([READER_CLOUD])
+    expect(lane.cloudNotes()[0]?.getAttribute('data-threads-cloud-role')).toBe('reader')
+    // A reader is told nothing typed is saved in mode off too: the line follows the footer, never the mode.
+    channel.deliver(state(2_000, 'off', 'reader', READER_OLDER))
+    expect(lane.cloudNotes().map(line => line.textContent)).toEqual([READER_OLDER])
+    expect(lane.cloudNotes()[0]?.getAttribute('data-threads-cloud-role')).toBe('reader')
+    // Mode off with an empty footer: the lane renders as main again.
+    channel.deliver(state(3_000, 'off', 'writer', ''))
+    expectMainSourceNote(lane, false)
   })
 })

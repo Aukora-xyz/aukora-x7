@@ -123,13 +123,14 @@ test('one total deadline bounds reconciliation reads and prevents late durable c
     let count = 0
     const broker = fixture({ hook: async () => {
       count++; (count === 1 ? first : second).resolve()
-      await new Promise(resolve => setTimeout(resolve, 6000))
+      // The deadline is 30 s (was 10 s); each read takes 20 s, under it, and two exceed it together.
+      await new Promise(resolve => setTimeout(resolve, 20000))
     } })
     const pending = broker.request({ action: 'reconcile_proposal' })
-    await first.promise; context.mock.timers.tick(6000)
-    await second.promise; context.mock.timers.tick(4001)
+    await first.promise; context.mock.timers.tick(20000)
+    await second.promise; context.mock.timers.tick(10001)
     assert.equal((await pending).status, 408)
-    context.mock.timers.tick(6000); await new Promise(resolve => setImmediate(resolve))
+    context.mock.timers.tick(20000); await new Promise(resolve => setImmediate(resolve))
     assert.equal(broker.calls.length, 2); assert.equal(broker.messages.length, 1)
   } finally { context.mock.timers.reset() }
 })

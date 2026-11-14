@@ -36,6 +36,28 @@ export const FROZEN_FILES: readonly string[] = Object.freeze([
   'server/deploy-cloudflare.mjs',
   'server/build-preview.mjs',
   'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
+  'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', // the cell-call journal runs inside the cell host
+  // the two-hosts handoff calls the edge and writes the journal
+  'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+  // ---- CORDECHO block begin ----
+  // the Cord commit rule calls the edge, writes the journal and commits the head she holds
+  'packages/experimental/webworker-runtime/src/x6/cord-run.ts',
+  // ---- CORDECHO block end ----
+  // ---- TOOLS block begin ----
+  // her tool registry: the policy that qualifies and mounts the tools she writes (tier T1, a sealed cell per tool)
+  'packages/experimental/webworker-runtime/src/x6/tool-registry.ts',
+  // ---- TOOLS block end ----
+  // ---- MENGERHIVE block begin ----
+  // the Menger split-body runner and its wave/observability oracle call the edge and write the edge cell journal
+  'packages/experimental/webworker-runtime/src/x6/menger-run.ts',
+  'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
+  // ---- MENGERHIVE block end ----
+  // ---- MANDATE block begin ----
+  // the owner mandate: its policy, and the card's code that decides the terms he is shown before his passkey
+  'deploy/cloudflare/src/owner-mandate.mjs',
+  'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts',
+  'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
+  // ---- MANDATE block end ----
   'mirror/home/auma/HEAD.json',
   'mirror/home/auma/seed/receipts.v3.jsonl',
   // The vitest setup files every UI spec and large-store-boot.spec.ts run inside (vitest.config.ts setupFiles): a mock
@@ -71,6 +93,10 @@ export const FROZEN_FILES: readonly string[] = Object.freeze([
   'packages/client/ui-layout/src/client/spatial/aumlok/repo-proposal.ts',
   'packages/client/ui-layout/src/client/spatial/aumlok/class3-approval.ts',
   'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx',
+  'deploy/cloudflare/src/capsule-canon.mjs',
+  'deploy/cloudflare/src/capsule-envelope.mjs',
+  'deploy/cloudflare/src/capsule-canon.vectors.json',
+  'deploy/cloudflare/src/capsule-act-shapes.mjs',
 ])
 
 export const FROZEN_ABSENT_FILES: readonly string[] = Object.freeze([
@@ -114,6 +140,27 @@ export const OPEN_NEW_PATHS: readonly string[] = Object.freeze([
 export const CLOSED_INSIDE_OPEN: readonly string[] = Object.freeze([
   'packages/experimental/webworker-runtime/src/x6/ball-loader.ts',
   'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
+  'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', // the cell-call journal runs inside the cell host
+  // the two-hosts handoff calls the edge and writes the journal
+  'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+  // ---- CORDECHO block begin ----
+  // the Cord commit rule calls the edge, writes the journal and commits the head she holds
+  'packages/experimental/webworker-runtime/src/x6/cord-run.ts',
+  // ---- CORDECHO block end ----
+  // ---- TOOLS block begin ----
+  // her tool registry: the policy that qualifies and mounts the tools she writes (tier T1, a sealed cell per tool)
+  'packages/experimental/webworker-runtime/src/x6/tool-registry.ts',
+  // ---- TOOLS block end ----
+  // ---- MENGERHIVE block begin ----
+  // the Menger split-body runner and its wave/observability oracle call the edge and write the edge cell journal
+  'packages/experimental/webworker-runtime/src/x6/menger-run.ts',
+  'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
+  // ---- MENGERHIVE block end ----
+  // ---- MANDATE block begin ----
+  // the owner mandate's card: it decides the terms he is shown before his passkey
+  'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts',
+  'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
+  // ---- MANDATE block end ----
   'packages/experimental/webworker-runtime/src/storage/**',
 ])
 

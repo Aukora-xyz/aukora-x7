@@ -9,7 +9,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import {
-  approveAndSendOutward, outwardWords, readStagedOutward, STAGED_OUTWARD_CHANGE, STAGED_OUTWARD_PATH, type StagedOutwardRead,
+  approveAndSendOutward, onReasonChange, outwardMaybeSent, outwardWords, readStagedOutward, REASON_CHANGED_KEY, reasonChangedFor,
+  STAGED_OUTWARD_CHANGE, STAGED_OUTWARD_PATH, type StagedOutwardRead,
 } from '../aumlok/outward-class3.ts'
 // Requests this browser has sent, by canonical body, so a post that has gone out is not offered again, by this card or
 // the chat card, while the browser's record holds (one record for the page, `aumlok/outward-sent.ts`).
@@ -76,11 +77,15 @@ export function OutwardApprovalCell(
   // (the chat card), which tells this one itself: a `storage` event never fires in the page that wrote it.
   useEffect(() => {
     if (!active) return
-    const onStorage = (event: StorageEvent): void => { if (event.key === SENT_KEY) setTick(n => n + 1) }
+    // The same for an ask the edge refused because its reason changed: here, or in another tab.
+    const onStorage = (event: StorageEvent): void => {
+      if (event.key === SENT_KEY || event.key === REASON_CHANGED_KEY) setTick(n => n + 1)
+    }
     globalThis.addEventListener('storage', onStorage)
     // This card's own send reads again when it settles.
     const off = onSentChange(() => { if (!busyRef.current) setTick(n => n + 1) })
-    return () => { globalThis.removeEventListener('storage', onStorage); off() }
+    const offReason = onReasonChange(() => { if (!busyRef.current) setTick(n => n + 1) })
+    return () => { globalThis.removeEventListener('storage', onStorage); off(); offReason() }
   }, [active])
   useLiveEvents(active, (event) => {
     if (event.kind !== 'mirror-updated') return
@@ -91,7 +96,8 @@ export function OutwardApprovalCell(
     }
   })
 
-  const staged = read.kind === 'staged' && !wasSent(read.staged.canonical) ? read.staged : null
+  // An ask the edge refused because its reason changed is never offered again, from the moment it answered: she asks again.
+  const staged = read.kind === 'staged' && !wasSent(read.staged.canonical) && !reasonChangedFor(read.staged) ? read.staged : null
   const shows = !(staged === null && read.kind !== 'malformed' && outcome === null)
   useEffect(() => { onShown?.(shows) }, [shows, onShown])
   useEffect(() => () => { onShown?.(false) }, [onShown])
@@ -136,7 +142,7 @@ export function OutwardApprovalCell(
       // Whatever failed, the passkey may already have approved and the post may have gone out.
       markSent(staged.canonical)
       setOutcome({ state: 'unknown', text: `No clear answer (${error instanceof Error ? error.message : String(error)}). `
-        + 'It may have gone out: check GitHub before approving it again.' })
+        + outwardMaybeSent(staged) })
     } finally {
       endApproval(approvalKey)
       busyRef.current = false

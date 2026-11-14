@@ -47,7 +47,9 @@ test('a repository answer that echoes a configured secret is refused by the brok
 })
 
 test('her repo tools are read-only OpenAI-shape functions and other names fall through to the wake untouched', async () => {
-  assert.deepEqual(CLOUD_WAKE_REPO_TOOL_NAMES, ['readRepoFile', 'searchRepository', 'recentCommits'])
+  // The five reads of her own work joined the list (all read-only).
+  // Her two talk reads (Linear, relay) joined the list (read-only, evidence).
+  assert.deepEqual(CLOUD_WAKE_REPO_TOOL_NAMES, ['readRepoFile', 'searchRepository', 'recentCommits', 'listMyBranches', 'execRuns', 'execLogTail', 'proposalChecks', 'stagedProposal', 'linearRead', 'relayRead'])
   for (const definition of CLOUD_WAKE_REPO_TOOLS) assert.equal(definition.function.parameters.additionalProperties, false)
   assert.equal(await runCloudWakeRepoTool('appendWakeCheckpoint', {}, { env: {}, seedId: SEED }), null)
   assert.equal(await runCloudWakeRepoTool('readMirrorText', { path: 'x' }, { env: {}, seedId: SEED }), null)
@@ -215,7 +217,7 @@ test('one wake model turn goes through the door with her tools, and a tool call 
   const out = await cloudWakeModelTurn({ env: { ANTHROPIC_API_KEY: 'sk-ant-api03-FIXTURE' }, provider: 'anthropic', toolChoice: 'auto', maxTokens: 2048,
     messages: [{ role: 'system', content: 'You are Auma.' }, { role: 'user', content: '{}' }], tools: CLOUD_WAKE_REPO_TOOLS, fetchImpl })
   assert.equal(sent[0].url, 'https://api.anthropic.com/v1/messages')
-  assert.deepEqual(sent[0].body.tools.map(item => item.name), ['readRepoFile', 'searchRepository', 'recentCommits'])
+  assert.deepEqual(sent[0].body.tools.map(item => item.name), ['readRepoFile', 'searchRepository', 'recentCommits', 'listMyBranches', 'execRuns', 'execLogTail', 'proposalChecks', 'stagedProposal', 'linearRead', 'relayRead']) // the wake
   assert.equal(out.ok, true)
   assert.deepEqual(out.message.tool_calls, [{ id: 'toolu_9', type: 'function', function: { name: 'recentCommits', arguments: '{}' } }])
   const run = await runCloudWakeRepoTool(out.message.tool_calls[0].function.name, JSON.parse(out.message.tool_calls[0].function.arguments),

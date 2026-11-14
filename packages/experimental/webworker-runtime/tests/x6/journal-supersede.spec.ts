@@ -574,6 +574,25 @@ describe('a cloud browser is never locked out by a transient failure', () => {
     expect(cloud.posts).toBe(posts)
   })
 
+  // An old-document tab (no meta) in a browser holding the reader mark (another tab's, or
+  // one left from an earlier on-period) is refused 403 READER_WINDOW by an edge that is on. That is the mark, not her
+  // cloud refusing the batch: it stays a retry, never a sticky MIRROR_DELIVERY_REFUSED, and is sent once it is let through.
+  it('a reader-mark refusal (403 READER_WINDOW) is retried, never a sticky conflict', async () => {
+    const vfs = await boot()
+    cloud.deliveryRefusal = { status: 403, code: 'READER_WINDOW' }
+    await save(vfs, '/dsh/home/auma/marked.md', 'kept\n')
+    await persistence.sync().catch(() => {})
+    expect(persistence.mirror.conflict).toBeNull()
+    expect(persistence.mirror.transient).not.toBeNull()
+    cloud.deliveryRefusal = null
+    for (let i = 0; i < 50 && cloud.text('/dsh/home/auma/marked.md') === null; i += 1) {
+      await persistence.sync().catch(() => {})
+      if (cloud.text('/dsh/home/auma/marked.md') === null) await pause(20)
+    }
+    expect(cloud.text('/dsh/home/auma/marked.md')).toBe('kept\n')
+    expect(persistence.mirror.conflict).toBeNull()
+  })
+
   it('a legacy hold with a cloud that moved is never re-sent: it fails closed', async () => {
     let vfs = await boot()
     await save(vfs, '/dsh/home/auma/a.md', 'a\n'); await persistence.sync()
@@ -1175,6 +1194,9 @@ describe('the pure rules behind the lockout fixes', () => {
     expect(deliveryRefusal(408, '{"code":"REQUEST_BODY_TIMEOUT"}').kind).toBe('too-slow')
     expect(deliveryRefusal(401, '').kind).toBe('signed-out')
     expect(deliveryRefusal(503, '').kind).toBe('transient')
+    // The reader mark's 403 is a retry; any other 403 is still a refusal.
+    expect(deliveryRefusal(403, '{"ok":false,"code":"READER_WINDOW","message":"x"}')).toEqual({ kind: 'transient', code: 'READER_WINDOW' })
+    expect(deliveryRefusal(403, '{"code":"SAME_ORIGIN_BROWSER_REQUIRED"}')).toEqual({ kind: 'refused', code: 'SAME_ORIGIN_BROWSER_REQUIRED' })
   })
   it('a resync batch, serialized as it is sent, stays within one cloud request even with thousands of small entries', () => {
     const local = new Map<string, Entry>(Array.from({ length: 3000 }, (_, i) => [`/dsh/home/auma/n/${String(i)}`,

@@ -31,6 +31,7 @@ import { Lead, PortalButton, StatusPill } from '../primitives/index.ts'
 import { ErrorLine } from '../x5/common.tsx'
 import css from './ThreadsLane.module.css'
 import { threadPlaceOf, type ThreadPlace } from '../meta-workspace.ts'
+import { useThreadSyncMarks } from './thread-sync-marks.ts'
 
 // ── Structural views of the live stores (assignable from the real DSH types, no new dependency) ─────────────────────
 
@@ -341,6 +342,7 @@ function ThreadsLaneBody({
   const [renameBusy, setRenameBusy] = useState<SessionId | null>(null)
   // The name is selected once, when its field opens (not again when the window gets the focus back).
   const renameSelected = useRef<SessionId | null>(null)
+  const cloud = useThreadSyncMarks()
 
   // Card times read "5 min ago"; a minute tick keeps them honest without a re-render per second.
   useEffect(() => {
@@ -663,6 +665,10 @@ function ThreadsLaneBody({
             ? 'Pins and archive: saved on the DSH host · filters and unread marks: this browser'
             : 'Pins, archive, filters and unread marks: this browser only (host pin/archive not wired)'}
         </p>
+        {/* Where her conversation is, in her worker's own words (thread-sync-marks.ts); none, nothing. */}
+        {cloud === null || cloud.footer === '' ? null : (
+          <p className={css.source} data-threads-cloud-note data-threads-cloud-role={cloud.role}>{cloud.footer}</p>
+        )}
       </div>
     </div>
   )

@@ -139,3 +139,43 @@ describe('x6_consult / x6_swarm acquire their own parent turn', () => {
     expect(h.doors()).toHaveLength(0)
   })
 })
+
+describe('x6_swarm workers are consults, with a consult\'s room', () => {
+  it('a number left out takes the consult default 32000; a number past the ceiling is held at 128000; the stated cap says so', async () => {
+    const h = await consultHarness()
+    // Before: a worker defaulted to 2048 and was held at 8192, and its time at 30 s (held at 60 s).
+    const plain = await h.run('x6_swarm', { tasks: [{ provider: 'deepseek', model: 'deepseek-chat', prompt: 'one' }] }) as { guarantees: { maxTokensCap: number } }
+    expect(plain).toMatchObject({ ok: true, guarantees: { maxTokensCap: 128_000 } })
+    const big = await h.run('x6_swarm', { targets: [{ provider: 'deepseek', model: 'deepseek-chat' }], prompt: 'two', maxTokens: 999_999, timeoutMs: 99_999_999 })
+    expect(big).toMatchObject({ ok: true })
+    const small = await h.run('x6_swarm', { targets: [{ provider: 'deepseek', model: 'deepseek-chat' }], prompt: 'three', maxTokens: 9000 })
+    expect(small).toMatchObject({ ok: true })
+    expect(h.doors().map(call => (call.body as { max_tokens: number }).max_tokens)).toEqual([32_000, 128_000, 9000])
+  })
+
+  it('a time left out takes the consult default 600000 ms; a time past the ceiling is held at 1800000 ms', async () => {
+    const h = await consultHarness()
+    // Each worker's clock is the consult's own AbortSignal.timeout(ms): record the ms it is given. The page's other
+    // timers (HEAD, transcript) are 20 s or less, so a clock of 30 s or more is a worker's.
+    const clock = vi.spyOn(AbortSignal, 'timeout')
+    const workerClocks = () => clock.mock.calls.map(([ms]) => ms).filter(ms => ms >= 30_000)
+    expect(await h.run('x6_swarm', { tasks: [{ provider: 'deepseek', model: 'deepseek-chat', prompt: 'one' }] })).toMatchObject({ ok: true })
+    // Before: 30000 when left out, and held at 60000.
+    expect(workerClocks()).toEqual([600_000])
+    expect(await h.run('x6_swarm', { targets: [{ provider: 'deepseek', model: 'deepseek-chat' }], prompt: 'two', timeoutMs: 99_999_999 })).toMatchObject({ ok: true })
+    expect(workerClocks()).toEqual([600_000, 1_800_000])
+    expect(await h.run('x6_swarm', { tasks: [{ provider: 'deepseek', model: 'deepseek-chat', prompt: 'three' }], timeoutMs: 900_000 })).toMatchObject({ ok: true })
+    expect(workerClocks()).toEqual([600_000, 1_800_000, 900_000])
+  })
+
+  it('runs up to 12 workers at once (was 6); a 13th task is left out and the stated cap says 12', async () => {
+    const h = await consultHarness()
+    const tasks = Array.from({ length: 13 }, (_v, index) => ({ provider: 'deepseek', model: 'deepseek-chat', prompt: `task ${String(index)}` }))
+    const out = await h.run('x6_swarm', { tasks }) as { guarantees: { maxTasks: number } }
+    expect(out).toMatchObject({ ok: true, guarantees: { maxTasks: 12 } })
+    expect(h.doors()).toHaveLength(12)
+    const targets = await h.run('x6_swarm', { targets: Array.from({ length: 13 }, () => ({ provider: 'deepseek', model: 'deepseek-chat' })), prompt: 'shared' })
+    expect(targets).toMatchObject({ ok: true })
+    expect(h.doors()).toHaveLength(24)
+  })
+})

@@ -99,12 +99,11 @@ export function applySpatial(ctx: ClientContext): void {
     ctx.slots.entries('main').some(entry => entry.options.key === id))
   layout.attachPanels(instance.actions, () => instance.getSnapshot().activeSurface)
 
-  // THE PAGE'S READER OF HER FILES, FOR THE CHAT LANE (Lane B3): the Fingerprint card reads her staged Pearl and her staged
-  // outward request through the same reader as Sovereignty, once the files service is there.
+  // THE PAGE'S READER OF HER FILES (Lane B3), filled by Work's install once the files service is there. The frame reads
+  // what waits in her home through it, as rows in Notices (nothing waits over the chat).
   const homeReader = createWorkReaderDoor()
   installWorkSurface(ctx, homeReader)
-  // The approval pill opens Sovereignty the way its launcher does (a contained centre surface).
-  installPortal(ctx, (id) => { layout.openSurface(id, undefined, 'contained') })
+  installPortal(ctx)
 
   // THE HOST'S OWN RENAME (Round 23), the call the classic sidebar makes (ui-workspace `sessions.using(...).rename`): the
   // durable title lives in the session's event log, so the Threads card and the open thread's header both read it from

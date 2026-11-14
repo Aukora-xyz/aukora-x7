@@ -222,10 +222,13 @@ export class WorkerTunnel {
    * Open the tunnel: the worker assembles its host from this frame.
    * @param image - VFS image URL the worker fetches.
    * @param overlays - Ordered data overlay URLs applied before boot.
+   * @param page - the thread sync: this page's id; the worker puts it on its thread-sync messages (client/reader-window.ts).
+   *   Given only while thread sync is switched on (`startPageThreadSync`), and then the frame says so
+   *   (`threadSync: 'on'`); without it the frame is exactly main's.
    */
-  init(image: string, overlays: readonly string[] = []): void {
+  init(image: string, overlays: readonly string[] = [], page?: string): void {
     // Announce the optional frames this page understands; the worker sends no other optional frame.
-    this.worker.postMessage({ t: 'init', image, overlays, features: [BOOT_PHASE_FEATURE] })
+    this.worker.postMessage({ t: 'init', image, overlays, features: [BOOT_PHASE_FEATURE], ...(page === undefined ? {} : { page, threadSync: 'on' }) })
   }
 
   /** Fetch-shaped entry: one request frame, one Response (streamed when the worker streams). */
@@ -596,7 +599,8 @@ export class WorkerTunnel {
         // stalled boot says where it stopped. A page without a window (tests) simply has nobody listening.
         const target = globalThis as { dispatchEvent?: (event: Event) => boolean }
         if (typeof target.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
-          const detail = { phase: frame.phase, ...(frame.bytes === undefined ? {} : { bytes: frame.bytes }) }
+          const detail = { phase: frame.phase, ...(frame.bytes === undefined ? {} : { bytes: frame.bytes }),
+            ...(frame.of === undefined ? {} : { of: frame.of }) } // "N of M" while her threads are read
           target.dispatchEvent(new CustomEvent(BOOT_PHASE_EVENT, { detail }))
         }
         return

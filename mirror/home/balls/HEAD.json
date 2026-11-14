@@ -15,7 +15,7 @@
     },
     "auma-cortex": {
       "id": "auma-cortex",
-      "specifier": "ball:a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
+      "specifier": "ball:3f94794c3ada7771a62abbf4246ca452792f47b72438821a7a1c1f2e21a081ca",
       "config": {},
       "disabled": false,
       "previousSpecifiers": [],
@@ -23,7 +23,7 @@
     },
     "auma-eyes": {
       "id": "auma-eyes",
-      "specifier": "ball:d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
+      "specifier": "ball:16049900eabf653c09b99c8e4973a07f8ad9fc98aa5611fc1f2af8170d561264",
       "config": {},
       "disabled": false,
       "previousSpecifiers": [],
@@ -111,7 +111,7 @@
     },
     "seed-continuity": {
       "id": "seed-continuity",
-      "specifier": "ball:0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
+      "specifier": "ball:f474b6538ee98baf22c8c3a2d444209f1947aaf2339e0b4187d9aed2440408aa",
       "config": {
         "governance": true
       },
@@ -229,20 +229,20 @@
       "size": 13637,
       "createdAt": 0
     },
-    "a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825": {
-      "sha256": "a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
-      "specifier": "ball:a9eaca8d75f73c26c1f4c5293b3acdae745867f67c46822861da716598250825",
+    "3f94794c3ada7771a62abbf4246ca452792f47b72438821a7a1c1f2e21a081ca": {
+      "sha256": "3f94794c3ada7771a62abbf4246ca452792f47b72438821a7a1c1f2e21a081ca",
+      "specifier": "ball:3f94794c3ada7771a62abbf4246ca452792f47b72438821a7a1c1f2e21a081ca",
       "name": "auma-cortex",
       "description": "Genesis seed organ auma-cortex",
       "size": 13289,
       "createdAt": 0
     },
-    "d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63": {
-      "sha256": "d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
-      "specifier": "ball:d4b79219f5f1d3452301a7a14727daa22ab5332ac76d66a83e91b6d4301b5a63",
+    "16049900eabf653c09b99c8e4973a07f8ad9fc98aa5611fc1f2af8170d561264": {
+      "sha256": "16049900eabf653c09b99c8e4973a07f8ad9fc98aa5611fc1f2af8170d561264",
+      "specifier": "ball:16049900eabf653c09b99c8e4973a07f8ad9fc98aa5611fc1f2af8170d561264",
       "name": "auma-eyes",
       "description": "Genesis seed organ auma-eyes",
-      "size": 3089,
+      "size": 3443,
       "createdAt": 0
     },
     "5a368715b9fbaaee4e73672e15e82d6d17eb2b546958d71644c8e8ae68942a48": {
@@ -325,9 +325,9 @@
       "size": 320,
       "createdAt": 0
     },
-    "0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359": {
-      "sha256": "0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
-      "specifier": "ball:0c71512b620484e8834edc92b6d6bc8318d68281832fa22e23835ce5b4042359",
+    "f474b6538ee98baf22c8c3a2d444209f1947aaf2339e0b4187d9aed2440408aa": {
+      "sha256": "f474b6538ee98baf22c8c3a2d444209f1947aaf2339e0b4187d9aed2440408aa",
+      "specifier": "ball:f474b6538ee98baf22c8c3a2d444209f1947aaf2339e0b4187d9aed2440408aa",
       "name": "seed-continuity",
       "description": "Genesis seed organ seed-continuity",
       "size": 15295,
@@ -430,5 +430,5 @@
       "createdAt": 0
     }
   },
-  "ballId": "e70d86bd8972997f283291ab5c69d589ec20283ef12045b4eedea8832d772cfd"
+  "ballId": "4f0b5750e8cfd79c3d3da00a835ff1e7a9b9df1769908a66d77be500d4fab398"
 }

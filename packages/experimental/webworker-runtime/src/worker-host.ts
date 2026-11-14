@@ -37,8 +37,10 @@ import type { BootPhase } from './transport/frames.ts'
 import { inflateImage, inflateImageStream } from './storage/image-gzip.ts'
 import { loadVfsImage, loadVfsOverlay, MemoryVfs } from './storage/memory.ts'
 import { requireActiveVfs, setActiveVfs } from './storage/active.ts'
-import { attachIdbPersistence } from './storage/idb-persist.ts'
+import { attachIdbPersistence, persistence } from './storage/idb-persist.ts' // Persistence (for her writer)
 import { modelDoorFor } from './model-doors.ts'
+import { bootThreadSyncIfOn, readerRefusal } from './storage/thread-sync.ts' // Runs only when switched on
+import { startThreadWriter, writerNet } from './storage/thread-writer.ts'
 import { idleFetch, watchIdleFetchBytes } from './idle-fetch.ts'
 import { setTextViewer } from './shell/process/xdg-open.ts'
 import { packPackageAssets } from './package-assets.ts'
@@ -47,6 +49,7 @@ import {
 } from './image-layout.ts'
 import { parseImageManifest, type ImageManifest } from './image-manifest.ts'
 import { mountX6BallRuntime, type X6BallRuntime } from './x6/ball-loader.ts'
+import { VOICE_LEVEL } from './x6/voice-marks.ts'
 import { eyesWithPageFallback } from './x6/page-eyes-bridge.ts'
 import { bufferedRequestBody, bufferedStreamInit, requestStreamsSupported } from './transport/stream-body.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
@@ -89,6 +92,10 @@ function installModelDoors(): void {
   scope.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const isRequest = typeof Request === 'function' && input instanceof Request
     const url = isRequest ? String(requestUrl === undefined ? (input as Request).url : requestUrl.call(input)) : String(input)
+    // While this page is a reader (storage/thread-sync.ts), every model door and every
+    // Same-origin call that is not a GET or HEAD is refused with the reader sentence; off for any other page.
+    const readerRefused = readerRefusal(url, origin, init?.method ?? (isRequest ? input.method : 'GET'))
+    if (readerRefused !== null) return Promise.reject(new TypeError(readerRefused))
     // Round 36: where the host has no eyes (the edge answers 501), the open page looks for her (x6/page-eyes-bridge.ts).
     if (!isRequest && url === `${origin}/_host/eyes` && init?.method === 'POST' && (init.body === undefined || typeof init.body === 'string')) {
       return eyesWithPageFallback(() => inner(url, init), init.body, { id: randomUUID(), vfs: () => {
@@ -208,6 +215,10 @@ export interface WorkerHostOptions {
   readonly bootProgressMs?: number
   /** Optional frames the page announced in its init frame (TunnelInitFrame.features). */
   readonly pageFeatures?: readonly string[]
+  /** The id the page gave this worker at init (thread-sync messages carry it). */
+  readonly pageId?: string
+  /** `on` only when the page's boot document carried the switch as exactly `on`; absent, nothing runs. */
+  readonly threadSync?: 'on'
 }
 
 /** A boot read that receives no bytes for this long fails (the image, an overlay, a lazy archive). Not a total cap. */
@@ -217,8 +228,8 @@ export const BOOT_PROGRESS_MS = 5_000
 
 /** The boot step reporter: the current step, and a byte heartbeat on a TIME interval for every active transfer. */
 export interface BootProgress {
-  /** Enter a boot step; the page is told at once. */
-  enter(phase: BootPhase): void
+  /** Enter a boot step; the page is told at once (with "N of M" for `threads`). */
+  enter(phase: BootPhase, of?: readonly [done: number, total: number]): void
   /** Stop the heartbeat (the tree is serving, or the boot failed). */
   stop(): void
 }
@@ -230,7 +241,9 @@ export interface BootProgress {
  * @param everyMs - Heartbeat interval.
  * @returns The reporter; call stop() when the boot ends either way.
  */
-export function bootProgress(send: (phase: BootPhase, bytes?: number) => void, everyMs = BOOT_PROGRESS_MS): BootProgress {
+export function bootProgress(
+  send: (phase: BootPhase, bytes?: number, of?: readonly [number, number]) => void, everyMs = BOOT_PROGRESS_MS,
+): BootProgress {
   let phase: BootPhase = 'image'
   let received = 0
   let reported = 0
@@ -242,9 +255,9 @@ export function bootProgress(send: (phase: BootPhase, bytes?: number) => void, e
     send(phase, received)
   }, everyMs)
   return {
-    enter(next) {
+    enter(next, of) {
       phase = next
-      send(next)
+      send(next, undefined, of) // `of` ("N of M" while her threads are read)
     },
     stop() {
       clearInterval(heartbeat)
@@ -331,7 +344,7 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
     let boot: BootProgress | undefined
     try {
       // The page shows which boot step this is on (boot-page.ts), and how much of the image has arrived.
-      const progress = bootProgress((phase, bytes) => { tunnel.bootPhase(phase, bytes) }, options.bootProgressMs)
+      const progress = bootProgress((phase, bytes, of) => { tunnel.bootPhase(phase, bytes, of) }, options.bootProgressMs)
       boot = progress
       progress.enter('image')
       const home = join(root, IMAGE_HOME_DIRECTORY)
@@ -353,6 +366,11 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       await attachIdbPersistence(mounted, [join(root, 'home'), join(root, 'workspace')])
       setActiveVfs(mounted)
       vfs = mounted
+      // The role from local facts; a reader is read-only before any call and pulls her
+      // threads into memory before the tree boots; any other page reads the mode once without waiting for it.
+      // All of it only when the boot document carried the switch as exactly `on`; otherwise null at once,
+      // with nothing read, set, posted or asked (this page boots as main).
+      const threadSync = await bootThreadSyncIfOn(options.threadSync, { vfs: mounted, enter: (of) => { progress.enter('threads', of) }, pageId: options.pageId ?? null })
 
       const manifestPath = options.manifestPath ?? join(root, IMAGE_MANIFEST_PATH)
       const manifest = readImageManifest(mounted, manifestPath)
@@ -414,7 +432,8 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       let x6Ball: X6BallRuntime | undefined
       progress.enter('head')
       try {
-        x6Ball = await mountX6BallRuntime(ctx as never, mounted, loader)
+        // VOICE LEVEL: her live body takes the level the source names (voice-marks.ts VOICE_LEVEL; `open` since 2026-11-14).
+        x6Ball = await mountX6BallRuntime(ctx as never, mounted, loader, { level: VOICE_LEVEL })
       } catch (error) {
         console.error('x6-ball: failed to mount ball runtime', error)
       }
@@ -457,6 +476,14 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       })
       progress.enter('serving')
       started.resolve()
+      // Her one writer copies new lines to her cloud as they are written, only in mode `on`;
+      // never awaited, never a reader (startThreadWriter checks every condition and tells the page when it is not her).
+      const origin = (globalThis as { location?: { origin?: string } }).location?.origin
+      if (threadSync !== null && threadSync.role !== 'reader' && origin !== undefined) {
+        void threadSync.settled
+          .then(({ mode }) => startThreadWriter({ vfs: mounted, persistence, net: writerNet(origin), boot: threadSync, mode }))
+          .catch((error: unknown) => { console.warn('thread-writer: did not start', error) })
+      }
     } catch (reason) {
       tunnel.fail(reason)
       throw reason

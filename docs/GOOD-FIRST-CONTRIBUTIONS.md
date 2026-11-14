@@ -40,10 +40,10 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 - **Done:** a note in the KNOWN-RED-TESTS.md row on whether one cause explains all 50, then either a fix or causes per group. Then the same for the other two files.
 - **Check:** `node --test server/recall.test.mjs` after an install. `memory` runs in `node scripts/verify-lite.mjs`; `absence` is left out of it on purpose (see the comment in that script), so run `node --test server/absence.test.mjs`.
 
-## 6. Assert the shipped head, not a long-running one
+## 6. Assert the shipped genesis head too
 
-- **Red:** `packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts`, the case at lines 226 and 227, reads `mirror/home/auma/HEAD.json` and expects the epoch of a long-running node (171 or more). This repository ships the genesis head there: epoch 1, 26 entries.
-- **Done:** a new case asserts the genesis head; the original assertion runs against a synthetic long-running fixture; nothing is loosened.
+- **Gap:** `packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts`, the case "her real head" (line 231), asserts the head of a long-running node against a frozen stand-in head in `packages/experimental/webworker-runtime/tests/x6/fixtures/frozen-head/` (epoch 173). No case in that file asserts the head this repository ships at `mirror/home/auma/HEAD.json`: epoch 1, 26 entries.
+- **Done:** a new case asserts the genesis head; the existing case is unchanged; nothing is loosened.
 - **Check:** `pnpm exec vitest run packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts` passes, and the original expectations are still in the file.
 
 ## 7. Give the superagent tests a synthetic home
@@ -60,7 +60,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 9. One source for deployment values
 
-- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 8, 1700), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
+- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 2866), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
 - **Done:** every non-test code file that the grep below lists reads the values from one configuration source.
 - **Check:** `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists only that configuration, tests and documentation, and `node --test deploy/ci/*.test.mjs` has no failure (KNOWN-RED-TESTS.md lists none there).
 
@@ -75,6 +75,6 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 - The restore rehearsal's open item "clock rollback across restart" (`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`, line 148). This touches the authority files and needs a second reviewer ([CONTRIBUTING.md](../CONTRIBUTING.md), rule 6).
 - A test that calls the compiler (`packages/experimental/webworker-runtime/src/x6/scion.ts`) and one that calls the self-build step (`mirror/home/auma/seed/organs/seed-cycle.js`). No test calls either today, so both are UNVERIFIED on every page. `scion.ts` is on the authority list, so rule 6 applies.
 - Read the Chinese twins of the new front pages (`*.zh.md`) against their English pages and report where they differ; where they do, the English page applies.
-- Run test files that are outside the recorded commands, starting with `deploy/cloudflare/src/__tests__/owner-login-lockout.spec.ts` (command in `deploy/cloudflare/README.md`, line 167) and `apps/web/src/spatial/superagent/manifest.spec.ts`, and report the results.
+- Run test files that are outside the recorded commands, starting with `deploy/cloudflare/src/__tests__/owner-login-lockout.spec.ts` (command in `deploy/cloudflare/README.md`, line 173) and `apps/web/src/spatial/superagent/manifest.spec.ts`, and report the results.
 - Bring the older label words in [START-HERE.md](START-HERE.md) and [ARCHITECTURE-ACTUAL.md](ARCHITECTURE-ACTUAL.md) to the five labels above.
 - Replace the inherited Chinese issue and pull request templates in `.github/` with templates for this project.

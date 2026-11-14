@@ -29,7 +29,7 @@ Names used below, each in one sentence ([GLOSSARY.md](GLOSSARY.md) defines ball,
 | AUMA: a WebWorker in the owner's browser (ball-loader.ts)            |
 |  propose -> scion compile (U) -> trial, parent regrades (I)          |
 |  -> seed-cycle live install (U) -> Pearl (I) -> ball +1 epoch (I)    |
-|  25 Wasm cells via x6_cell (I); no edge module loads the judges      |
+|  30 Wasm cells via x6_cell (I); no edge module loads the judges      |
 |  receipts: hash chain, signed checkpoints (I; 6 cases red)           |
 +----------------------------------------------------------------------+
  MODELS: hosted providers outside the tree, reached only through a door.
@@ -58,7 +58,7 @@ flowchart TD
     T -->|UNVERIFIED: no test calls seed-cycle| C[seed-cycle live install and cases]
     C -.->|UNVERIFIED: drawn order only, seed-cycle does not call Pearl| PE[Pearl challenge]
     PE -->|IMPLEMENTED| B[candidate ball, epoch plus 1]
-    W[25 Wasm cells via x6_cell]
+    W[30 Wasm cells via x6_cell]
     R[receipts: hash chain, checkpoints, partly red]
   end
   MO[Hosted models, outside the tree] -->|IMPLEMENTED: reply| D
@@ -83,13 +83,13 @@ Edge paths are under `deploy/cloudflare/src/`, runtime paths under `packages/exp
 
 1. **Propose.** A model reply arrives through the Worker's door, and the turn is journalled before the provider is called. `worker.mjs` `providerDoor`, `turn-journal.mjs`, `provider-dispatch.mjs`. IMPLEMENTED: `provider-dispatch.test.mjs`, `turn-journal-and-body.test.mjs`, green. No model call recorded.
 2. **Compile.** `scion.ts` `createScionCompiler().compile`, then `runScionWorker` in a separate worker: a pinned offline compiler, checked by size and SHA-256, at most 128 files and 2 MiB, output hash `outputSha256`. UNVERIFIED: **this is the first step with no test at all**; no test in the tree calls the compiler.
-3. **Trial.** `scion-growth.ts` `trialScionCandidate`, called by `growScionOrgan`: a disposable worker; the parent grades the outputs again and ignores the candidate's own pass flags. IMPLEMENTED: `scion-growth.spec.ts`, 73 cases, one unrelated case known red. Not proven containment.
+3. **Trial.** `scion-growth.ts` `trialScionCandidate`, called by `growScionOrgan`: a disposable worker; the parent grades the outputs again and ignores the candidate's own pass flags. IMPLEMENTED: `scion-growth.spec.ts`, 74 cases. Not proven containment.
 4. **Live cycle.** `seed-cycle.js`, action `grow`: write the file, hash it, `ctx.organs.install`, run the cases on the live organ, `undo` or `retire` on failure, one line in `ledger.jsonl` (plain lines, no hash chain). UNVERIFIED: no test calls it. The cases run on the live organ, not in isolation.
 5. **Pearl.** A separate call: no code goes from step 4 to this one (`seed-cycle.js` does not name Pearl, and `growScionOrgan` in `scion-growth.ts` stops at the cycle). `seed-pearl.js` `challenge` with `ball-loader.ts` `trialRetentionCandidate`: two builds against the whole suite, a `pearl.challenge` receipt, a local qualification id. IMPLEMENTED: `server/pearl.test.mjs`, green. Self-attested: its receipts say `authorityVerified: false`, and a deployed HEAD does not read Pearl.
 6. **Candidate ball.** `ball-loader.ts` `treePatch` or `buildOrganPromotion` clones the head and adds one epoch; a governance change uses `computeCanonicalBallId`. A protected organ is staged, never mounted. IMPLEMENTED: `stage-organ-promotion.spec.ts`, `head-promotion.spec.ts`, green.
 7. **Stage.** `head-do.mjs` `stage`, by `POST /_head/stage`: checks parent and epoch, hashes every module, stores `head:staged-promotion`. The head does not move. IMPLEMENTED: `head-hardening.test.mjs`, green.
 8. **The owner sees it.** `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` rebuilds the terms from the bytes; `spatial/portal/organ-code-diff.ts` shows the diff. IMPLEMENTED in jsdom: `organ-code-diff.client.spec.ts`, `sovereignty-durability.client.spec.tsx`, green. No browser session recorded.
-9. **Approve.** `aumlok.mjs` store `complete('approve', ...)`: screen the assertion (`webauthn-screen.mjs`), check it inside `proofOutcome` (`proof-failure-rule.mjs`), store the hash of a one-time secret (`approvalToken`) with the binding, 5 minutes. IMPLEMENTED with hand-built passkey data in `aumlok-restore-rehearsal.test.mjs`, green. No real authenticator recorded.
+9. **Approve.** `aumlok.mjs` store `complete('approve', ...)`: screen the assertion (`webauthn-screen.mjs`), check it inside `proofOutcome` (`proof-failure-rule.mjs`), store the hash of a one-time secret with the binding, 5 minutes. IMPLEMENTED with hand-built passkey data in `aumlok-restore-rehearsal.test.mjs`, green. No real authenticator recorded.
 10. **Promote.** `head-do.mjs` `publish`, by `POST /_head/promote`: epoch, lease and module hashes, then `consumeApprovalInTransaction` and `tx.put('head', ...)` in one transaction. IMPLEMENTED: `head-hardening.test.mjs` ("expired approval rolls back both consumption and HEAD selection"), `aumlok-restore-rehearsal.test.mjs`, green.
 11. **Record and adopt.** HEAD writes `head:last-publish-outcome`; the page appends a receipt (`seed-receipts.js`) and syncs to MIRROR; a tab never hot-swaps a promoted head, and `head_adopt` says to reload. IMPLEMENTED. Partly red: `server/receipts.test.mjs` failed 6 cases in the RECORDED RUN (of an earlier tree) (10 are written).
 
@@ -111,12 +111,12 @@ Two side roads skip steps 7 to 9. An owner sign-in session (8 hours at most) alo
 - The node key, derived from a root sealed by the seven words and released only after the bound passkey asserts (`spatial/aumlok/aumlok-root.ts`). The receipt checkpoint key is a JWK file in her home (`seed-receipts.js`).
 - Mounting local changes. A local `tree_patch` mounts before the edge answers, so a tab can run an organ the edge refused; the edge still decides which ball is selected.
 
-**What a model is trusted with.** Nothing that permits. A model writes text and tool calls inside the tab. It holds no provider key (a door lets the host add a key only it holds, `model-doors.ts`), cannot approve, and its output reaches the head only through the same edge checks as any other proposal. The cloud wake's model turn writes, stages, approves and publishes nothing (`cloud-wake-tools.mjs`). Spoken turns never authorise an agent (`voice-director.mjs`).
+**What a model is trusted with.** Nothing that permits. A model writes text and tool calls inside the tab. It holds no provider key (a door lets the host add a key only it holds, `model-doors.ts`), cannot approve, and its output reaches the head only through the same edge checks as any other proposal. With the shipped setting `WAKE_ACTS_ENABLED = "0"`, the cloud wake's model turn has read tools and two tools that append: a note in her words to her wish, and a fixed checkpoint to a checkpoint file in her home; it writes no code and stages, approves and publishes nothing (`cloud-wake-tools.mjs`, `head-do.mjs`). Set to `"1"`, and only for a wish that names an active mandate of the owner, six act tools are offered as well: create a branch of hers, commit to one, apply a patch to one, start a runner job on one, stage a proposal card, and post one Linear comment. None of the six approves, merges or publishes a head. Spoken turns never authorise an agent (`voice-director.mjs`).
 
 **Where delegated permission exists.**
 - The night grant (`night-grant.mjs`, `night-grant.test.mjs`): one passkey approval; at most 12 hours (`NIGHT_GRANT_MAX_LIFETIME_MS`), at most 12 uses (`NIGHT_GRANT_MAX_USES`), at most 8 organs per use (`NIGHT_GRANT_MAX_ORGANS_PER_USE`); scope `add-or-update-non-governance-organs`; issued against the current head and epoch; revocable; governance ids never covered.
 - The owner sign-in session: 8 hours at most (`AUMLOK_SIGNIN_LIMITS` in `aumlok.mjs`), at most 8 sessions; it is not an approval, but it does permit the one-organ side road above: its scope may name up to 128 ordinary organs, one changed per promotion (`ownerSessionPermitsTransition` in `server/ball-transition.mjs`, `effectiveOwnerSession` in `head-do.mjs`).
-- The cloud wake: 3 rounds, 6 tool calls, 15 seconds (`CLOUD_WAKE_LIMITS`), read-only tools, off unless `WAKE_EXECUTOR_ENABLED=1`.
+- The cloud wake: 4 model rounds, 8 tool calls, 30 seconds a step (`CLOUD_WAKE_LIMITS`). It runs only when `WAKE_EXECUTOR_ENABLED` is `"1"`, which the shipped `deploy/cloudflare/wrangler.toml` sets. Its tools read, and append a note to her wish and a checkpoint to her home; the act tools are offered only when `WAKE_ACTS_ENABLED` is `"1"` and the wish names an active mandate of the owner. The shipped file sets `"0"`.
 
 **What must never be confused.**
 - A model is not the owner.
@@ -125,9 +125,9 @@ Two side roads skip steps 7 to 9. An owner sign-in session (8 hours at most) alo
 - A signed checkpoint does not prove that every earlier decision was authorised. The pinned checkpoint signer keys in this tree are synthetic.
 - A green unit test is not an end-to-end guarantee. The RECORDED RUN (of an earlier tree) had 5,502 cases, 5,399 passed and 90 failed (89 on [KNOWN-RED-TESTS.md](KNOWN-RED-TESTS.md)), with no browser, deployment, model call or passkey.
 - Her own grading (Pearl, the trial regrade) is not independent acceptance.
-- Open source is not by itself reproducible or sovereign. 24 of the 25 Wasm cells and the Dakini Code bundle (a prebuilt stock app, three files in `apps/web/public/assets/stock-apps/dakini-code/assets/`) ship as binaries without their source, and `pentora36.wasm` ships with no licence granted yet. No second build has been compared.
+- Open source is not by itself reproducible or sovereign. 24 of the 30 Wasm cells and the Dakini Code bundle (a prebuilt stock app, three files in `apps/web/public/assets/stock-apps/dakini-code/assets/`) ship as binaries without their source, and `pentora36.wasm` ships with no licence granted yet. No second build has been compared.
 - The dependence on Cloudflare and on a hosted model is real. Every model door in `model-doors.ts` points at a hosted provider; no local-model door is in the tree.
 
 ## Where each layer comes from
 
-Most of this tree is inherited. Most of `packages/` is the DeepSeek Harness runtime (MIT, [LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)), and the plugin framework that organs are built on is Cordis, vendored in `vendor/`. Aukora's own layer is concentrated in `deploy/cloudflare/src/` (the edge), `server/`, `mirror/home/auma/seed/` (the organs and Pearl), `packages/experimental/webworker-runtime/src/x6/` (the loader, scion and cell loader), `packages/client/ui-layout/src/client/spatial/` (the app) and `apps/web/public/cells/` (the cells, as binaries). By one count, made once by the project from its own history, which is not public, and not yet repeated by anyone else (UNVERIFIED), 11.8% of the non-vendored text lines and 14.7% of the code lines are Aukora's own. The method, the tables and the files without source are in [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md).
+Most of this tree is inherited. Most of `packages/` is the DeepSeek Harness runtime (MIT, [LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)), and the plugin framework that organs are built on is Cordis, vendored in `vendor/`. Aukora's own layer is concentrated in `deploy/cloudflare/src/` (the edge), `server/`, `mirror/home/auma/seed/` (the organs and Pearl), `packages/experimental/webworker-runtime/src/x6/` (the loader, scion and cell loader), `packages/client/ui-layout/src/client/spatial/` (the app) and `apps/web/public/cells/` (the cells: binaries, six with WAT source beside them). By one count, made once by the project from its own history, which is not public, and not yet repeated by anyone else (UNVERIFIED), 14.6% of the non-vendored text lines and 18.1% of the code lines are Aukora's own. The method, the tables and the files without source are in [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md).

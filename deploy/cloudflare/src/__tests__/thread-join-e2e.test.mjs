@@ -470,3 +470,82 @@ test('the lease runs out between two import steps: the committed prefix stays va
   assert.equal(after.equal, true, after.line)
   assert.equal(after.line, `Read back from her cloud: ${J_LONG.length} bytes, SHA-256 ${sha(J_LONG)}, every piece equal.`)
 })
+
+// The step 4 assertion above ("never called equal from a partial read") holds with THREAD_SYNC
+// unset, as on main. Only with THREAD_SYNC exactly `on` does `/_thread/tail` answer a `before` inside a line
+// (thread-log.mjs routeTail, thread-mount.mjs `tailInsideLine`); then Check reads that line in pieces, back to front for
+// the bounds and front to back for the bytes, and every byte is hashed against the thread's tailSha and the whole SHA-256.
+test('with THREAD_SYNC exactly on, Check reads the line over 256 KiB whole and compares every byte; an altered or truncated piece of it is never equal; any other value is checked as unset', async t => {
+  const edge = await herEdge(t)
+  edge.env.THREAD_SYNC = 'on'
+  const answers = []
+  let tamper = null
+  /** The kit's fetch: records every tail answer as it left her edge, then (if set) alters it on the way to the page. */
+  const fetch = async (input, init) => {
+    const response = await edge.browser(input, init)
+    if (new URL(String(input), ORIGIN).pathname !== '/_thread/tail' || response.status !== 200) return response
+    const from = Number(response.headers.get('x-thread-from')), to = Number(response.headers.get('x-thread-to'))
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    answers.push({ from, to, partial: response.headers.get('x-thread-partial') === '1', bytes })
+    const headers = new Headers(response.headers)
+    headers.delete('content-length')
+    return new Response(tamper ? tamper({ from, to, bytes: Uint8Array.from(bytes) }) : bytes, { status: 200, headers })
+  }
+  const kit = rescueKit({ indexedDB: hisStore(), localStorage: null, fetch, piece: PIECE, sleep: async () => {}, now: () => edge.clock.now })
+  const copied = await kit.copyToCloud()
+  assert.equal(copied.complete, true, copied.line)
+  const joined = await kit.joinThreads({ clientId: HIS, rescueId: copied.id })
+  assert.equal(joined.ok, true, joined.line)
+  assert.equal(joined.equal, 3)
+  const wide = joined.rows.find(row => row.path === WIDE)
+  const check = () => kit.checkThread({ id: wide.id, title: wide.title, rescue: wide.rescue })
+  const midLine = to => to > 0 && to < J_WIDE.length && J_WIDE[to - 1] !== 10
+
+  // Whole: equal, and the bytes Check hashed are every byte of the thread, read in pieces that meet end to end.
+  answers.length = 0
+  const whole = await check()
+  assert.equal(whole.equal, true, whole.line)
+  assert.equal(whole.line, `Read back from her cloud: ${J_WIDE.length} bytes, SHA-256 ${sha(J_WIDE)}, every piece equal.`)
+  assert.equal(answers.length % 2, 0, 'back to front for the bounds, then front to back over the same steps')
+  const forward = answers.slice(answers.length / 2)
+  assert.equal(forward[0].from, 0)
+  for (let at = 1; at < forward.length; at++) assert.equal(forward[at].from, forward[at - 1].to)
+  assert.equal(forward.at(-1).to, J_WIDE.length)
+  assert.deepEqual(Buffer.concat(forward.map(answer => answer.bytes)), Buffer.from(J_WIDE), 'every byte of the long line was read')
+  assert.ok(forward.some(answer => answer.partial && midLine(answer.to)), 'at least one piece ends inside the long line (the switch-on answer)')
+  assert.ok(forward.every(answer => answer.bytes.length <= 262144), 'no piece is longer than one tail answer')
+
+  // One byte altered in a piece that ends inside the long line: not equal (its open end's SHA-256 does not match).
+  tamper = ({ to, bytes }) => { if (midLine(to)) bytes[bytes.length - 7] ^= 1; return bytes }
+  const altered = await check()
+  assert.notEqual(altered.equal, true, altered.line)
+  assert.match(altered.line, /^NOT equal in her cloud: the open end \(bytes 0 to \d+\) does not match its SHA-256\.$/)
+  // A piece cut short by one byte: never equal (its length is not its bounds; nothing is called checked).
+  tamper = ({ to, bytes }) => (midLine(to) ? bytes.subarray(1) : bytes)
+  const truncated = await check()
+  assert.notEqual(truncated.equal, true, truncated.line)
+  assert.match(truncated.line, /could not be read just now\. Nothing was checked/)
+  tamper = null
+
+  // A byte of the long line altered where her cloud keeps it (MIRROR's open-end rows): not equal; put back: equal again.
+  const rows = [...edge.mirrorStorage.data.keys()].filter(key => key.startsWith(`thread:v1:tail:${wide.id}:`)).sort()
+  assert.ok(rows.length >= 2, rows.join())
+  const kept = edge.mirrorStorage.data.get(rows[1])
+  kept[100] ^= 1
+  const stored = await check()
+  assert.notEqual(stored.equal, true, stored.line)
+  assert.match(stored.line, /^NOT equal in her cloud: the open end/)
+  kept[100] ^= 1
+  assert.equal((await check()).equal, true)
+
+  // Any value but exactly `on`, and unset: the tail answers as main, so the long line is not called equal.
+  for (const value of ['pull', 'off', 'On', ' on', 'on ', '1', true, undefined]) {
+    if (value === undefined) delete edge.env.THREAD_SYNC
+    else edge.env.THREAD_SYNC = value
+    answers.length = 0
+    const unset = await check()
+    assert.notEqual(unset.equal, true, `THREAD_SYNC=${JSON.stringify(value)}: ${unset.line}`)
+    assert.ok([unset.line, ...unset.lines].some(line => /^Not (fully )?checked/.test(line)), JSON.stringify(unset))
+    assert.ok(answers.every(answer => !midLine(answer.to)), `THREAD_SYNC=${JSON.stringify(value)}: no answer ends inside a line`)
+  }
+})

@@ -46,6 +46,26 @@ export const VOICE_SESSION_ID = /^[A-Za-z0-9_-]{8,128}$/
 export const VOICE_PROBE_SESSION = 'x6:voice-look-only-probe'
 export const VOICE_PROBE_REFUSAL = 'VOICE_LOOK_ONLY_PROBE'
 
+/**
+ * VOICE LEVEL (
+ * ). `open`: a spoken turn in her voice home is an ordinary turn of hers, with every tool a typed
+ * thread has; nothing is marked, proven or judged here, and the dangerous core still goes to his fingerprint card exactly
+ * as in a thread. `look-only`: everything else in this file (the marks, the proof, the one judge), kept built and tested;
+ * it is what every mount gets unless it asks for `open`. The live worker asks for VOICE_LEVEL (worker-host.ts).
+ */
+export type VoiceLevel = 'open' | 'look-only'
+export const VOICE_LEVEL: VoiceLevel = 'open'
+/**
+ * The page-side stages a voice turn can fail at before the worker is asked (closed; reported by the page, best effort).
+ * The `home-*` stages after `prompt-failed` are the level-open home chain (genesis-live.js findOpenHome): each failed
+ * create, a rename that failed, a fallback taken (the stored id used unlisted, her most recent thread), an exception, and
+ * `home-none` when no thread could be found or made and nothing was sent.
+ */
+export const VOICE_NOTE_STAGES = Object.freeze(['home-list-failed', 'home-create-failed', 'home-missing', 'mark-unreachable', 'mark-refused',
+  'journal-refused', 'prompt-failed', 'home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed',
+  'home-creates-spent', 'home-rename-failed', 'home-stored-unlisted', 'home-fallback-recent', 'home-exception', 'home-none'] as const)
+export type VoiceNoteStage = typeof VOICE_NOTE_STAGES[number]
+
 /** The worker's IndexedDB store, or null where IndexedDB does not exist (then nothing can be marked: voice fails closed). */
 export function indexedDbVoiceMarkStore(
   idb: IDBFactory | undefined = (globalThis as { indexedDB?: IDBFactory }).indexedDB,
@@ -103,6 +123,18 @@ export interface VoiceMarkAnswer {
   readonly say?: string
   readonly unsaved?: readonly string[]
   readonly next?: string
+  /** Present on every answer of an `open` worker (then `ok` is true and nothing was marked). */
+  readonly level?: VoiceLevel
+}
+/** What the worker can say about its own voice guard, for `x6_voice_status` (closed values, no ids, no text). */
+export interface VoiceDiagnostics {
+  readonly level: VoiceLevel
+  readonly state: VoiceLookOnlyState
+  readonly disabled: string | null
+  readonly marked: number
+  readonly unsaved: number
+  /** The newest 8 mark answers and page notes, newest first: a closed code and the time, nothing else. */
+  readonly recent: ReadonlyArray<{ readonly code: string; readonly atMs: number }>
 }
 /** The page says this, word for word, when it cannot confirm look-only (A2). */
 export const VOICE_UNCONFIRMED_SAY = 'My voice could not confirm it is look-only, so I did not send that.'
@@ -140,11 +172,24 @@ export interface VoiceLookOnly {
   /** Switch marking off for good in this worker (its guard was not proven to cover every agent). */
   disable(reason: string): void
   disabledReason(): string | null
+  level(): VoiceLevel
+  /** A page-side stage (closed list); anything else is dropped. */
+  note(stage: unknown): boolean
+  diagnostics(): VoiceDiagnostics
 }
 
 export function createVoiceLookOnly(
-  options: { store: VoiceMarkStore | null; loadTimeoutMs?: number; stepTimeoutMs?: number },
+  options: { store: VoiceMarkStore | null; loadTimeoutMs?: number; stepTimeoutMs?: number; level?: VoiceLevel; now?: () => number },
 ): VoiceLookOnly {
+  const level: VoiceLevel = options.level ?? 'look-only'
+  const open = level === 'open'
+  const clock = options.now ?? Date.now
+  /** Newest first, at most 8: closed codes only. */
+  const recent: Array<{ code: string; atMs: number }> = []
+  const remember = (code: string): void => {
+    recent.unshift({ code: /^[A-Za-z0-9_:.-]{1,80}$/.test(code) ? code : 'UNNAMED', atMs: clock() })
+    if (recent.length > 8) recent.length = 8
+  }
   /** Every session guarded look-only in this body (the judge reads only this). */
   const marks = new Set<string>()
   /** Confirmed in the store: loaded from it, or a write of it resolved. */
@@ -248,28 +293,40 @@ export function createVoiceLookOnly(
     return await write(sessionId) ? confirmed() : refuse('VOICE_MARK_NOT_SAVED', { lookOnly: true })
   }
 
+  const markLookOnly = async (
+    sessionId: unknown, readRecord: (sessionId: string) => Promise<VoiceHomeRecord | null>,
+  ): Promise<VoiceMarkAnswer> => {
+    if (typeof sessionId !== 'string' || !VOICE_SESSION_ID.test(sessionId)) return refuse('VOICE_SESSION_INVALID')
+    // OPEN: her voice home is an ordinary thread of hers. Nothing is marked, proven or waited for.
+    if (open) return { ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open' }
+    await ready
+    // A guard not proven global (or no known store) confirms nothing, a stored mark included.
+    if (disabled !== null || state !== 'ready' || !store) return refuse('VOICE_LOOK_ONLY_UNAVAILABLE', { lookOnly: marks.has(sessionId) })
+    // Settled answers need no section: `saved` only grows, and once a mark was refused for the cap the accepted count
+    // (saved + pending, which only grows) is still at the cap. Pending retries are queued, not awaited.
+    if (saved.has(sessionId)) { const answer = confirmed(); queueRetry(); return answer }
+    if (overCap.has(sessionId)) {
+      const answer = refuse('VOICE_MARKS_FULL', { lookOnly: true, next: VOICE_MARKS_FULL_NEXT })
+      queueRetry()
+      return answer
+    }
+    return serialized(() => markOne(sessionId, readRecord))
+  }
+
   return {
     state: () => state,
     ready,
     isMarked: id => marks.has(id),
-    looksOnly,
-    admitsSpoken: looksOnly,
+    // OPEN: no session is look-only here, whatever an older body stored; a spoken prompt may enter her voice home.
+    looksOnly: (id, header) => !open && looksOnly(id, header),
+    admitsSpoken: (id, header) => open || looksOnly(id, header),
     marked: () => [...marks],
     unsaved: unsavedNow,
     async mark(sessionId, readRecord) {
-      if (typeof sessionId !== 'string' || !VOICE_SESSION_ID.test(sessionId)) return refuse('VOICE_SESSION_INVALID')
-      await ready
-      // A guard not proven global (or no known store) confirms nothing, a stored mark included.
-      if (disabled !== null || state !== 'ready' || !store) return refuse('VOICE_LOOK_ONLY_UNAVAILABLE', { lookOnly: marks.has(sessionId) })
-      // Settled answers need no section: `saved` only grows, and once a mark was refused for the cap the accepted count
-      // (saved + pending, which only grows) is still at the cap. Pending retries are queued, not awaited.
-      if (saved.has(sessionId)) { const answer = confirmed(); queueRetry(); return answer }
-      if (overCap.has(sessionId)) {
-        const answer = refuse('VOICE_MARKS_FULL', { lookOnly: true, next: VOICE_MARKS_FULL_NEXT })
-        queueRetry()
-        return answer
-      }
-      return serialized(() => markOne(sessionId, readRecord))
+      let answer: VoiceMarkAnswer
+      try { answer = await markLookOnly(sessionId, readRecord) } catch (error) { remember('VOICE_MARK_THREW'); throw error }
+      remember(answer.code)
+      return answer
     },
     noteSessionEvent(sessionId, event) {
       if (event.type === 'turn/start') spoken.set(sessionId, false)
@@ -280,6 +337,8 @@ export function createVoiceLookOnly(
     spokenTurn: id => spoken.get(id) === true,
     judge(sessionId, input, header) {
       if (sessionId === VOICE_PROBE_SESSION) return VOICE_PROBE_REFUSAL
+      // OPEN: a voice turn is judged like any other turn of hers, by the same doors and the same fingerprint card.
+      if (open) return undefined
       if (state === 'loading') return VOICE_LOADING_REFUSAL
       if (marks.has(sessionId)) return voiceVerdict(input())
       if (marksUnknown() && couldBeVoiceHome(header)) return state === 'loading-late' ? VOICE_LOADING_REFUSAL : voiceVerdict(input())
@@ -288,5 +347,14 @@ export function createVoiceLookOnly(
     },
     disable(reason) { disabled ??= reason },
     disabledReason: () => disabled,
+    level: () => level,
+    note(stage) {
+      if (typeof stage !== 'string' || !(VOICE_NOTE_STAGES as readonly string[]).includes(stage)) return false
+      remember(`page:${stage}`)
+      return true
+    },
+    diagnostics: () => ({
+      level, state, disabled, marked: marks.size, unsaved: unsavedNow().length, recent: recent.map(row => ({ ...row })),
+    }),
   }
 }

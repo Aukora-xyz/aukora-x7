@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
 import { canonicalJson } from '../owner-grant-policy.mjs'
-import { handleCloudBroker, cloudRepoMirrorPathAllowed, isT2ProtectedRepoPath, CLOUD_REPO_TREE_LIMITS, OWNER_MACHINE_PATH_NEXT } from '../cloud-brokers.mjs'
+import { handleCloudBroker, cloudRepoMirrorPathAllowed, isT2ProtectedRepoPath, CLOUD_BROKER_LIMITS, CLOUD_REPO_LOG_LIMITS, CLOUD_REPO_READ_LIMITS, CLOUD_REPO_TREE_LIMITS, OWNER_MACHINE_PATH_NEXT, WEB_EYES_SEARCH_LIMITS } from '../cloud-brokers.mjs'
 
 const ORIGIN = 'https://fixture.example', REPO = 'your_org_x/your-node', PREFIX = '/repos/' + REPO
 const SHA = 'a'.repeat(40), TREE = 'b'.repeat(40), BLOB = 'c'.repeat(40), NEW = 'd'.repeat(40)
@@ -252,7 +252,8 @@ test('tree listings filter private paths and disclose both upstream and local tr
   assert.equal(result.value.entries.some(entry => /owner-key|memory|private/.test(entry.path)), false)
   const filtered = await broker.request('/_host/repo', { action: 'tree', prefix: 'server' })
   assert.deepEqual(filtered.value.entries.map(entry => entry.path), ['server', 'server/file.mjs'])
-  const many = harness({ fetch: sourceFetch(Array.from({ length: 1002 }, (_, index) => `server/file-${index}.mjs`)) })
+  // Up to 4,000 entries (was 1,000), so 4,002 are needed to be cut.
+  const many = harness({ fetch: sourceFetch(Array.from({ length: 4002 }, (_, index) => `server/file-${index}.mjs`)) })
   const limited = (await many.request('/_host/repo', { action: 'tree' })).value
   assert.ok(limited.entries.length > 0 && limited.entries.length <= CLOUD_REPO_TREE_LIMITS.returnedEntries)
   assert.equal(limited.upstreamTruncated, false)
@@ -622,4 +623,97 @@ test('valid main-ancestor comparisons admit normal paths and require an explicit
   assert.equal(result.value.head, NEW)
   assert.deepEqual(result.value.files, [{ path: 'README.md', status: 'modified', patch: '+A main change' }])
   for (status of ['renamed', 'copied']) assert.equal((await broker.request('/_host/repo', { action: 'diff', base: SHA })).value.code, 'BROKER_RESPONSE_INVALID')
+})
+
+// ---- the raised limits ------------------------------------------------------
+test('a broker call has 30 s (was 10 s); merge_proposal keeps HEAD\'s 10 s', () => {
+  assert.deepEqual([CLOUD_BROKER_LIMITS.timeoutMs, CLOUD_BROKER_LIMITS.mergeTimeoutMs], [30000, 10000])
+})
+
+test('an upstream read that takes 20 s now answers; one past 30 s is BROKER_TIMEOUT', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    for (const [wait, expected] of [[20000, 200], [30001, 'BROKER_TIMEOUT']]) {
+      const entered = Promise.withResolvers(), base = sourceFetch(['server/file.mjs'])
+      const broker = harness({ fetch: async (url, init) => {
+        if (url.includes('/git/trees/')) { entered.resolve(); await new Promise(resolve => setTimeout(resolve, wait)) }
+        return base(url, init)
+      } })
+      const pending = broker.request('/_host/repo', { action: 'tree' })
+      await entered.promise
+      context.mock.timers.tick(wait)
+      const result = await pending
+      if (expected === 200) assert.equal(result.status, 200, JSON.stringify(result.value))
+      else assert.equal(result.value.code, expected)
+    }
+  } finally { context.mock.timers.reset() }
+})
+
+test('tree returns more than the old 1,000 entries, up to 4,000 within 224 KiB, under the 256 KiB answer', async () => {
+  assert.deepEqual([CLOUD_REPO_TREE_LIMITS.returnedEntries, CLOUD_REPO_TREE_LIMITS.treeProjectedBytes], [4000, 224 * 1024])
+  const broker = harness({ fetch: sourceFetch(Array.from({ length: 2000 }, (_, index) => `server/f-${String(index).padStart(4, '0')}.mjs`)) })
+  const result = await broker.request('/_host/repo', { action: 'tree' })
+  assert.equal(result.status, 200)
+  assert.equal(result.value.entries.length, 2001, 'the server folder and its 2,000 files')
+  assert.deepEqual([result.value.truncated, result.value.limit, result.value.byteLimit], [false, 4000, 224 * 1024])
+  assert.ok(Buffer.byteLength(JSON.stringify(result.value)) < 256 * 1024)
+  // Past the byte bound the rest is cut and said so, never an answer past 256 KiB.
+  const full = await harness({ fetch: sourceFetch(Array.from({ length: 4001 }, (_, index) => `server/f-${String(index).padStart(4, '0')}.mjs`)) }).request('/_host/repo', { action: 'tree' })
+  assert.equal(full.status, 200); assert.equal(full.value.truncated, true)
+  assert.ok(full.value.entries.length > 1000 && full.value.entries.length <= 4000)
+  assert.ok(Buffer.byteLength(JSON.stringify(full.value)) < 256 * 1024)
+})
+
+test('log returns up to 100 commits (was 10), refuses 101, and keeps the newest that fit 224 KiB', async () => {
+  assert.deepEqual([CLOUD_REPO_LOG_LIMITS.commits, CLOUD_REPO_LOG_LIMITS.defaultCommits, CLOUD_REPO_LOG_LIMITS.answerBytes], [100, 10, 224 * 1024])
+  const commit = (index, message) => ({ sha: index.toString(16).padStart(40, '0'), commit: { message }, parents: [] })
+  const logFetch = message => url => {
+    const target = new URL(url)
+    assert.equal(target.pathname, PREFIX + '/commits')
+    const count = Number(target.searchParams.get('per_page'))
+    return Response.json(Array.from({ length: count }, (_v, index) => commit(index + 1, message(index))))
+  }
+  const short = harness({ fetch: logFetch(index => `commit ${index}`) })
+  const hundred = await short.request('/_host/repo', { action: 'log', limit: 100 })
+  assert.equal(hundred.status, 200, JSON.stringify(hundred.value)); assert.equal(hundred.value.commits.length, 100); assert.equal(hundred.value.truncated, undefined)
+  assert.equal(new URL(short.calls[0].url).searchParams.get('per_page'), '100')
+  assert.equal((await short.request('/_host/repo', { action: 'log' })).value.commits.length, 10)
+  assert.equal((await short.request('/_host/repo', { action: 'log', limit: 101 })).value.code, 'BROKER_QUERY_INVALID')
+  // 100 messages of 8 KiB are 800 KiB: the newest that fit come back, and the answer says how many there were.
+  const long = await harness({ fetch: logFetch(index => `commit ${index}\n` + 'x'.repeat(8000)) }).request('/_host/repo', { action: 'log', limit: 100 })
+  assert.equal(long.status, 200, JSON.stringify(long.value).slice(0, 200))
+  assert.equal(long.value.truncated, true); assert.equal(long.value.available, 100); assert.equal(long.value.returned, long.value.commits.length)
+  assert.ok(long.value.commits.length > 10 && long.value.commits.length < 100)
+  assert.equal(long.value.commits[0].message.startsWith('commit 0\n'), true, 'the newest is kept')
+  assert.ok(Buffer.byteLength(JSON.stringify(long.value)) <= CLOUD_REPO_LOG_LIMITS.answerBytes)
+})
+
+test('a ranged read accepts a length up to 2 MiB (was 512 KiB) and refuses one byte more', async () => {
+  assert.equal(CLOUD_REPO_READ_LIMITS.rangeLength, 2 * 1024 * 1024)
+  const broker = harness({ fetch: sourceFetch(['server/file.mjs'], 'synthetic source') })
+  const read = await broker.request('/_host/repo', { action: 'read', path: 'server/file.mjs', offset: 0, length: 2 * 1024 * 1024 })
+  assert.equal(read.status, 200, JSON.stringify(read.value)); assert.equal(read.value.content, 'synthetic source'); assert.equal(read.value.nextOffset, null)
+  const part = await broker.request('/_host/repo', { action: 'read', path: 'server/file.mjs', offset: 0, length: 9 })
+  assert.deepEqual([part.value.content, part.value.nextOffset, part.value.truncated], ['synthetic', 9, true])
+  assert.equal((await broker.request('/_host/repo', { action: 'read', path: 'server/file.mjs', offset: 0, length: 2 * 1024 * 1024 + 1 })).value.code, 'REPO_BYTE_RANGE_INVALID')
+})
+
+test('web search takes up to 50 results (was 20), 10 by default (was 8), and refuses 51', async () => {
+  assert.deepEqual([WEB_EYES_SEARCH_LIMITS.results, WEB_EYES_SEARCH_LIMITS.defaultResults], [50, 10])
+  const asked = []
+  const publicHttpsFetch = async url => {
+    const target = new URL(url)
+    if (target.hostname !== 'en.wikipedia.org') return new Response('not found', { status: 404 })
+    const limit = Number(target.searchParams.get('limit')); asked.push(limit)
+    const titles = Array.from({ length: limit }, (_v, index) => `Result ${index}`)
+    return Response.json(['query', titles, titles.map(title => `About ${title}`), titles.map((_t, index) => `https://en.wikipedia.org/wiki/R${index}`)])
+  }
+  const broker = harness({ publicHttpsFetch })
+  const fifty = await broker.request('/_host/web-eyes', { action: 'search', query: 'lantern', limit: 50 })
+  assert.equal(fifty.status, 200, JSON.stringify(fifty.value).slice(0, 200)); assert.equal(fifty.value.count, 50); assert.equal(fifty.value.truncated, undefined)
+  const plain = await broker.request('/_host/web-eyes', { action: 'search', query: 'lantern' })
+  assert.equal(plain.value.count, 10)
+  assert.deepEqual(asked, [50, 10])
+  const over = await broker.request('/_host/web-eyes', { action: 'search', query: 'lantern', limit: 51 })
+  assert.equal(over.status, 400); assert.equal(over.value.code, 'WEB_EYES_REQUEST_INVALID')
 })

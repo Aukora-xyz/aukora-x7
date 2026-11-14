@@ -15,6 +15,8 @@
  *   /?chat=1     a made-up message from her in the left lane (the open conversation), with each link form and inline
  *                images; a link to a file in the drive's places opens the drive in the centre lane, and a link to her own
  *                working files elsewhere opens where it always did: the right sidebar, here a labelled stand-in
+ *   /?outward=<name>  ONE made-up staged Cloudflare or Linear request on the owner's real card, in the centre lane
+ *                (`outward.tsx`: the names, and the stand-ins its approve control runs against)
  *
  * Only the lane occupants the drive does not need are left empty: the menus (the right lane shows its header and tabs)
  * and the right sidebar's real document viewer (a labelled stand-in names the file it would open).
@@ -47,6 +49,9 @@ import {
   createDriveImageShelf, driveClaimsImage, openInDrive, OPEN_IN_DRIVE_LABEL,
 } from '../../../ui-chat/src/client/drive-link.ts'
 import { fixtureWorld, HOME } from './world.ts'
+import { OUTWARD_FIXTURES, OutwardPortal, outwardRunOf, type OutwardRun } from './outward.tsx'
+import { REASON_CHANGED_KEY } from '../../src/client/spatial/aumlok/outward-class3.ts'
+import { SENT_KEY } from '../../src/client/spatial/aumlok/outward-sent.ts'
 
 /** Her made-up message: each form she writes for a file, and inline images. */
 export const FIXTURE_MESSAGE = [
@@ -145,7 +150,12 @@ function SidebarStandIn({ path, close }: { readonly path: string | null; readonl
 }
 
 /** One fixture page. Installs the made-up bridge on the page global before anything reads it. */
-export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly world: ReturnType<typeof fixtureWorld> }): ReactNode {
+export function DriveFixture({ chat, world, outward = null }: {
+  readonly chat: boolean
+  readonly world: ReturnType<typeof fixtureWorld>
+  /** `?outward=<name>`: the owner's card for one made-up Cloudflare or Linear ask, in the centre lane, in place of the drive. */
+  readonly outward?: OutwardRun | null
+}): ReactNode {
   // THE REAL SHELL: the layout store, its `ctx.layout` controller, and the frame on them.
   const shell = useMemo(() => {
     const store = createLayoutStore().create()
@@ -154,6 +164,9 @@ export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly
     if (chat) {
       store.actions.closeSurface()
       store.actions.openConversation()
+    } else if (outward !== null) {
+      // Sovereignty's surface id (`SOVEREIGNTY_SURFACE`), named here so the page does not load that whole surface.
+      store.actions.selectSurface('sovereignty', undefined, 'contained')
     } else {
       store.actions.selectSurface(MEDIA_SURFACE, undefined, 'contained')
     }
@@ -165,7 +178,7 @@ export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly
     }
     const sessionsSource = { subscribe: NOTHING.subscribe, getSnapshot: () => sessions }
     return { store, controller, useStore: bindSnapshotSelector(store), useSessions: bindSnapshotSelector(sessionsSource) }
-  }, [chat, world])
+  }, [chat, world, outward])
   const door = useMemo(() => {
     const created = createDriveFilesDoor()
     created.set(world.files)
@@ -201,6 +214,7 @@ export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly
   }), [openFile])
 
   const renderSlot = ((key: string, owner: Record<string, unknown>, options?: { entryKey?: string }): ReactNode => {
+    if (key === 'shell.surface' && outward !== null) return <OutwardPortal run={outward} />
     if (key === 'shell.surface') {
       const surface = { ...owner, useSessions: shell.useSessions, driveFiles: door } as unknown as Parameters<typeof MediaSurface>[0]
       return <MediaSurface {...surface} />
@@ -232,7 +246,7 @@ export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly
     t: frameT,
   } as unknown as AppFrameProps
   return (
-    <div data-drive-fixture={chat ? 'chat' : 'drive'} style={{ height: '100%' }}>
+    <div data-drive-fixture={chat ? 'chat' : outward !== null ? 'outward' : 'drive'} style={{ height: '100%' }}>
       <AppFrame {...props} />
     </div>
   )
@@ -240,17 +254,29 @@ export function DriveFixture({ chat, world }: { readonly chat: boolean; readonly
 
 /**
  * Prepare the page before React mounts it (the entry, `apps/web/drive-fixture.entry.js`, renders `DriveFixture`).
- * @param search - the page's query: `?chat=1` adds her made-up message.
- * @returns the made-up her, whether the chat mode is on, and the network attempts the page refused.
+ * @param search - the page's query: `?chat=1` adds her made-up message; `?outward=<name>` shows one made-up Cloudflare or Linear ask.
+ * @returns the made-up her, whether the chat mode is on, the outward run (or null), and the network attempts the page refused.
  */
 export function prepareFixture(search: string): {
   readonly world: ReturnType<typeof fixtureWorld>
   readonly chat: boolean
+  readonly outward: OutwardRun | null
   readonly refused: readonly RefusedAttempt[]
 } {
   const refused = refuseNetwork()
   const world = fixtureWorld()
   ;(globalThis as Record<string, unknown>).__AUKORA_SUPERAGENT__ = world.bridge
   document.body.setAttribute('data-ds-dark-theme', '')
-  return { world, chat: new URLSearchParams(search).get('chat') === '1', refused }
+  const query = new URLSearchParams(search)
+  const name = query.get('outward')
+  const outward = name === null ? null : outwardRunOf(name)
+  if (name !== null && outward === null) {
+    throw new Error(`drive fixture: no outward fixture "${name}"; the names are ${Object.keys(OUTWARD_FIXTURES).join(', ')}`)
+  }
+  // Each load of `?outward=<name>` is a fresh made-up world: this fixture origin's record of asks sent or refused (kept in
+  // its own storage, as the real page keeps it) starts empty, so a reload shows the card again.
+  if (outward !== null) {
+    try { for (const key of [SENT_KEY, REASON_CHANGED_KEY]) globalThis.localStorage.removeItem(key) } catch { /* nothing kept */ }
+  }
+  return { world, chat: query.get('chat') === '1', outward, refused }
 }

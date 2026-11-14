@@ -34,7 +34,7 @@ node scripts/verify-lite.mjs
 ```
 
 - 需要 Node 24.9 或更高版本，别的都不需要。它用 Node 自带的测试运行器逐个运行 22 个测试文件，把每个文件的失败数与 [docs/KNOWN-RED-TESTS.zh.md](docs/KNOWN-RED-TESTS.zh.md) 中该文件那一行对照，只有每个失败都在那份清单上时才以 0 退出。
-- 它打印的最后一行应为：`verify-lite: 22 files, 564 pass, 12 fail, 12 of 12 on the known-red list`。这是在一台机器上（Node 24.11.1）连续三次、每次 40 到 45 秒看到的。它不在运行记录（属于较早的一棵树）里，所以在你自己看到之前，请视为 UNVERIFIED。
+- 它打印的最后一行应为：`verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list`。这是在一台机器上（Node 24.11.1）看到的。它不在运行记录（属于较早的一棵树）里，所以在你自己看到之前，请视为 UNVERIFIED。
 - 12 个失败分布在三个文件中：`server/memory.test.mjs` 3 个，`server/predict.test.mjs` 6 个，`server/receipts-policy.test.mjs` 3 个。这次运行与第 3 节中记录的运行（属于较早的一棵树）不同，规模也小得多，所以它的数字不是项目的状态。
 - 它**不**运行权限测试：只能用一次的批准、证明失败规则、仅限所有者的 id、night grant（一次 passkey 批准，覆盖之后一组有边界的普通修改）、转换分类器，以及回滚缺口的复现。这些测试导入本仓库没有附带的 npm 包。脚本在输出中会这样说明。
 - `--with-packages` 在安装之后增加 16 个权限测试文件。该选项为 UNVERIFIED：还没有人从干净安装运行过它。

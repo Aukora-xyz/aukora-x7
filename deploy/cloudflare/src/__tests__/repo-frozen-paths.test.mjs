@@ -145,6 +145,11 @@ const refused = (result, path, next = FROZEN_PATH_NEXT) => {
 test('a branch write, edit or commit naming a frozen path is refused and nothing reaches GitHub', async () => {
   for (const path of ['deploy/ci/x.mjs', 'mirror/home/auma/seed/organs/seed-judge.js', 'mirror/home/auma/HEAD.json', 'deploy/cloudflare/src/cloud-brokers.mjs',
     'deploy/cloudflare/src/head-do.mjs', 'deploy/cloudflare/src/worker.mjs', 'server/ball-transition.mjs', 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
+    'packages/experimental/webworker-runtime/src/x6/cell-journal.ts',
+    'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+    'packages/experimental/webworker-runtime/src/x6/tool-registry.ts', // Her tool registry
+    'packages/experimental/webworker-runtime/src/x6/menger-run.ts', // Split-body wave runner
+    'packages/experimental/webworker-runtime/src/x6/menger-observe.ts', // Corner observability & blind twin
     'packages/experimental/webworker-runtime/src/x6/ball-loader.ts']) {
     const next = path.endsWith('ball-loader.ts') ? FROZEN_TOOLS_NEXT : FROZEN_PATH_NEXT
     for (const input of [

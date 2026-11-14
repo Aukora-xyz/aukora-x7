@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CELL_EXECUTION_TIMEOUT_MS, CELL_BROWSER_FUEL_CAP, CELL_PINS, METERED_CELL_EXPORTS, SKILL_EXPECTED_EXPORTS, admitCell, cellCanonicalJson, createCellHost, type CellHost, type CellWorker } from '../../src/x6/wasm-cells.ts'
 
 const CELLS = new URL('../../../../../apps/web/public/cells/', import.meta.url)
-const ORIGIN = 'https://x61.example.invalid'
+const ORIGIN = 'https://node.example.invalid'
 /** The page origin's static files, as the edge serves apps/web/dist. */
 const served = (override: Record<string, Uint8Array<ArrayBuffer> | number> = {}) => (async (input: RequestInfo | URL) => {
   const url = new URL(String(input))
@@ -64,7 +64,7 @@ describe('Wasm cells in the worker', () => {
   it('ships exactly the pinned cells: every file hashes to its pin, has zero imports and the metered ABI v1 exports', async () => {
     const files = (await readdir(CELLS)).filter(name => name.endsWith('.wasm')).map(name => name.slice(0, -5)).sort()
     expect(files).toEqual(Object.keys(CELL_PINS).sort())
-    expect(files).toHaveLength(25)
+    expect(files).toHaveLength(30) // 25 + nucleus + kyber-cpu + pentora-codec + cord-echo + menger-hive
     for (const name of files) {
       const bytes = new Uint8Array(await readFile(new URL(`${name}.wasm`, CELLS)))
       const pin = CELL_PINS[name]!

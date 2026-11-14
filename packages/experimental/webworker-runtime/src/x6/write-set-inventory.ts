@@ -69,7 +69,33 @@ export const RUNTIME_WRITE_SET: readonly WriteSetEntry[] = Object.freeze([
     writers: w(BL, 'join(BALLS_DIR, `${sha}.js`)', 'join(BALLS_DIR, `${sha}.meta.json`)', 'join(BALLS_DIR, `${sha256}.meta.json`)',
       'ballFile', 'filePath', 'metaPath', 'ballPath', 'p') },
   { id: 'organ-store', class: 'content-addressed', pathPattern: '/dsh/home/organs/<sha256>.js', match: '^/dsh/home/organs/[a-f0-9]{64}\\.js$',
-    transitionKinds: [], writers: w(BL, '`/dsh/home/organs/${meta.sha256}.js`', '`/dsh/home/organs/${sha}.js`', 'organFile', 'organStoreFile') },
+    transitionKinds: [], writers: w(BL, '`/dsh/home/organs/${meta.sha256}.js`', '`/dsh/home/organs/${sha}.js`', '`/dsh/home/organs/${sha256}.js`', 'organFile',
+      'organStoreFile') },
+  // The cells she forges and keeps, named by the SHA-256 of their admitted Wasm (re-hashed before every run).
+  { id: 'forged-cell-store', class: 'content-addressed', pathPattern: '/dsh/home/cells/forged/<sha256>.{wasm,wat,json}',
+    match: '^/dsh/home/cells/forged/[a-f0-9]{64}\\.(wasm|wat|json)$', transitionKinds: [],
+    writers: w(BL, 'forgedWasmPath', 'forgedWatPath', 'forgedManifestPath', 'forgedPath') },
+  // ---- KYBERSKILL block begin ----
+  // The skills she keeps. A record is named by its id (sha256 of its domain and canonical bytes, checked
+  // by verifySkill on every read); a program or weights file by the sha256 of its bytes.
+  { id: 'kept-skill-store', class: 'content-addressed', pathPattern: '/dsh/home/skills/{<id>,programs/<sha256>,weights/<sha256>}.json',
+    match: '^/dsh/home/skills/((programs|weights)/)?[a-f0-9]{64}\\.json$', transitionKinds: [],
+    writers: w(BL, 'keptProgramPath', 'keptWeightsPath', 'keptSkillPath', 'forgottenSkillPath', 'orphanArtifactPath') },
+  // ---- KYBERSKILL block end ----
+  // ---- CORDECHO block begin ----
+  // The head she holds for one ongoing Cord skill (Kira's shelf). Each checkpoint is named by its own head
+  // and re-hashed on every read; head.json is `{ generation, head, tick }`; at most 8 checkpoints are kept (never the head
+  // or its parent). Her working state, not authority: nothing in her authority path reads it.
+  { id: 'cord-checkpoint-store', class: 'continuity', pathPattern: '/dsh/home/cord/<skillId>/{head,checkpoints/<head>}.json',
+    match: '^/dsh/home/cord/[a-f0-9]{64}/(head|checkpoints/[a-f0-9]{64})\\.json$', transitionKinds: [],
+    writers: w('cord-run.ts', 'checkpointPath', 'headPath', 'prunedPath') },
+  // ---- CORDECHO block end ----
+  // Her own tools (tool-registry.ts). A proposal is the canonical bytes of `{ manifest, notes }` named by
+  // their SHA-256; a mounted record names its proposal, qualification id and capability diff. Her working state: the
+  // registry re-reads and re-hashes both before it registers or calls a tool.
+  { id: 'tool-registry-store', class: 'continuity', pathPattern: '/dsh/home/tools/{proposals/<name>/<sha256>,mounted/<name>}.json',
+    match: '^/dsh/home/tools/(proposals/[a-z][a-z0-9-]{1,30}/[a-f0-9]{64}|mounted/[a-z][a-z0-9-]{1,30})\\.json$', transitionKinds: [],
+    writers: w('tool-registry.ts', 'proposalPath', 'mountedPath', 'unmountPath', 'withdrawPath') },
   { id: 'named-organ-sources', class: 'continuity', pathPattern: '/dsh/home/auma/seed/organs/<id>.js',
     match: '^/dsh/home/auma/seed/organs/[a-z][a-z0-9-]{0,63}\\.js$', transitionKinds: [], writers: w(BL, 'named') },
   { id: 'snapshots', class: 'continuity', pathPattern: '/dsh/home/auma/snapshots/{<id>,LATEST}.json',

@@ -424,7 +424,8 @@ test('unacknowledged durable stage or claim prevents all GitHub mutations', asyn
 })
 
 test('job logs follow only one signed Azure redirect with auth stripped and project a UTF-8 tail', async () => {
-  const log = '\u001b[31m' + '😀"'.repeat(30000) + '\u001b[0m', calls = []
+  // The tail is 256 KiB (was 128 KiB), so the log is 300,000 bytes (was 150,000) to be cut.
+  const log = '\u001b[31m' + '😀"'.repeat(60000) + '\u001b[0m', calls = []
   const broker = fixture({ hook: (url, init) => {
     calls.push({ url, init })
     if (url.hostname === 'api.github.com') { assert.match(init.headers.authorization, /^Bearer /); assert.equal(init.redirect, 'manual'); return new Response(null, { status: 302, headers: { location: 'https://fixturelogs.blob.core.windows.net/logs/job.txt?sig=fixture' } }) }
@@ -434,6 +435,26 @@ test('job logs follow only one signed Azure redirect with auth stripped and proj
   const result = await broker.request({ action: 'api', endpoint: PREFIX + '/actions/jobs/42/logs' }, { route: '/_host/github' })
   assert.equal(result.status, 200); assert.equal(result.value.json.truncated, true); assert.equal(result.value.json.log.includes('\u001b'), false)
   assert.ok(Buffer.byteLength(result.value.json.log) <= CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes); assert.equal(result.value.json.log.includes('\ufffd'), false); assert.equal(calls.length, 2)
+  assert.equal(CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes, 252 * 1024)
+  // Review fix (the raised limits MUST): the log sits in her answer once, and the WHOLE answer stays within the 256 KiB bound.
+  assert.ok(Buffer.byteLength(JSON.stringify(result.value)) <= 256 * 1024, 'one log answer puts at most 256 KiB in front of her')
+  assert.equal(result.value.stdout.includes('😀'), false, 'stdout does not carry the log a second time')
+  assert.ok(Buffer.byteLength(JSON.stringify(result.value.json.log)) > CLOUD_REPO_PROPOSAL_LIMITS.logTailBytes - 16, 'the tail fills its budget, not the old 128 KiB')
+})
+
+test('a long job log answer stays within 256 KiB whatever the log is made of', async () => {
+  // Plain lines, quote-heavy lines and control characters (JSON escapes \u0001 as six bytes) all meet the same bound.
+  for (const log of ['ok step line\n'.repeat(40000), '"a"\\b\n'.repeat(80000), '\u0001\u0002x'.repeat(200000)]) {
+    const broker = fixture({ hook: () => new Response(log) })
+    const result = await broker.request({ action: 'api', endpoint: PREFIX + '/actions/jobs/42/logs' }, { route: '/_host/github' })
+    assert.equal(result.status, 200, JSON.stringify(result.value).slice(0, 200)); assert.equal(result.value.json.truncated, true)
+    const answer = Buffer.byteLength(JSON.stringify(result.value))
+    assert.ok(answer <= 256 * 1024, `answer ${answer} bytes`); assert.ok(answer > 248 * 1024, `answer ${answer} bytes uses the room`)
+    assert.ok(log.endsWith(result.value.json.log), 'the newest lines are kept'); assert.equal(result.value.stdout.includes(result.value.json.log.slice(-64)), false)
+  }
+  const short = fixture({ hook: () => new Response('one line\n') })
+  const whole = await short.request({ action: 'api', endpoint: PREFIX + '/actions/jobs/42/logs' }, { route: '/_host/github' })
+  assert.equal(whole.value.json.log, 'one line\n'); assert.equal(whole.value.json.truncated, false)
 })
 
 test('logs screen secret bytes before discarded tail and after stripping ANSI', async () => {
@@ -597,15 +618,16 @@ test('one total deadline bounds sequential proposal reads rather than restarting
       reads++
       if (reads === 1) first.resolve()
       if (reads === 2) second.resolve()
-      await new Promise(resolve => setTimeout(resolve, 6000))
+      // The deadline is 30 s (was 10 s); each read takes 20 s, under it, and two exceed it together.
+      await new Promise(resolve => setTimeout(resolve, 20000))
     } })
     const pending = broker.request({ action: 'stage_proposal', branch: BRANCH, title: 'Fix' })
     await first.promise
-    context.mock.timers.tick(6000)
+    context.mock.timers.tick(20000)
     await second.promise
-    context.mock.timers.tick(4001)
+    context.mock.timers.tick(10001)
     assert.equal((await pending).status, 408)
-    context.mock.timers.tick(6000)
+    context.mock.timers.tick(20000)
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(broker.calls.length, 2); assert.equal(broker.proposals.length, 0)
   } finally { context.mock.timers.reset() }
@@ -655,7 +677,11 @@ test('private file and commit byte caps stay finite across assembled edits and e
   assert.equal(commit.status, 200)
   const over = await broker.request({ action: 'write', branch: BRANCH, path, content: content + 'x' })
   assert.equal(over.value.code, 'BROKER_CONTENT_INVALID')
-  const aggregate = await broker.request({ action: 'commit', branch: BRANCH, message: 'Too many bytes', changes: [{ path, content }, { path: 'deploy/cloudflare/src/auma/second.mjs', content }, { path: 'deploy/cloudflare/src/auma/third.mjs', content: 'x' }] })
+  // A private commit holds 4 MiB (was 1 MiB): eight full files fit exactly; one byte more is refused.
+  const plain = 'y'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes), eight = Array.from({ length: 8 }, (_v, i) => ({ path: `deploy/cloudflare/src/auma/part-${i}.mjs`, content: plain }))
+  assert.equal(CLOUD_REPO_BRANCH_LIMITS.publicationBytes, 8 * CLOUD_REPO_BRANCH_LIMITS.fileBytes)
+  assert.equal((await broker.request({ action: 'commit', branch: BRANCH, message: 'Four MiB', changes: eight })).status, 200)
+  const aggregate = await broker.request({ action: 'commit', branch: BRANCH, message: 'Too many bytes', changes: [...eight, { path: 'deploy/cloudflare/src/auma/third.mjs', content: 'x' }] })
   assert.equal(aggregate.value.code, 'REPO_CHANGE_INVALID')
   const assembled = fixture({ after: { [path]: 'x'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes - 6) + 'TARGET' } })
   assert.equal((await assembled.request({ action: 'edit', branch: BRANCH, path, oldString: 'TARGET', newString: 'TOO-LONG' })).value.code, 'BROKER_CONTENT_INVALID')
@@ -663,11 +689,16 @@ test('private file and commit byte caps stay finite across assembled edits and e
   assert.equal((await legacy.request({ action: 'write', path: 'README.md', content })).value.code, 'BROKER_BODY_TOO_LARGE')
 })
 
-test('larger source reads never widen the compare_files 256 KiB wire limit or secret checks', async () => {
+test('compare_files takes each side up to 1 MiB (was 256 KiB), bounded first by one read; secret checks stay', async () => {
   const path = 'deploy/cloudflare/src/auma/large.mjs', content = 'x'.repeat(300 * 1024)
   const broker = fixture({ after: { [path]: content } })
   assert.equal((await broker.request({ action: 'read', branch: BRANCH, path })).status, 200)
-  assert.equal((await broker.request({ action: 'compare_files', ref: HEAD, leftPath: path, rightPath: path })).status, 413)
+  assert.equal(CLOUD_REPO_READ_LIMITS.compareSideBytes, 1024 * 1024)
+  const compared = await broker.request({ action: 'compare_files', ref: HEAD, leftPath: path, rightPath: path })
+  assert.equal(compared.status, 200, JSON.stringify(compared.value)); assert.equal(compared.value.identical, true); assert.equal(compared.value.leftBytes, 300 * 1024)
+  // Just above what one read returns, a side is refused (the 1 MiB side bound is never reached past the 512 KiB read).
+  const big = 'deploy/cloudflare/src/auma/big.mjs', over = fixture({ after: { [big]: 'x'.repeat(CLOUD_REPO_READ_LIMITS.fileBytes + 1) } })
+  assert.notEqual((await over.request({ action: 'compare_files', ref: HEAD, leftPath: big, rightPath: big })).status, 200)
   assert.equal((await broker.request({ action: 'write', branch: BRANCH, path, content: content + '\nsynthetic-token-value' })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
 })
 
@@ -683,4 +714,20 @@ test('mixed binary and UTF-8 source search skips only non-text and reports bound
   assert.equal(skipped.value.skippedFiles, 40); assert.equal(skipped.value.skippedPaths.length, 32); assert.equal(skipped.value.skippedPathsTruncated, true)
   const secret = fixture({ after: { ...after, 'apps/fixture/z.mjs': 'synthetic-token-value\nneedle' } })
   assert.equal((await secret.request({ action: 'search', branch: BRANCH, query: 'needle' })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+})
+
+test('a private commit takes 64 files (was 16), not 65; the request bound is 12 MiB plus 32 KiB, under the 16 MiB door', async () => {
+  assert.deepEqual([CLOUD_REPO_BRANCH_LIMITS.files, CLOUD_REPO_BRANCH_LIMITS.publicationBytes, CLOUD_REPO_BRANCH_LIMITS.requestBytes], [64, 4 * 1024 * 1024, 12 * 1024 * 1024 + 32 * 1024])
+  assert.ok(CLOUD_REPO_BRANCH_LIMITS.requestBytes < 16 * 1024 * 1024)
+  const files = count => Array.from({ length: count }, (_v, i) => ({ path: `deploy/cloudflare/src/auma/many-${String(i).padStart(2, '0')}.mjs`, content: `export const n = ${i}\n` }))
+  const broker = fixture()
+  const sixtyFour = await broker.request({ action: 'commit', branch: BRANCH, message: 'Sixty-four files', changes: files(64) })
+  assert.equal(sixtyFour.status, 200, JSON.stringify(sixtyFour.value)); assert.equal(sixtyFour.value.paths.length, 64)
+  const input = JSON.parse(broker.calls.find(call => call.method === 'POST').body).variables.input
+  assert.equal(input.fileChanges.additions.length, 64)
+  assert.equal((await fixture().request({ action: 'commit', branch: BRANCH, message: 'Sixty-five files', changes: files(65) })).value.code, 'REPO_EXPLICIT_CHANGES_REQUIRED')
+  // Content that escapes past the request bound is refused before anything is sent: 4 MiB of control characters is 24 MiB of JSON.
+  const control = '\u0001'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes), heavy = fixture()
+  const over = await heavy.request({ action: 'commit', branch: BRANCH, message: 'Escapes past the bound', changes: Array.from({ length: 8 }, (_v, i) => ({ path: `deploy/cloudflare/src/auma/heavy-${i}.mjs`, content: control })) })
+  assert.equal(over.status, 413); assert.equal(over.value.code, 'BROKER_BODY_TOO_LARGE'); assert.equal(heavy.calls.some(call => call.method === 'POST'), false)
 })

@@ -75,7 +75,11 @@ test('cloud wake runs bounded tool protocol with exact transcripts and per-round
     answerCalls(call('checkpoint', 'appendWakeCheckpoint')), { content: 'WISH_COMPLETED: observed epoch 2 and recorded checkpoint.' }])
   assert.deepEqual(await f.run(), { status: 'success', toolCalls: 3, evidenceCount: 2 })
   assert.equal(f.requests.length, 3)
-  assert.equal(f.requests[2].tool_choice, 'none')
+  // A step has 4 rounds now, so round 3 is still 'auto'. The 4th round's forced 'none', and a tool call returned
+  // in it failing as tool_refused / cloud_wake_tool_limit, are asserted by the two "the wake" 4-round tests in
+  // wake2-reasons.test.mjs (both fail if the forced round moves off the last one).
+  assert.equal(f.requests[2].tool_choice, 'auto')
+  assert.equal(CLOUD_WAKE_LIMITS.rounds, 4)
   assert.deepEqual(f.mirrorCalls, ['/_mirror/wake-read', '/_mirror/wake-checkpoint'])
   assert.equal((await f.hs.storage.get('provider-budget:v1:deepseek')).requests, 3)
   assert.equal(await f.hs.storage.get('provider-budget:v1:anthropic'), undefined)

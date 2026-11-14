@@ -2,7 +2,7 @@ import { executeToolFixture } from '@deepseek-ai/dsh-tool-testkit'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { mountWorkingDirectoryFixture } from '../../subagent/tests/working-directory-fixture.ts'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
   ToolCallId,
@@ -22,7 +22,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import * as tool from '../src/index.ts'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent'
 import { mountAgentLoopTestDependencies } from '@deepseek-ai/dsh-agent-loop-testkit'
 import SubagentModelSelectionConfig from '../src/model-selection-settings.ts'
 import { modelSelectionSetupAgent, ownContext, setup, testToolSignal, text } from './harness.ts'
@@ -68,12 +68,17 @@ class CatalogAdapter extends LlmAdapter {
 
 const callingAgents = new WeakMap<Context, Agent>()
 
+/** Every listing ends by saying when its choices were fixed, so an old thread is not read as broken. */
+const FOOTER = 'Subagent model choices are fixed when a session starts: a Settings change applies to new sessions only.'
+const NO_POLICY_FOOTER = 'This session started without a subagent model list, so only its own model is offered. ' + FOOTER
+const listed = (...lines: string[]) => [...lines, FOOTER].join('\n')
+
 async function setupListTool(routes = [
   { provider: 'alpha', model: 'fast' },
   { provider: 'alpha', model: 'plain' },
   { provider: 'beta', model: 'fast' },
   { provider: 'beta', model: 'plain' },
-]) {
+], agentOptions?: AgentOptions) {
   const ctx = ownContext(new Context())
   await mountAgentLoopTestDependencies(ctx)
   await ctx.plugin(AgentLoop, { agents: [] })
@@ -81,7 +86,10 @@ async function setupListTool(routes = [
   await mountWorkingDirectoryFixture(ctx)
   await ctx.plugin(SubagentRuntime)
   await ctx.plugin(tool, { provider: 'unused', modelDiscovery: true })
-  const { agent } = await ctx.agents.create({ sessionId: SessionId('discovery-parent') })
+  const { agent } = await ctx.agents.create({
+    sessionId: SessionId('discovery-parent'),
+    ...agentOptions === undefined ? {} : { agentOptions },
+  })
   callingAgents.set(ctx, agent)
   return ctx
 }
@@ -198,7 +206,7 @@ describe('list_subagent_models', () => {
       name: 'list_subagent_models', arguments: {}, agent: modelSelectionSetupAgent(ctx),
     })
     expect(result.isError).toBe(false)
-    expect(text(result)).toBe('alpha — ALPHA API')
+    expect(text(result)).toBe(listed('alpha — ALPHA API'))
   })
 
   it('stays registered without the LLM service and rejects discovery calls', async () => {
@@ -223,16 +231,16 @@ describe('list_subagent_models', () => {
     const ctx = await setupListTool()
     const empty = await call(ctx, {})
     expect(empty.isError).toBe(false)
-    expect(text(empty)).toBe('(no LLM providers)')
+    expect(text(empty)).toBe(listed('(no LLM providers)'))
 
     const registration = ctx.llm.registerAdapter(['alpha'], new CatalogAdapter())
     const providers = await call(ctx, {})
     expect(providers.isError).toBe(false)
-    expect(text(providers)).toBe('alpha — ALPHA API')
+    expect(text(providers)).toBe(listed('alpha — ALPHA API'))
 
     registration.replace(['beta'])
     const changed = await call(ctx, {})
-    expect(text(changed)).toBe('beta — BETA API')
+    expect(text(changed)).toBe(listed('beta — BETA API'))
 
     const tools = ctx.tools
     await ctx.fiber.dispose()
@@ -244,15 +252,15 @@ describe('list_subagent_models', () => {
     ctx.llm.registerAdapter(['alpha'], new CatalogAdapter())
     const result = await call(ctx, { provider: 'alpha' })
     expect(result.isError).toBe(false)
-    expect(text(result)).toBe('alpha/fast — Fast: Focused work.\nalpha/plain — Plain')
+    expect(text(result)).toBe(listed('alpha/fast — Fast: Focused work.', 'alpha/plain — Plain'))
   })
 
   it('intersects provider and model discovery with the Session allowlist', async () => {
     const ctx = await setupAllowedListTool()
     ctx.llm.registerAdapter(['alpha', 'beta'], new CatalogAdapter())
 
-    expect(text(await call(ctx, {}))).toBe('alpha — ALPHA API')
-    expect(text(await call(ctx, { provider: 'alpha' }))).toBe('alpha/fast — Fast: Focused work.')
+    expect(text(await call(ctx, {}))).toBe(listed('alpha — ALPHA API'))
+    expect(text(await call(ctx, { provider: 'alpha' }))).toBe(listed('alpha/fast — Fast: Focused work.'))
     expect(text(await call(ctx, { provider: 'alpha', model: 'unlisted' })))
       .toContain('alpha/unlisted — Fast')
 
@@ -279,7 +287,7 @@ describe('list_subagent_models', () => {
     ctx.llm.registerAdapter(['alpha'], new CatalogAdapter())
     const result = await call(ctx, { provider: 'alpha' })
     expect(result.isError).toBe(false)
-    expect(text(result)).toBe('(no advertised models for alpha)')
+    expect(text(result)).toBe(listed('(no advertised models for alpha)'))
   })
 
   it('lists authorized catalog entries without resolving removed or unlisted models', async () => {
@@ -294,7 +302,7 @@ describe('list_subagent_models', () => {
 
       const result = await call(ctx, { provider: 'alpha' })
       expect(result.isError).toBe(false)
-      expect(text(result)).toBe('alpha/plain — Plain')
+      expect(text(result)).toBe(listed('alpha/plain — Plain'))
       expect(resolveModel).not.toHaveBeenCalled()
 
       const exact = await call(ctx, { provider: 'alpha', model: 'removed' })
@@ -352,8 +360,60 @@ describe('list_subagent_models', () => {
       name: 'list_subagent_models', arguments: { provider: 'alpha' }, agent: modelSelectionSetupAgent(ctx),
     })
     expect(result.isError).toBe(false)
-    expect(text(result)).toBe('alpha/unlisted — Fast: Focused work.')
+    expect(text(result)).toBe(['alpha/unlisted — Fast: Focused work. (your own model)', NO_POLICY_FOOTER].join('\n'))
     expect(listModels).not.toHaveBeenCalled()
+  })
+
+  it('always lists and answers for her own route, even when the Session list leaves it out', async () => {
+    // Her main mind runs on a route outside the recorded list (the list names alpha, current-provider and missing only).
+    const ctx = await setup({
+      provider: 'mock',
+      withModelSelection: true,
+      parentAgentOptions: { provider: 'gamma', model: 'own-model' },
+    })
+    const adapter = new CatalogAdapter()
+    ctx.llm.registerAdapter(['alpha', 'gamma', 'delta'], adapter)
+    const agent = modelSelectionSetupAgent(ctx)
+    const ask = (args: unknown) => executeToolFixture(ctx, {
+      signal: testToolSignal, callId: ToolCallId(`own-route-${++counter}`),
+      name: 'list_subagent_models', arguments: args, agent,
+    })
+
+    const providers = await ask({})
+    expect(providers.isError).toBe(false)
+    expect(text(providers)).toBe(listed('alpha — ALPHA API', 'gamma — GAMMA API (your own model: own-model)'))
+
+    const gamma = await ask({ provider: 'gamma' })
+    expect(gamma.isError).toBe(false)
+    expect(text(gamma)).toBe(listed('gamma/own-model — Fast: Focused work. (your own model)'))
+
+    const exact = await ask({ provider: 'gamma', model: 'own-model' })
+    expect(exact.isError).toBe(false)
+    expect(text(exact)).toBe(
+      'gamma/own-model — Fast: Focused work. (your own model)\nReasoning efforts:\n'
+      + 'low — Low\nhigh (default) — High: Quality first.',
+    )
+
+    // A route in neither her own nor the list is still refused, with the sentence she can act on.
+    const otherModel = await ask({ provider: 'gamma', model: 'fast' })
+    expect(otherModel.isError).toBe(true)
+    expect(text(otherModel)).toContain('child LLM route "gamma/fast" is not allowed for this Session; '
+      + 'call list_subagent_models with `provider` for the models it allows')
+    const otherProvider = await ask({ provider: 'delta' })
+    expect(otherProvider.isError).toBe(true)
+    expect(text(otherProvider)).toContain('LLM provider "delta" is not allowed for this Session; '
+      + 'call list_subagent_models with no arguments for the providers it allows')
+  })
+
+  it('marks her own route in place when the Session list already names it', async () => {
+    const ctx = await setupListTool(undefined, { provider: 'alpha', model: 'plain' })
+    ctx.llm.registerAdapter(['alpha', 'beta'], new CatalogAdapter())
+    expect(text(await call(ctx, {}))).toBe(listed('alpha — ALPHA API (your own model: plain)', 'beta — BETA API'))
+    expect(text(await call(ctx, { provider: 'alpha' })))
+      .toBe(listed('alpha/fast — Fast: Focused work.', 'alpha/plain — Plain (your own model)'))
+    expect(text(await call(ctx, { provider: 'beta' }))).toBe(listed('beta/fast — Fast: Focused work.', 'beta/plain — Plain'))
+    expect(text(await call(ctx, { provider: 'alpha', model: 'plain' })))
+      .toBe('alpha/plain — Plain (your own model)\nReasoning efforts:\n(no advertised reasoning efforts)')
   })
 
   it('inspects exact-model efforts, descriptions, and defaults', async () => {
@@ -411,5 +471,145 @@ describe('list_subagent_models', () => {
     const result = await call(ctx, { provider: 'missing' })
     expect(result.isError).toBe(true)
     expect(text(result)).toContain('available providers: (none)')
+  })
+})
+
+describe('list_subagent_models and the keys at the edge', () => {
+  const ORIGIN = 'https://node.example.invalid'
+  const EDGE_DOORS = {
+    healthPath: '/api/health',
+    routes: [{ provider: 'alpha', door: 'openrouter' }, { provider: 'beta', door: 'anthropic' }],
+  }
+  const NO_KEY = ' - unavailable: ALPHA API is switched on but has no key at the edge'
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  /** Her browser body: an edge origin whose `/api/health` answers `answer` (a status, or a body). */
+  function edge(answer: unknown) {
+    vi.stubGlobal('location', { origin: ORIGIN })
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(typeof answer === 'number'
+      ? new Response('{}', { status: answer })
+      : Response.json(answer)))
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  async function setupDoors(adapter = new CatalogAdapter(), agentOptions?: AgentOptions) {
+    const ctx = ownContext(new Context())
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(SubagentModelSelectionConfig, {
+      enabled: true,
+      allowedModels: [
+        { provider: 'alpha', model: 'fast' },
+        { provider: 'alpha', model: 'plain' },
+        { provider: 'beta', model: 'fast' },
+      ],
+      edgeDoors: EDGE_DOORS,
+    })
+    await mountWorkingDirectoryFixture(ctx)
+    await ctx.plugin(SubagentRuntime)
+    await ctx.plugin(tool, { provider: 'unused', modelDiscovery: true })
+    const { agent } = await ctx.agents.create({
+      sessionId: SessionId('door-discovery-parent'),
+      ...agentOptions === undefined ? {} : { agentOptions },
+    })
+    callingAgents.set(ctx, agent)
+    ctx.llm.registerAdapter(['alpha', 'beta'], adapter)
+    return ctx
+  }
+
+  it('marks every route behind a door with no key at the edge, never as usable and never dropped', async () => {
+    const fetchMock = edge({ ok: true, capabilities: { providerDoors: { openrouter: false, anthropic: true, deepseek: true } } })
+    const adapter = new CatalogAdapter()
+    const listModels = vi.spyOn(adapter, 'listModels')
+    const ctx = await setupDoors(adapter)
+
+    expect(text(await call(ctx, {}))).toBe(listed(`alpha — ALPHA API${NO_KEY}`, 'beta — BETA API'))
+    const alpha = await call(ctx, { provider: 'alpha' })
+    expect(alpha.isError).toBe(false)
+    expect(text(alpha)).toBe(listed(`alpha/fast${NO_KEY}`, `alpha/plain${NO_KEY}`))
+    expect(listModels).not.toHaveBeenCalledWith('alpha')
+    expect(text(await call(ctx, { provider: 'beta' }))).toBe(listed('beta/fast — Fast: Focused work.'))
+    const exact = await call(ctx, { provider: 'alpha', model: 'plain' })
+    expect(text(exact)).toBe(`alpha/plain — Plain${NO_KEY}\nReasoning efforts:\n(no advertised reasoning efforts)`)
+
+    // The edge's own answer, read on this origin with the session cookie, on every listing (a key set a minute ago counts).
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(url).toBe(`${ORIGIN}/api/health`)
+      expect(init).toMatchObject({ method: 'GET', credentials: 'same-origin', cache: 'no-store' })
+    }
+  })
+
+  it('tells the same door truth about her own route as about any listed route', async () => {
+    edge({ ok: true, capabilities: { providerDoors: { openrouter: false, anthropic: true } } })
+    const ctx = await setupDoors(new CatalogAdapter(), { provider: 'alpha', model: 'own-model' })
+    expect(text(await call(ctx, {})))
+      .toBe(listed(`alpha — ALPHA API (your own model: own-model)${NO_KEY}`, 'beta — BETA API'))
+    expect(text(await call(ctx, { provider: 'alpha' })))
+      .toBe(listed(`alpha/fast${NO_KEY}`, `alpha/plain${NO_KEY}`, `alpha/own-model (your own model)${NO_KEY}`))
+    expect(text(await call(ctx, { provider: 'alpha', model: 'own-model' })))
+      .toBe(`alpha/own-model — Fast: Focused work. (your own model)${NO_KEY}\nReasoning efforts:\n`
+        + 'low — Low\nhigh (default) — High: Quality first.')
+  })
+
+  it('lists every route as usable once the edge holds the key', async () => {
+    edge({ ok: true, capabilities: { providerDoors: { openrouter: true, anthropic: true } } })
+    const ctx = await setupDoors()
+    expect(text(await call(ctx, {}))).toBe(listed('alpha — ALPHA API', 'beta — BETA API'))
+    expect(text(await call(ctx, { provider: 'alpha' }))).toBe(listed('alpha/fast — Fast: Focused work.', 'alpha/plain — Plain'))
+  })
+
+  it.each([
+    [503, 'Edge key check not run: the edge health answer was HTTP 503.'],
+    [{ ok: true, capabilities: {} }, 'Edge key check not run: the edge health answer names no provider doors.'],
+    [{ ok: true, capabilities: { providerDoors: { deepseek: false } } }, 'Edge key check not run: the edge does not report the openrouter door.'],
+  ])('says so, and claims nothing, when the edge cannot tell (%j)', async (answer, note) => {
+    edge(answer)
+    const ctx = await setupDoors()
+    const result = await call(ctx, { provider: 'alpha' })
+    expect(result.isError).toBe(false)
+    expect(text(result)).toBe(['alpha/fast — Fast: Focused work.', 'alpha/plain — Plain', note, FOOTER].join('\n'))
+  })
+
+  it('says the check did not run in a body with no edge origin, and reads nothing', async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+    vi.stubGlobal('fetch', fetchMock)
+    const ctx = await setupDoors()
+    expect(text(await call(ctx, {}))).toBe(listed('alpha — ALPHA API', 'beta — BETA API', 'Edge key check not run: this body has no edge origin.'))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads nothing for providers with no door', async () => {
+    const fetchMock = edge({ ok: true, capabilities: { providerDoors: { openrouter: false } } })
+    const ctx = await setupListTool()
+    ctx.llm.registerAdapter(['alpha'], new CatalogAdapter())
+    expect(text(await call(ctx, { provider: 'alpha' }))).toBe(listed('alpha/fast — Fast: Focused work.', 'alpha/plain — Plain'))
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses a door table that names a door the edge could never report', async () => {
+    const ctx = ownContext(new Context())
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await expect(ctx.plugin(SubagentModelSelectionConfig, {
+      enabled: true,
+      allowedModels: [{ provider: 'alpha', model: 'fast' }],
+      edgeDoors: { healthPath: '/api/health', routes: [{ provider: 'alpha', door: 'Open Router!' }] },
+    })).rejects.toThrow('edge door "Open Router!" for provider "alpha" must be a lowercase door name')
+  })
+
+  it('says in both tool descriptions that a Settings change applies to new sessions only', async () => {
+    const ctx = await setup({ provider: 'mock', modelSelection: true, modelDiscovery: true })
+    const schemas = ctx.tools.schemas()
+    expect(schemas.find(schema => schema.name === 'subagent')!.description)
+      .toContain('Subagent model choices are fixed when a session starts: a Settings change applies to new sessions only.')
+    expect(schemas.find(schema => schema.name === 'list_subagent_models')!.description)
+      .toContain('Subagent model choices are fixed when a session starts: a Settings change applies to new sessions only.')
+    expect(schemas.find(schema => schema.name === 'list_subagent_models')!.description)
+      .toContain('Your own model is always listed and allowed, marked "your own model".')
   })
 })

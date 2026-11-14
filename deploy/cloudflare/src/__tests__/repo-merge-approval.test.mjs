@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { APPROVAL_SPENT_VOID_NEXT, CLOUD_BROKER_LIMITS, MERGE_SETTLE_GRACE_MS, RELEASE_ATTEMPT_NEXT, handleCloudBroker } from '../cloud-brokers.mjs'
+import { APPROVAL_SPENT_VOID_NEXT, CLOUD_BROKER_LIMITS, MERGE_AFTER_READS_RESERVE_MS, MERGE_READ_WINDOW_MS, MERGE_SETTLE_GRACE_MS, RELEASE_ATTEMPT_NEXT, handleCloudBroker } from '../cloud-brokers.mjs'
 import { canonicalJson } from '../owner-grant-policy.mjs'
 import { X61HeadDurableObject, BOOTSTRAP_VERSION, REPO_MERGE_ACTION_DEADLINE_MS, REPO_MERGE_RECONCILE_AFTER_MS, canonicalBootstrap, manifestIdCanon } from '../head-do.mjs'
 
@@ -154,16 +154,22 @@ async function harness() {
 function gate() { let open; const opened = new Promise(resolve => { open = resolve }); return { opened, open } }
 
 test('HEAD\'s merge deadline is the broker\'s deadline; the margin is stated', () => {
-  assert.equal(REPO_MERGE_ACTION_DEADLINE_MS, CLOUD_BROKER_LIMITS.timeoutMs)
+  // Other broker calls went to 30 s; merge_proposal keeps its own deadline, equal to HEAD's.
+  assert.equal(REPO_MERGE_ACTION_DEADLINE_MS, CLOUD_BROKER_LIMITS.mergeTimeoutMs)
+  assert.deepEqual([CLOUD_BROKER_LIMITS.mergeTimeoutMs, CLOUD_BROKER_LIMITS.timeoutMs], [10000, 30000])
   assert.equal(REPO_MERGE_RECONCILE_AFTER_MS, 60000)
 })
 
-test('the outside review\'s timing (each checks answer 4.45 s, every other 100 ms) times out in the reads: nothing claimed, nothing spent', async () => {
+// The reads before his approval have their own window (MERGE_READ_WINDOW_MS, 16 s) and the
+// act window starts at begin_merge. The review's case was 4.45 s per checks answer against the single 10 s window; it is
+// moved to the read window (8.45 s per checks answer, 16.9 s in all): still refused in the reads, nothing claimed or spent.
+test('the outside review\'s timing, moved to the read window (each checks answer 8.45 s, every other 100 ms), times out in the reads: nothing claimed, nothing spent', async () => {
   const fx = await harness(), token = fx.grant(fx.mergeBody)
-  fx.state.slow = url => url.pathname.includes('proposal-checks.yml') || url.pathname.includes('/actions/runs/8/') ? 4450 : 100
+  fx.state.slow = url => url.pathname.includes('proposal-checks.yml') || url.pathname.includes('/actions/runs/8/') ? 8450 : 100
   const started = Date.now(), result = await fx.request(fx.mergeBody, { token })
   assert.equal(result.status, 408, JSON.stringify(result.value)); assert.equal(result.value.code, 'BROKER_TIMEOUT')
-  assert.ok(Date.now() - started < 11000)
+  assert.equal(result.value.phase, 'reads'); assert.equal(result.value.approvalSpent, false); assert.equal(result.value.mainMoved, false)
+  assert.ok(Date.now() - started < MERGE_READ_WINDOW_MS + 1000)
   assert.equal(fx.state.consumed, 0); assert.equal(fx.posts(), 0); assert.equal(fx.refs.get('main'), BASE)
   assert.equal(fx.actions.includes('begin_merge'), false); assert.equal((await fx.status()).repoMergeAttempt, null)
   // The very same approval still merges once the answers are quick: it was never spent.
@@ -174,12 +180,16 @@ test('the outside review\'s timing (each checks answer 4.45 s, every other 100 m
   assert.equal(fx.state.brokerAuthorize, 0, 'a merge never consumes through the Worker: HEAD does, in begin_merge')
 })
 
-test('when the reads leave less than the reserve, the merge stops before the attempt and the approval', async () => {
+// Reads of 7.2 s used to leave 2.8 s of the single window, less than the reserve, and stopped (the live 408 of
+// 2026-11-14). The act window now starts at begin_merge with its full mergeTimeoutMs, which always leaves the reserve; the
+// reads past THEIR window stop before the attempt and the approval (the test above; merge1-read-window.test.mjs (b)).
+test('reads that used to leave less than the reserve now leave the full act window: claimed once, merged once', async () => {
+  assert.ok(MERGE_AFTER_READS_RESERVE_MS <= CLOUD_BROKER_LIMITS.mergeTimeoutMs)
   const fx = await harness(), token = fx.grant(fx.mergeBody)
   fx.state.slow = url => url.pathname.includes('proposal-checks.yml') || url.pathname.includes('/actions/runs/8/') ? 3600 : 0
   const result = await fx.request(fx.mergeBody, { token })
-  assert.equal(result.value.code, 'BROKER_TIMEOUT', JSON.stringify(result.value))
-  assert.equal(fx.state.consumed, 0); assert.equal(fx.posts(), 0); assert.equal((await fx.status()).repoMergeAttempt, null)
+  assert.equal(result.status, 200, JSON.stringify(result.value)); assert.equal(fx.refs.get('main'), HEAD)
+  assert.equal(fx.state.consumed, 1); assert.equal(fx.posts(), 1); assert.equal((await fx.status()).lastRepoMergeOutcome.status, 'succeeded')
 })
 
 test('exit row 7 (mutation and bookkeeping succeed), and MUST 3e: after consumption only the mark, the ref update and its bookkeeping; no ref read', async () => {
@@ -354,11 +364,11 @@ test('exit row 5 (the call is cut off by its deadline after the mark, before sen
   const fx = await harness()
   // The mark's answer arrives after the broker's ten-second deadline. Nothing runs after a Worker's response (there is no
   // waitUntil), so the void is written before the answer, and the answer says his approval is spent.
-  fx.state.around = async (action, forward) => { const response = await forward(); if (action === 'mark_merge') await sleep(CLOUD_BROKER_LIMITS.timeoutMs + 300); return response }
+  fx.state.around = async (action, forward) => { const response = await forward(); if (action === 'mark_merge') await sleep(CLOUD_BROKER_LIMITS.mergeTimeoutMs + 300); return response }
   const started = Date.now(), result = await fx.request(fx.mergeBody, { token: fx.grant(fx.mergeBody) })
   assert.equal(result.status, 409, JSON.stringify(result.value)); assert.equal(result.value.code, 'REPO_APPROVAL_SPENT_VOID'); assert.equal(result.value.next, APPROVAL_SPENT_VOID_NEXT)
   assert.equal(result.value.outcome, undefined, 'a definite answer, not an unclear one')
-  assert.ok(Date.now() - started < CLOUD_BROKER_LIMITS.timeoutMs + MERGE_SETTLE_GRACE_MS, String(Date.now() - started))
+  assert.ok(Date.now() - started < CLOUD_BROKER_LIMITS.mergeTimeoutMs + MERGE_SETTLE_GRACE_MS, String(Date.now() - started))
   const view = await fx.status()
   assert.equal(view.repoMergeAttempt, null, 'settled before the answer, not after it'); assert.equal(view.lastRepoMergeOutcome.code, 'REPO_APPROVAL_SPENT_VOID')
   assert.equal(fx.posts(), 0); assert.equal(fx.refs.get('main'), BASE); assert.equal(fx.state.consumed, 1)
@@ -368,7 +378,7 @@ test('exit row 5 (his owner session would run out during the call): refused befo
   const fx = await harness(), token = fx.grant(fx.mergeBody)
   // HEAD refuses an expired session, so a session that ran out after begin_merge could not even void the attempt: the
   // broker asks for a session that outlasts the deadline plus the settling time before anything is spent.
-  fx.access.expires = Math.floor((Date.now() + CLOUD_BROKER_LIMITS.timeoutMs + 2000) / 1000)
+  fx.access.expires = Math.floor((Date.now() + CLOUD_BROKER_LIMITS.mergeTimeoutMs + 2000) / 1000)
   const result = await fx.request(fx.mergeBody, { token })
   assert.equal(result.status, 403, JSON.stringify(result.value)); assert.equal(result.value.code, 'OWNER_SESSION_REQUIRED')
   assert.equal(fx.state.consumed, 0); assert.equal(fx.tokens.has(token), true); assert.equal(fx.actions.includes('begin_merge'), false); assert.equal(fx.posts(), 0)
@@ -468,7 +478,7 @@ test('MUST 3d, rewritten as MUST 4: a dispatched attempt past the margin is merg
 test('his sequence (accepted at t=1, broker timeout at t=10, read at t=62, the compare-and-set lands at t=63) ends unknown at 62 and merged at the next read, never void', async () => {
   const fx = await harness(), seen = []
   // t=1: GitHub takes the ref update and holds its compare-and-set; the broker's own ten-second deadline cuts the call.
-  fx.state.graphql = async () => { await sleep(CLOUD_BROKER_LIMITS.timeoutMs + 500); return json({ data: null, errors: [{ type: 'TIMEOUT' }] }) }
+  fx.state.graphql = async () => { await sleep(CLOUD_BROKER_LIMITS.mergeTimeoutMs + 500); return json({ data: null, errors: [{ type: 'TIMEOUT' }] }) }
   const first = await fx.request(fx.mergeBody, { token: fx.grant(fx.mergeBody) })
   assert.equal(first.value.code, 'REPO_REF_OUTCOME_UNKNOWN', JSON.stringify(first.value)); assert.equal(fx.posts(), 1)
   const record = async () => { const view = await fx.status(); seen.push(view.lastRepoMergeOutcome?.status ?? null); return view }

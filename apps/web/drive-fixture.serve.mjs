@@ -6,6 +6,12 @@
  *
  *   node apps/web/drive-fixture.serve.mjs   -> http://127.0.0.1:4178/          her drive
  *                                              http://127.0.0.1:4178/?chat=1   with a made-up chat message beside it
+ *                                              http://127.0.0.1:4178/?outward=cf-dns   the owner's card for one made-up
+ *                                              Cloudflare ask (cf-dns, cf-switch, cf-storage, cf-secret, cf-zone-delete,
+ *                                              cf-charge, cf-unresolved, cf-long, cf-changed), or one made-up
+ *                                              held Linear write (lin-issue-delete, lin-issue-archive, lin-project-archive,
+ *                                              lin-team-member-remove, lin-issue-move, lin-long); its approve control asks
+ *                                              no passkey and sends nothing (a stand-in records it)
  *
  * Only the fixture's own HTML is served as a page; it calls no host, signs nothing in and posts nothing. Stop it with
  * Ctrl-C. `DRIVE_FIXTURE_PORT` picks another port.
@@ -73,5 +79,7 @@ process.stdout.write([
   'Drive fixture (made-up files, nothing leaves this machine):',
   `  http://127.0.0.1:${String(port)}/          her drive`,
   `  http://127.0.0.1:${String(port)}/?chat=1   a made-up chat message whose links open the drive`,
+  ...['cf-dns', 'cf-switch', 'cf-storage', 'cf-secret', 'cf-zone-delete', 'cf-charge', 'cf-unresolved', 'cf-long', 'cf-changed']
+    .map(name => `  http://127.0.0.1:${String(port)}/?outward=${name}   the owner's card for a made-up Cloudflare ask`),
   '',
 ].join('\n'))

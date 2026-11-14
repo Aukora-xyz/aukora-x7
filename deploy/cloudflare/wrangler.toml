@@ -27,12 +27,37 @@ PROVIDER_BUDGET_WINDOW_MS = "60000"
 PROVIDER_BUDGET_REQUESTS = "1000"
 PROVIDER_BUDGET_TOKENS = "50000000"
 PROVIDER_MAX_OUTPUT_TOKENS = "256000"
+# Her Prime Intellect door (docs/auma/prime-door.md).
+# The account's own balance is the brake. The two prices are set at the
+# dearest model Prime lists (every listed model is allowed) and the two caps are set far out of the way; the door still
+# counts an upper estimate against them. The owner changes these four lines. The key (PRIME_API_KEY) is a Worker secret.
+PRIME_DAILY_CAP_USD = "1000"
+PRIME_MONTHLY_CAP_USD = "10000"
+PRIME_PRICE_IN_PER_M_USD = "10"
+PRIME_PRICE_OUT_PER_M_USD = "50"
 ELEVENLABS_MAX_CHARS_PER_DAY = "100000"
 ELEVENLABS_MAX_COST_PER_DAY = "4"
 ELEVENLABS_PRICE_PER_1K_CHARS = "0.04"
 ELEVENLABS_CHARS_PER_PASS = "5000"
 # Her voice in Auma Live: ELEVENLABS_VOICE_ID is not set in this template. A deployer sets their own voice id, as a
 # [vars] line here or as a Worker secret; an empty value is refused (eleven-speech.test.mjs). The key is always a secret.
+CLOUDFLARE_DOOR_LEVEL = "open" # the owner's choice; the other value is "guarded"
+LINEAR_DOOR_LEVEL = "open" # the owner's choice; the other value is "guarded" (every write asks)
+# The managed voice (VoiceBridge, docs/auma/voice-bridge.md). Only exactly "1" turns it on. Since 2026-11-14 it is the only voice:
+# "0" means NO voice (the orb rests with "My voice is not set up on this host yet. Typing works."); no older voice comes back.
+# ON: the provider resource is set up.
+VOICE_MANAGED = "1"
+# Her wake (docs/auma/wake.md): bounded read-only steps on a wish while no browser tab is open. Only exactly "1" turns it on.
+# ON: she may work with his tab closed. A step still needs a wish she made; 24 steps a wish,
+# 48 a UTC day. The provider is named, never swapped: with its secret absent no step runs (PROVIDER_SECRET_NOT_CONFIGURED).
+WAKE_EXECUTOR_ENABLED = "1"
+CLOUD_WAKE_PROVIDER = "deepseek"
+# Her no-tab ACTS (branch, commit or patch on her own branches, a runner job, a proposal card, one Linear comment),
+# each paid from the owner's away mandate first, offered only while his mandate is active. Only exactly "1" offers them;
+# anything else keeps every step look-only. Nothing on this path merges, deploys, deletes or touches a secret.
+# Committed "0" (every step stays look-only) until two read-only no-tab steps, a clean stop and right
+# counts have been shown on the live build. Then this becomes "1" in a commit of its own.
+WAKE_ACTS_ENABLED = "0"
 
 [[durable_objects.bindings]]
 name = "HEAD"
@@ -42,6 +67,10 @@ class_name = "X61HeadDurableObject"
 name = "MIRROR"
 class_name = "MirrorDO"
 
+[[durable_objects.bindings]]
+name = "VOICE_BRIDGE"
+class_name = "VoiceBridgeDO"
+
 [[r2_buckets]]
 binding = "ARCHIVE_BUCKET"
 bucket_name = "your-node-archive"
@@ -49,3 +78,8 @@ bucket_name = "your-node-archive"
 [[migrations]]
 tag = "x61-v1"
 new_sqlite_classes = ["X61HeadDurableObject", "MirrorDO"]
+
+# A class lifecycle change blocks `wrangler rollback` across it: deploy this migration with nothing else changed.
+[[migrations]]
+tag = "x61-v2-voice-bridge"
+new_sqlite_classes = ["VoiceBridgeDO"]

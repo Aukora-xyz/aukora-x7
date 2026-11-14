@@ -11,13 +11,13 @@ const ORIGIN = 'https://head.example.invalid'
 
 // Transactions serialize and commit a private snapshot only on success (as head-hardening.test.mjs).
 function storageFixture() {
-  let data = new Map(), tail = Promise.resolve()
+  let data = new Map(), tail = Promise.resolve(), writes = 0
   const view = map => ({
     get: async key => structuredClone(map.get(key)),
-    put: async (key, value) => { map.set(key, structuredClone(value)) },
-    delete: async key => map.delete(key),
+    put: async (key, value) => { writes++; map.set(key, structuredClone(value)) },
+    delete: async key => { writes++; return map.delete(key) },
     list: async ({ prefix = '', limit = Infinity } = {}) => new Map([...map].filter(([key]) => key.startsWith(prefix)).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key, value]) => [key, structuredClone(value)])),
-    getAlarm: async () => null, setAlarm: async () => {}, deleteAlarm: async () => {},
+    getAlarm: async () => null, setAlarm: async () => { writes++ }, deleteAlarm: async () => { writes++ },
   })
   const storage = Object.fromEntries(['get', 'put', 'delete', 'list', 'getAlarm', 'setAlarm', 'deleteAlarm'].map(method => [method, (...args) => view(data)[method](...args)]))
   storage.transaction = operation => {
@@ -30,6 +30,7 @@ function storageFixture() {
     tail = result.catch(() => {})
     return result
   }
+  storage.writeCount = () => writes
   return storage
 }
 
@@ -104,7 +105,7 @@ test('a staged Pearl promoted, then passed by a publish that never touched the r
   assert.equal(fx.approvals(), spent)
 })
 
-test('the live-shaped store (staged = published Epoch 171 left unmarked by an older build, selected = 172) is tidied on the next read', async () => {
+test('the live-shaped store (staged = published Epoch 171 left unmarked by an older build, selected = 172) is read without writes and marked only on publication', async () => {
   const fx = await fixture()
   const e71 = await fx.candidate(fx.genesis, 'e71')
   await fx.call('/_head/stage', e71)
@@ -117,13 +118,19 @@ test('the live-shaped store (staged = published Epoch 171 left unmarked by an ol
   // Two epochs past it, so HEAD reads its own chain back two steps.
   const e73 = await fx.candidate(e72.ball, 'e73')
   assert.equal((await fx.publishDirect(e73)).status, 200)
-  assert.equal((await fx.storage.get('head:staged-promotion')).publishedEpoch, undefined)
+  assert.equal((await fx.storage.get('head:staged-promotion')).publishedEpoch, 171)
+  // Simulate a legacy unmarked record surviving until this GET, after all publications.
+  await fx.storage.put('head:staged-promotion', unmarked)
+  const writes = fx.storage.writeCount()
   const first = await fx.call('/_head/promotion-status')
   assert.equal(first.body.supersededStaged.state, 'published')
-  // Tidied once, by the read itself: the owner does nothing, and the next read needs no chain.
-  assert.equal((await fx.storage.get('head:staged-promotion')).publishedEpoch, 171)
+  assert.equal((await fx.storage.get('head:staged-promotion')).publishedEpoch, undefined)
   const again = await fx.call('/_head/promotion-status')
   assert.deepEqual(again.body.supersededStaged, first.body.supersededStaged)
+  assert.equal(fx.storage.writeCount(), writes)
+  const e74 = await fx.candidate(e73.ball, 'e74')
+  assert.equal((await fx.publishDirect(e74)).status, 200)
+  assert.equal((await fx.storage.get('head:staged-promotion')).publishedEpoch, 171)
   const retry = await fx.call('/_head/promote', { ballId: e71.ball.ballId }, { 'x-x6-class3-approval': 'approved' })
   assert.equal(retry.body.code, 'ALREADY_PUBLISHED')
 })
@@ -234,6 +241,8 @@ test('an unmarked old record whose chain crosses an incomplete ancestor is answe
   assert.equal((await fx.publishDirect(e72)).status, 200)
   const e73 = await fx.candidate(e72.ball, 'e73')
   assert.equal((await fx.publishDirect(e73)).status, 200)
+  // Preserve the legacy unmarked state after newer publication paths have finished.
+  await fx.storage.put('head:staged-promotion', unmarked)
   // Epoch 172's manifest is incomplete: neither walk can reach Epoch 171 through it.
   await breakChunk(fx.storage, e72.ball.ballId)
   const status = await fx.call('/_head/promotion-status')

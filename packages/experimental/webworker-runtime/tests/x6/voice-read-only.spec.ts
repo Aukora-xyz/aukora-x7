@@ -208,7 +208,11 @@ describe('T2: a tool with reads and writes passes only its listed reads', () => 
     expect(await host.call(VOICE, 'auma_snapshot', { action: 'create', label: 'x' })).toContain(LOOK)
     expect(await host.call(VOICE, 'auma_snapshot', { action: 'diff', snapshotId: '../private/note' })).toContain(LOOK)
     expect(await host.call(VOICE, 'x6_cell', { action: 'list' })).not.toContain('VOICE_LOOK_ONLY')
+    expect(await host.call(VOICE, 'x6_cell', { action: 'journal' })).not.toContain('VOICE_LOOK_ONLY')
     expect(await host.call(VOICE, 'x6_cell', { action: 'compile_and_run', wat: '(module)' })).toContain(LOOK)
+    // Keeping and forgetting a forged cell write her home; neither runs from voice.
+    expect(await host.call(VOICE, 'x6_cell', { action: 'forge', wat: '(module)', name: 'adder' })).toContain(LOOK)
+    expect(await host.call(VOICE, 'x6_cell', { action: 'forget', cell: 'adder' })).toContain(LOOK)
     expect(await host.call(VOICE, 'x6_web_eyes', { action: 'status' })).toContain('/_host/web-eyes')
     expect(await host.call(VOICE, 'auma_alien_compose', { action: 'status' })).not.toContain('VOICE_LOOK_ONLY')
     expect(await host.call(VOICE, 'auma_alien_compose', { action: 'prompt_set', name: 'x', text: 'y' })).toContain(LOOK)
@@ -278,6 +282,15 @@ describe('the edge reads proven by deploy/cloudflare/src/__tests__/voice-edge-re
     ['x6_cloudflare', { action: 'versions' }, [{ method: 'POST', path: '/_host/cloudflare', body: '{"action":"versions"}' }]],
     ['x6_cloudflare', { action: 'versions', remote: true }, [{ method: 'POST', path: '/_host/cloudflare', body: '{"action":"versions","remote":true}' }]],
     ['x6_nostr', { action: 'status' }, [{ method: 'POST', path: '/_head/transcript', body: '{"action":"nostr_status"}' }]],
+    // x6_exec reads, proven by deploy/cloudflare/src/__tests__/auma-exec-door.test.mjs (GETs of this repository's
+    // auma-exec.yml runs only, no storage).
+    ['x6_exec', { action: 'list' }, [{ method: 'POST', path: '/_host/repo', body: '{"action":"exec_runs"}' }]],
+    ['x6_exec', { action: 'status', run: 10 }, [{ method: 'POST', path: '/_host/repo', body: '{"action":"exec_run","run":10}' }]],
+    ['x6_exec', { action: 'status', label: 'x-1' }, [{ method: 'POST', path: '/_host/repo', body: '{"action":"exec_runs"}' }]],
+    ['x6_exec', { action: 'artifacts', run: 10 }, [{ method: 'POST', path: '/_host/repo', body: '{"action":"exec_artifacts","run":10}' }]],
+    // GET /api/build is proven by edge-signin-door.test.mjs F2 (no durable call, no storage).
+    ['x6_self_state', {}, [{ method: 'GET', path: '/api/build' }]],
+    ['x6_self_state', { organs: ['organ-a'] }, [{ method: 'GET', path: '/api/build' }]],
   ]
 
   it('each proven row passes from voice with exactly those arguments and sends exactly the request its edge test proved', async () => {
@@ -299,11 +312,14 @@ describe('the edge reads proven by deploy/cloudflare/src/__tests__/voice-edge-re
     for (const [name, args] of [
       ...['write', 'edit', 'commit', 'push', 'stage_proposal', 'merge_proposal', 'promote_staged', 'head_rollback', 'sync_head_to_github',
         'clear_staged_outward', 'dispatch_workflow', 'exec', 'branch_create', 'branch_delete', 'draft_discard', 'modules', 'transcript',
-        'diff', 'bytes', 'compare_files', 'state_diff', 'selftest', 'diagnostics', 'Read', ' status', 'reconcile_proposal']
+        'diff', 'bytes', 'compare_files', 'state_diff', 'selftest', 'diagnostics', 'Read', ' status', 'reconcile_proposal', 'withdraw_proposal']
         .map(action => ['x6_repo', { action, path: 'docs/x.md', content: 'x' }] as const),
       ['x6_repo', {}], ['x6_repo', { action: ['read'] }], ['x6_github', { action: 'cli', args: ['issue', 'create'] }], ['x6_github', {}],
       ['x6_cloudflare', { action: 'wrangler', args: ['deploy'] }], ['x6_cloudflare', {}], ['x6_nostr', { action: 'provision' }],
       ['x6_nostr', { action: 'cell', op: 'nostr.ping' }], ['x6_nostr', {}],
+      // x6_exec `run` and `cancel` change things; `logs` follows a 302 to a second host (as x6_github job logs).
+      ['x6_exec', { action: 'run', command: 'ls' }], ['x6_exec', { action: 'cancel', run: 10 }], ['x6_exec', { action: 'logs', run: 10 }],
+      ['x6_exec', {}], ['x6_exec', { action: 'Run', command: 'ls' }],
     ] as const) expect([name, args, await host.call(VOICE, name, args)]).toEqual([name, args, expect.stringContaining(LOOK)])
     expect(host.world()).toEqual(before)
   })
@@ -839,14 +855,21 @@ describe('T7: every registered tool is listed or recorded as refused', () => {
         "x6_cell",
         "x6_cloudflare",
         "x6_consult",
+        "x6_exec",
         "x6_facts",
         "x6_github",
         "x6_host_facts",
+        "x6_linear",
         "x6_nostr",
         "x6_repo",
+        "x6_self_check",
+        "x6_self_state",
+        "x6_skill",
         "x6_swarm",
         "x6_threads",
+        "x6_tools",
         "x6_trusted_docs",
+        "x6_voice_status",
         "x6_web_eyes",
         "x6_wish",
       ]

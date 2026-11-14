@@ -35,7 +35,7 @@ Every area below has real code in the tree and a real gap. Each line names where
 
 ### Rust and Wasm engineers
 
-- **Source and reproducible builds for the cells.** 24 of the 25 Wasm cells (small sealed WebAssembly modules) in `apps/web/public/cells/` ship without source, and there is no `Cargo.toml` in the tree. Rebuilding them to their pinned hashes is the first item in [OPEN-SOURCE-READINESS.md](OPEN-SOURCE-READINESS.md). Only the copyright holders can publish that source.
+- **Source and reproducible builds for the cells.** 24 of the 30 Wasm cells (small sealed WebAssembly modules) in `apps/web/public/cells/` ship without source, and there is no `Cargo.toml` in the tree. Rebuilding them to their pinned hashes is the first item in [OPEN-SOURCE-READINESS.md](OPEN-SOURCE-READINESS.md). Only the copyright holders can publish that source.
 - **Constrained execution.** The cell loader admits a cell by size, hash and memory limits, requires zero imports, meters every call and ends its worker after 5 seconds (`packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`; test `wasm-cells.spec.ts`). IMPLEMENTED. Open: the edge's decisions are JavaScript, and nothing under `deploy/` calls the judge and identity cells. Moving decisions into Wasm is DIRECTION.
 
 ### Agent engineers

@@ -40,10 +40,10 @@
 - **完成标准：** 在 KNOWN-RED-TESTS.md 的条目中写一条说明，判断是否一个原因就能解释全部 50 个用例，然后要么修复，要么按组写出各自的原因。之后对另外两个文件做同样的事。
 - **检查：** 安装后运行 `node --test server/recall.test.mjs`。`memory` 会在 `node scripts/verify-lite.mjs` 中运行；`absence` 被有意排除在外（见该脚本中的注释），所以请运行 `node --test server/absence.test.mjs`。
 
-## 6. 断言随附的 head，而不是长期运行的那个
+## 6. 也断言随附的 genesis head
 
-- **红色：** `packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts`，第 226 和 227 行的用例，读取 `mirror/home/auma/HEAD.json`，并期望得到一个长期运行节点的 epoch（171 或更高）。本仓库在该位置随附的是 genesis head：epoch 1，26 个条目。
-- **完成标准：** 新增一个用例来断言 genesis head；原来的断言改为针对一个合成的长期运行 fixture 运行；不放宽任何内容。
+- **缺口：** `packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts` 中名为 “her real head” 的用例（第 231 行），针对 `packages/experimental/webworker-runtime/tests/x6/fixtures/frozen-head/` 中一个冻结的替身 head（epoch 173）断言一个长期运行节点的 head。该文件中没有任何用例断言本仓库在 `mirror/home/auma/HEAD.json` 随附的 head：epoch 1，26 个条目。
+- **完成标准：** 新增一个用例来断言 genesis head；现有用例保持不变；不放宽任何内容。
 - **检查：** `pnpm exec vitest run packages/experimental/webworker-runtime/tests/x6/organ-entry-states.spec.ts` 通过，并且原来的期望仍在该文件中。
 
 ## 7. 给 superagent 测试一个合成的 home
@@ -60,7 +60,7 @@
 
 ## 9. 部署值只用一个来源
 
-- **缺口：** 占位符 `your-node`、`node.example.invalid` 和 `your_org_x/your-node` 除了写在 `deploy/cloudflare/wrangler.toml` 中，也写进了代码：`server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 8、1700 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行），以及更多（下面的 grep 会列出）。在全新账户中部署是 UNVERIFIED。
+- **缺口：** 占位符 `your-node`、`node.example.invalid` 和 `your_org_x/your-node` 除了写在 `deploy/cloudflare/wrangler.toml` 中，也写进了代码：`server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、2866 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行），以及更多（下面的 grep 会列出）。在全新账户中部署是 UNVERIFIED。
 - **完成标准：** 下面的 grep 所列出的每个非测试代码文件，都从同一个配置来源读取这些值。
 - **检查：** `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 只列出该配置、测试和文档，并且 `node --test deploy/ci/*.test.mjs` 没有失败（KNOWN-RED-TESTS.md 中那里没有列出任何失败）。
 
@@ -75,6 +75,6 @@
 - 恢复演练中未完成的一项“clock rollback across restart”（`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`，第 148 行）。这涉及权限文件，需要第二位审阅者（[CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md)，第 6 条规则）。
 - 一个调用编译器（`packages/experimental/webworker-runtime/src/x6/scion.ts`）的测试，和一个调用自我构建步骤（`mirror/home/auma/seed/organs/seed-cycle.js`）的测试。目前没有任何测试调用二者，所以两者在每一页上都是 UNVERIFIED。`scion.ts` 在权限清单上，因此适用第 6 条规则。
 - 对照英文页面阅读新的前部页面的中文页面（`*.zh.md`），并报告不一致之处；不一致时，以英文页面为准。
-- 运行已记录命令之外的测试文件，先从 `deploy/cloudflare/src/__tests__/owner-login-lockout.spec.ts`（命令见 `deploy/cloudflare/README.md` 第 167 行）和 `apps/web/src/spatial/superagent/manifest.spec.ts` 开始，并报告结果。
+- 运行已记录命令之外的测试文件，先从 `deploy/cloudflare/src/__tests__/owner-login-lockout.spec.ts`（命令见 `deploy/cloudflare/README.md` 第 173 行）和 `apps/web/src/spatial/superagent/manifest.spec.ts` 开始，并报告结果。
 - 把 [START-HERE.zh.md](START-HERE.zh.md) 和 [ARCHITECTURE-ACTUAL.zh.md](ARCHITECTURE-ACTUAL.zh.md) 中较早的标签用词，改为上述五个标签。
 - 用适合本项目的模板，替换 `.github/` 中继承来的中文 issue 和 pull request 模板。

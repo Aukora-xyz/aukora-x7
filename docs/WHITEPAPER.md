@@ -147,6 +147,8 @@ Economists know this structure from John Maynard Keynes's "beauty contest". Keyn
 
 Thorstein Veblen supplied the escalation (Veblen, 1899). Esteem, he observed, is awarded only on evidence, so wealth must be put on display: he called this "conspicuous consumption". A natural extension of his argument follows. When a display becomes cheap, its signal weakens, and status moves on to something scarcer and harder to fake. A mechanical watch with a tourbillon keeps worse time than a cheap quartz movement. Its value lies in visible, unfakeable effort, because accurate time has become free.
 
+**The supernormal.** Ethology found a version of the same capture in animals, with no culture to blame. Niko Tinbergen described birds that tried to brood a dummy egg larger and more boldly marked than their own, and called such exaggerated lures *supernormal stimuli* (Tinbergen, 1951). In Western Australia, Darryl Gwynne and David Rentz found male jewel beetles (*Julodimorpha bakewelli*) trying to mate with discarded beer bottles, whose shiny brown glass, studded with small bumps, looked to them like an outsized female (Gwynne & Rentz, 1983). A nervous system tuned by evolution to a cue can be captured by a copy that exaggerates the cue. The copy does not have to be good for the creature; it only has to carry more of the signal. Deirdre Barrett has argued that much of modern food and media works the same way on people (Barrett, 2010). A system that learns what holds attention can make such lures on demand, which is why Book III treats the counterfeit mirror as an engineering problem, not a moral one.
+
 None of this is a moral judgment about wanting things. It describes a feedback loop that, once formed, no longer needs the object to be good at anything.
 
 # Book II — The Word
@@ -272,6 +274,8 @@ The same research shows the way out:
 - when the share of real data is large enough, iterative retraining is stable (Bertrand et al., 2023).
 
 Appendix A.2 proves the point in a toy that can be solved exactly. With no fresh data, variance collapses almost surely; with any fixed fresh share α > 0, it cannot. (The toy shows that the variance survives, not that the model stays accurate.)
+
+**Life met this problem first.** A lineage that only copies itself is a closed loop too, and biology has a name for what happens in it. Harmful mutations pile up, and once the least-burdened genomes are lost by chance, copying alone cannot bring them back: Hermann Muller described the effect and Joseph Felsenstein named it *Muller's ratchet* (Muller, 1964; Felsenstein, 1974). Sex is expensive. John Maynard Smith counted its "twofold cost": a sexual population spends half its offspring on males, who bear no young, so a clone that appears among them doubles its share each generation (Maynard Smith, 1978). Yet nearly all complex organisms reproduce sexually at least some of the time. The leading explanations are that recombining with an independent lineage stops the ratchet, and keeps a population ahead of its fast-evolving parasites (Hamilton, 1980), an arms race often called the "Red Queen", after Van Valen's name for it (Van Valen, 1973). Why sex persists is still debated, and the parallel with model collapse is an analogy, not an identity. But its shape is exact: a line that only copies itself loses information, and what restores it is contact with something independent of it. And life began with a boundary. The first cells kept an inside that was theirs, behind a membrane that let the outside in only on the cell's own terms.
 
 **The loop in one story.** The science channel Kurzgesagt has described how this loop looks from the inside (Kurzgesagt, 2025). By their own account the story is a composite: several real experimental projects told as one. They asked AI "deep research" tools for help with a video about brown dwarfs.
 - **What came back.** By their account, more than 80% of the material was solid and traceable. For the rest they could not find where the claims came from, and the experts they consulted flagged those same claims.
@@ -883,3 +887,11 @@ The sources below were checked for this edition as far as they could be reached 
 - Fausey, C. M., & Boroditsky, L. (2011). Who dunnit? Cross-linguistic differences in eye-witness memory. *Psychonomic Bulletin & Review*, 18, 150–157.
 - Confucius. *Analects* 13.3. Trans. James Legge (1861).
 - Paro Taktsang and the Padmasambhava tradition; the phurba (kīla) and the three poisons, as told in Tibetan and Bhutanese Buddhist tradition.
+- Tinbergen, N. (1951). *The Study of Instinct*. Oxford: Clarendon Press.
+- Gwynne, D. T., & Rentz, D. C. F. (1983). Beetles on the bottle: male buprestids mistake stubbies for females (Coleoptera). *Journal of the Australian Entomological Society*, 22(1), 79–80.
+- Barrett, D. (2010). *Supernormal Stimuli: How Primal Urges Overran Their Evolutionary Purpose*. New York: W. W. Norton.
+- Muller, H. J. (1964). The relation of recombination to mutational advance. *Mutation Research*, 1(1), 2–9.
+- Felsenstein, J. (1974). The evolutionary advantage of recombination. *Genetics*, 78(2), 737–756.
+- Maynard Smith, J. (1978). *The Evolution of Sex*. Cambridge: Cambridge University Press.
+- Van Valen, L. (1973). A new evolutionary law. *Evolutionary Theory*, 1, 1–30.
+- Hamilton, W. D. (1980). Sex versus non-sex versus parasite. *Oikos*, 35(2), 282–290.

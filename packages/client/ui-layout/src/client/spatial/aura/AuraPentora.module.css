@@ -23,15 +23,42 @@
 .edge[data-state='failed'], .glow[data-state='failed'] { stroke: var(--ak-red); }
 .glow[data-state='failed'] { stroke-opacity: .2; }
 
-.face { stroke-width: .8px; }
-.face[data-state='verified'] { fill: var(--pen); stroke: none; opacity: .85; }
-.face[data-state='undetermined'] { fill: none; stroke: var(--ak-muted); stroke-opacity: .7; }
-.face[data-state='failed'] { fill: var(--ak-red); stroke: none; }
+/*
+ * TWO CHANNELS ON EVERY an earlier change. The RING (the stroke) is health and only health: these state rules set no fill. The CORE
+ * (the fill) is flow and only flow: the figure points it at one of the gradients below by its look (data-flow), a disc of
+ * 55% of the radius, then clear (or, on a corner, the dark hollow it always had) out to the ring.
+ * An edge-midpoint dot (.mid) wears exactly the face dot's state look: no colour of its own.
+ */
+.face, .mid { stroke-width: .8px; }
+.face[data-state='verified'], .mid[data-state='verified'] { stroke: var(--pen); stroke-opacity: .85; stroke-width: 1px; }
+.face[data-state='undetermined'], .mid[data-state='undetermined'] { stroke: var(--ak-muted); stroke-opacity: .7; }
+.face[data-state='failed'], .mid[data-state='failed'] { stroke: var(--ak-red); stroke-opacity: 1; stroke-width: 1.1px; }
+
+/* The centre all five cubes share: not a cell, so no state; a hairline in the neutral token. */
+.centre { fill: none; stroke: var(--ak-muted); stroke-width: .4px; stroke-opacity: .7; }
 
 .corner { stroke-width: .9px; }
-.corner[data-state='verified'] { fill: var(--ak-text); stroke: none; opacity: .92; }
-.corner[data-state='undetermined'] { fill: rgb(17, 21, 32); stroke: var(--ak-muted); }
-.corner[data-state='failed'] { fill: var(--ak-red); stroke: none; }
+.corner[data-state='verified'] { stroke: var(--ak-text); stroke-opacity: .92; stroke-width: 1.1px; }
+.corner[data-state='undetermined'] { stroke: var(--ak-muted); }
+.corner[data-state='failed'] { stroke: var(--ak-red); stroke-opacity: 1; stroke-width: 1.2px; }
+
+/* The core's colours: IN mint, HOLD blue, OUT violet; at rest, blue and faint. */
+.core[data-look='rest'] { stop-color: var(--ak-blue); stop-opacity: .3; }
+.core[data-look='hold'] { stop-color: var(--ak-blue); stop-opacity: .95; }
+.core[data-look='in'] { stop-color: var(--ak-mint); stop-opacity: 1; }
+.core[data-look='out'] { stop-color: var(--ak-violet); stop-opacity: 1; }
+.clear { stop-color: var(--ak-blue); stop-opacity: 0; }
+.hollow { stop-color: rgb(17, 21, 32); stop-opacity: 1; }
+
+/*
+ * A lit edge: an overlay drawn over its cube's edges (and under its dots) in the flow colour it carries; hidden when not
+ * lit. The edge below is untouched.
+ */
+.flowLine { fill: none; stroke-width: .75px; stroke-opacity: .85; pointer-events: none; }
+.flowLine[data-lit='no'] { display: none; }
+.flowLine[data-flow='in'] { stroke: var(--ak-mint); }
+.flowLine[data-flow='hold'] { stroke: var(--ak-blue); }
+.flowLine[data-flow='out'] { stroke: var(--ak-violet); }
 
 @keyframes pentora-form {
   from { opacity: 0; transform: scale(.35) rotate(-40deg); }

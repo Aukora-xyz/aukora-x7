@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyActionIrreversibility, consultProviders, CONSULT_LIMITS } from '../../src/x6/ball-loader.ts'
 
-const ORIGIN = 'https://x61.example.invalid'
+const ORIGIN = 'https://node.example.invalid'
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 describe('the worker safety gate for the Round 35 hands', () => {
@@ -73,7 +73,8 @@ describe('x6_consult: one model or a council, through the host doors', () => {
     expect(calls[0]?.url).toBe(`${ORIGIN}/door/anthropic/v1/messages`)
     expect(calls[0]?.init?.credentials).toBe('same-origin')
     // The Anthropic default cap moved from 2048 to 16000 and every consult now streams.
-    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ model: 'claude-opus-5-5', max_tokens: 16_000, stream: true, system: 'Be brief.',
+    // The default is 32000 on every provider.
+    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ model: 'claude-opus-5-5', max_tokens: 32_000, stream: true, system: 'Be brief.',
       messages: [{ role: 'user', content: 'Review this.' }] })
   })
   it('takes the composer pill names: each picks its door and the exact id the pill runs; a raw id still needs its provider', async () => {
@@ -136,21 +137,38 @@ describe('x6_consult: one model or a council, through the host doors', () => {
       [{ provider: 'anthropic', model: 'm', prompt: '' }, 'CONSULT_PROMPT_INVALID'],
       [{ provider: 'mystery', model: 'm', prompt: 'p' }, 'CONSULT_PROVIDER_UNKNOWN'],
       [{ provider: 'openai', model: 'bad model!', prompt: 'p' }, 'CONSULT_MODEL_INVALID'],
-      [{ targets: Array.from({ length: 7 }, () => ({ provider: 'openai', model: 'm' })), prompt: 'p' }, 'CONSULT_TARGETS_INVALID'],
+      // 12 targets (was 6), 256 KiB of prompt (was 64 KiB) and 64 KiB of system (was 16 KiB); one more of each is refused.
+      [{ targets: Array.from({ length: 13 }, () => ({ provider: 'openai', model: 'm' })), prompt: 'p' }, 'CONSULT_TARGETS_INVALID'],
       [{ provider: 'openai', model: 'm', prompt: 'x'.repeat(CONSULT_LIMITS.promptChars + 1) }, 'CONSULT_PROMPT_INVALID'],
+      [{ provider: 'openai', model: 'm', prompt: 'p', system: 'x'.repeat(CONSULT_LIMITS.systemChars + 1) }, 'CONSULT_SYSTEM_INVALID'],
     ] as const
     for (const [input, code] of bad) expect(await consultProviders(input, { origin: ORIGIN, fetchImpl })).toEqual({ ok: false, code })
     // An out-of-range cap now also says the ceiling in a sentence; the code is unchanged.
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', maxTokens: 999_999 }, { origin: ORIGIN, fetchImpl })).toEqual({
       ok: false, code: 'CONSULT_MAX_TOKENS_INVALID',
-      reason: 'maxTokens is a whole number from 1 to 64000 per target (the ceiling); leave it out for 16000 on anthropic and 8000 elsewhere.' })
+      reason: 'maxTokens is a whole number from 1 to 128000 per target (the ceiling); leave it out for the default 32000.' })
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', timeoutMs: 10 }, { origin: ORIGIN, fetchImpl })).toEqual({
-      ok: false, code: 'CONSULT_TIMEOUT_INVALID', reason: 'timeoutMs is a whole number from 1000 to 600000 per target (default 180000).' })
+      ok: false, code: 'CONSULT_TIMEOUT_INVALID', reason: 'timeoutMs is a whole number from 1000 to 1800000 per target (default 600000).' })
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p' }, { origin: undefined, fetchImpl })).toEqual({ ok: false, code: 'CONSULT_ORIGIN_UNAVAILABLE' })
     expect(asked).toBe(0)
     const long = await consultProviders({ provider: 'openai', model: 'gpt-x', prompt: 'p' }, { origin: ORIGIN, fetchImpl })
     expect(long.answers?.[0]).toMatchObject({ ok: true, truncated: true })
     expect(long.answers?.[0]?.text).toHaveLength(CONSULT_LIMITS.answerChars)
+  })
+  it('a council of 12 targets, a 256 KiB prompt and a 64 KiB system prompt all go out', async () => {
+    expect([CONSULT_LIMITS.targets, CONSULT_LIMITS.promptChars, CONSULT_LIMITS.systemChars]).toEqual([12, 256 * 1024, 64 * 1024])
+    const sent: Array<Record<string, unknown>> = []
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      sent.push(JSON.parse(init?.body as string) as Record<string, unknown>)
+      return json({ choices: [{ message: { content: 'heard' } }] })
+    }) as unknown as typeof fetch
+    const prompt = 'p'.repeat(CONSULT_LIMITS.promptChars), system = 's'.repeat(CONSULT_LIMITS.systemChars)
+    const result = await consultProviders({ targets: Array.from({ length: 12 }, (_v, index) => ({ provider: 'openai', model: `m-${String(index)}` })), prompt, system },
+      { origin: ORIGIN, fetchImpl })
+    expect(result.answers).toHaveLength(12)
+    expect(result.answers?.every(answer => answer.ok && answer.text === 'heard')).toBe(true)
+    expect(sent).toHaveLength(12)
+    expect(JSON.stringify(sent[0])).toContain(prompt)
   })
   it('speaks each provider\'s wire: OpenAI takes max_completion_tokens; a provider stop at the cap is a cut-off; its refusal is said', async () => {
     const bodies: Record<string, Record<string, unknown>> = {}

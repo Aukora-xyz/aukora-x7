@@ -78,6 +78,10 @@ self.addEventListener('message', (event: MessageEvent) => {
       overlays: data.overlays as string[],
       // Optional frames the page understands; an older page announces none and is sent none.
       ...(Array.isArray(data.features) ? { pageFeatures: (data.features as unknown[]).filter(f => typeof f === 'string') } : {}),
+      // The page's own id, put on this worker's thread-sync messages (checked again where it is used).
+      ...(typeof data.page === 'string' ? { pageId: data.page } : {}),
+      // The switch as the page's boot document carried it; only the exact `on` is passed on.
+      ...(data.threadSync === 'on' ? { threadSync: 'on' as const } : {}),
     })
     host = created
     for (const queued of pending) {

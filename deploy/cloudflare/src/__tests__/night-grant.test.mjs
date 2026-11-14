@@ -216,10 +216,16 @@ const codeUpdate = (tweak = () => {}) => async (next, add) => {
   next.entries['ordinary-a'] = entry
 }
 
-test('an ordinary code-only update, with the history HEAD derives, is covered', async () => {
+test('an ordinary code-only update still needs its id-promotion budget reservation under a night grant', async () => {
   const fx = await fixture()
   assert.equal((await fx.issue()).status, 200)
   const ball = await fx.stage(codeUpdate())
+  assert.equal((await fx.promote(ball)).body.code, 'ID_PROMOTION_RESERVATION_REQUIRED')
+  const lease = (await fx.call('/_head/lease', { action: 'acquire', ownerPeerId: ball.authorPeerId })).body.lease
+  assert.equal((await fx.call('/_head/lease', { action: 'reserve-id-promotion', ownerPeerId: lease.ownerPeerId,
+    generation: lease.generation, expectedBallId: ball.parentBallId, organId: 'ordinary-a',
+    candidateSha: ball.entries['ordinary-a'].specifier.slice(5) })).body.ok, true)
+  await fx.call('/_head/lease', { action: 'release', ownerPeerId: lease.ownerPeerId, generation: lease.generation })
   const used = await fx.promote(ball)
   assert.equal(used.status, 200, JSON.stringify(used.body))
   assert.equal(used.body.nightGrant.usesLeft, 11)
@@ -466,4 +472,16 @@ test('A use receipt records each organ\'s size from its hash-verified bytes, nev
   })
   assert.equal((await fx.promote(lying)).body.code, 'NIGHT_GRANT_MODULE_SIZE_REFUSED')
   assert.equal((await fx.call('/_head/night-grant')).body.receipts.filter(row => row.kind === 'use').length, 1)
+})
+
+
+test('issuing a broad night grant cannot initialize missing id-promotion authority', async () => {
+  const fx = await fixture()
+  await fx.storage.delete('head:id-promotion-budget:initialized:v1')
+  await fx.storage.delete('head:id-promotion-budget:ledger:v1')
+  assert.equal((await fx.issue()).status, 200)
+  const ball = await fx.stage(codeUpdate())
+  assert.equal((await fx.promote(ball)).body.code, 'ID_PROMOTION_AUTHORITY_MISSING')
+  assert.equal(await fx.storage.get('head:id-promotion-budget:initialized:v1'), undefined)
+  assert.equal(await fx.storage.get('head:id-promotion-budget:ledger:v1'), undefined)
 })

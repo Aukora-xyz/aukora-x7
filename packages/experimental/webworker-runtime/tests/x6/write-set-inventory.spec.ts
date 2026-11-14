@@ -104,6 +104,7 @@ describe('runtime write-set inventory (static)', () => {
     expect(classifyWritePath('/dsh/home/auma/staged/outward-class3.json')?.id).toBe('staged-outward')
     expect(classifyWritePath('/dsh/home/auma/wake/steps.jsonl')?.id).toBe('wake-steps')
     expect(classifyWritePath('/dsh/home/auma/captures/ring/1-abc.png')?.id).toBe('page-eyes-captures')
+    expect(classifyWritePath('/dsh/home/cells/forged/' + 'a'.repeat(64) + '.wasm')?.id).toBe('forged-cell-store')
     expect(classifyWritePath('/dsh/home/auma/private/anything')).toBeNull()
   })
 

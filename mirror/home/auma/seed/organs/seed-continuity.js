@@ -328,7 +328,7 @@ const parameters = {
 }
 
 module.exports = {
-  name: 'seed_continuity',
+  name: 'seed-continuity',
   description: 'Verify this body is still one body: module closure, receipt merkle root recomputation, checkpoint chain integrity, and owner-credential continuity. selftest proves a single flipped byte is rejected.',
   parameters,
   async run(args) {

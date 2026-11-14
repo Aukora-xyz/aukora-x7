@@ -1,6 +1,9 @@
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { trialScionRetention } from '../../src/x6/scion-growth.ts'
+
+const FROZEN = new URL('./fixtures/frozen-head', import.meta.url).pathname
 
 const run = (code: string, expectError = 'UNKNOWN_ACTION') => trialScionRetention({ target: code }, {
   fixedNow: 0, fixtures: { base: {} }, cases: [{ id: 'probe', args: { organ: 'target', fixture: 'base', input: {} }, expectError }],
@@ -61,10 +64,15 @@ describe('runtime-owned retention infrastructure', () => {
       fixedNow: number
       cases: Array<{ id: string; args: { organ: string }; expect?: unknown; expectError?: string }>
     }
-    const head = JSON.parse(readFileSync('mirror/home/auma/HEAD.json', 'utf8')) as { entries: Record<string, { specifier: string }> }
+    // The organ sources come from the FROZEN epoch-173 head (fixtures/frozen-head), never the live mirror: a head
+    // sync re-commits mirror/home/auma/HEAD.json on every published epoch, and her repairs remove the failures pinned below.
+    const head = JSON.parse(readFileSync(`${FROZEN}/HEAD.json`, 'utf8')) as { ballId: string; entries: Record<string, { specifier: string }> }
+    expect(head.ballId.startsWith('060c73c2')).toBe(true)
     const build: Record<string, string> = {}
     for (const name of new Set([...suite.organs, ...suite.cases.map(row => row.args.organ)])) {
-      build[name] = readFileSync(`mirror/home/balls/${head.entries[name]?.specifier.slice(5)}.js`, 'utf8')
+      const sha = head.entries[name]?.specifier.slice(5)
+      build[name] = readFileSync(`${FROZEN}/balls/${sha}.js`, 'utf8')
+      expect(createHash('sha256').update(build[name]).digest('hex'), name).toBe(sha)
     }
     const originalIds = [
       'receipts.append.event', 'receipts.chain.verify', 'receipts.chain.tamper-refused',

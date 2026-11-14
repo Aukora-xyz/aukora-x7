@@ -76,7 +76,7 @@ function trustedTarget(value, ownHostname) {
  * dispatch and scrub returned content. Paths are caller-selected; only numeric GitHub
  * pagination queries are allowed. Response headers and caller headers are not forwarded.
  * No DNS preflight, unsupported TLS override, redirect, retry or ambient fetch fallback.
- * @param {object} options Required trusted platform networkFetch and PUBLIC_HOST hostname. Optional timeoutMs tightens the 10-second ceiling; now defaults to performance.now and is injectable for synthetic deadline tests.
+ * @param {object} options Required trusted platform networkFetch and PUBLIC_HOST hostname. Optional timeoutMs tightens the 30-second ceiling (CLOUD_BROKER_LIMITS.timeoutMs; 10 s before the raised limits); now defaults to performance.now and is injectable for synthetic deadline tests.
  * @returns {Function} GET-only fetch-shaped function buffering complete, valid UTF-8 text up to 256 KiB. An omitted signal uses the internal deadline; a supplied signal additionally cancels the operation. Failures abort fetch and cancel any received body, including late responses.
  */
 export function createTrustedDocsHttpsTransport(options = {}) {

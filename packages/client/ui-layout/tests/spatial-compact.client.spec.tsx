@@ -29,7 +29,7 @@ import { AuraPentoraSurface } from '../src/client/spatial/aura/AuraPentoraSurfac
 import { AURA_SURFACE } from '../src/client/spatial/aura/model.ts'
 import { HEAD_LAG_ROUTE } from '../src/client/spatial/portal/build-notice.ts'
 import { NoticesMenu, NoticesSurface } from '../src/client/spatial/portal/NoticesSurface.tsx'
-import { NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
+import { currentNotices, NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
 
 // The lane occupants are not what this spec is about; each stand-in keeps the one door the frame hands it.
 vi.mock('../src/client/spatial/eyes/page-eyes.ts', () => ({ installPageEyes: () => () => {} }))
@@ -39,13 +39,6 @@ vi.mock('../src/client/spatial/portal/ThreadsLane.tsx', () => ({
       <header><h2 data-testid="threads-heading">Threads</h2></header>
       <button type="button" data-testid="open-thread" onClick={props.openConversation} />
     </div>
-  ),
-}))
-vi.mock('../src/client/spatial/portal/FingerprintWaiting.tsx', () => ({
-  FingerprintWaiting: (props: { openSovereignty: () => void }) => (
-    <aside data-fingerprint-waiting="outcome" data-testid="fingerprint-card">
-      <button type="button" data-testid="fingerprint-inspect" onClick={props.openSovereignty} />
-    </aside>
   ),
 }))
 
@@ -526,16 +519,38 @@ describe('at 1023px and below: one full-width lane, navigated by the native corn
     expect(instance.getSnapshot().activeSurface).toBeUndefined()
   })
 
-  it('the Fingerprint card floats in the thread stack itself, the box its own compact rule places it in', () => {
+  const pathOfRequest = (input: RequestInfo | URL): string => (typeof input === 'string' ? input : input instanceof URL ? input.pathname : input.url)
+  // MOVED: the
+  // Fingerprint card no longer sits over the thread stack. What waits for his fingerprint is a row in Notices.
+  it('nothing waits over the chat: the thread stack holds its two thread layers and no approval card', async () => {
     compactMatches = true
-    const { getByTestId } = mountFrame()
-    expect(getByTestId('fingerprint-card').parentElement?.hasAttribute('data-thread-view')).toBe(true)
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => (pathOfRequest(input) === '/_head/promotion-status'
+      ? new Response(JSON.stringify({ ok: true, staged: { ballId: 'e'.repeat(64), epoch: 174 }, stagedRepoProposal: null }),
+        { status: 200 })
+      : new Response('{}', { status: 404 })))
+    const { frame } = mountFrame()
+    await waitFor(() => { expect(currentNotices().map(notice => notice.kind)).toEqual(['pearl']) })
+    const stack = frame.querySelector<HTMLElement>('[data-thread-view]')!
+    expect([...stack.children].map(child => child.getAttribute('data-thread-layer'))).toEqual(['list', 'conversation'])
+    expect(frame.querySelector('[data-fingerprint-waiting], [data-approval-waiting]')).toBeNull()
+    expect(frame.textContent).not.toMatch(/FINGERPRINT WAITING|Approval waiting/u)
   })
 
-  it('an approval\'s Inspect shows Sovereignty, and her own navigation shows what she opened', () => {
+  it('an approval\'s row in Notices shows Sovereignty, and her own navigation shows what she opened', async () => {
     compactMatches = true
-    const { instance, active, getByTestId } = mountFrame()
-    fireEvent.click(getByTestId('fingerprint-inspect'))
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL) => (pathOfRequest(input) === '/_head/promotion-status'
+      ? new Response(JSON.stringify({ ok: true, staged: { ballId: 'e'.repeat(64), epoch: 174 }, stagedRepoProposal: null }),
+        { status: 200 })
+      : new Response('{}', { status: 404 })))
+    const surface = (owner: Parameters<typeof NoticesSurface>[0]) => <NoticesSurface {...owner} />
+    const { instance, active, frame } = mountFrame({ slots: { 'shell.surface': surface as (owner: never) => ReactNode } })
+    act(() => { instance.actions.selectSurface(NOTICES_SURFACE, undefined, 'contained') })
+    const row = await waitFor(() => {
+      const found = frame.querySelector<HTMLElement>('[data-notice="pearl"]')
+      expect(found).not.toBeNull()
+      return found!
+    })
+    fireEvent.click(row.querySelector('button')!)
     expect(instance.getSnapshot().activeSurface).toBe('sovereignty')
     expect(active()).toEqual(['center'])
     act(() => { instance.actions.showCompactLane('right') })
@@ -1648,8 +1663,11 @@ describe('REQUEST from the runtime: the reload notice, whichever app is open', (
     vi.stubGlobal('WebSocket', class { onopen = null; onmessage = null; onclose = null; close() {} })
   })
 
-  const shown = (root: ParentNode): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-new-build]')]
-    .filter(button => button.closest('[hidden]') === null)
+  // Work and Aura draw no Reload button any more (The owner pointed at Aura's as a pop-up), only one quiet line in
+  // their own flow; `shown` counts those lines, and `buttons` proves no Reload button is drawn anywhere.
+  const shown = (root: ParentNode): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-new-build-line]')]
+    .filter(line => line.closest('[hidden]') === null)
+  const buttons = (root: ParentNode): Element[] => [...root.querySelectorAll('[data-new-build]')]
   const notFound = async (): Promise<{ ok: false; reason: string }> => ({ ok: false, reason: 'not-found' })
   const surfaceSessions = () => {
     const list = { ids: ['s1'], byId: { s1: { id: 's1', displayTitle: 'Test', running: false, retainedBy: { mainView: 1 }, blank: false,
@@ -1734,13 +1752,16 @@ describe('REQUEST from the runtime: the reload notice, whichever app is open', (
     expect(noticesLauncher(frame).classList.contains('ak-tone-gold')).toBe(true)
   })
 
-  it('Work or Aura open: only that app\'s own button, once, the frame does not read, and Notices counts that app\'s read', async () => {
+  it('Work or Aura open: only that app\'s own quiet line, once, no button, the frame does not read, and Notices counts that app\'s read', async () => {
     const { frame, instance, lane } = mountFrame({ slots: { 'shell.surface': withNotices, 'shell.menu.system': systemMenu } })
-    // The boot app is Aura Coherence: its own Reload button carries the notice; the frame draws nothing and reads nothing.
+    // The boot app is Aura Coherence: its own quiet line says a new build is live (no button); the frame draws nothing and
+    // reads nothing.
     expect(instance.getSnapshot().activeSurface).toBe(AURA_SURFACE)
     await waitFor(() => { expect(shown(frame)).toHaveLength(1) })
     expect(frame.querySelector('[data-build-notice]')).toBeNull()
     expect(shown(frame)[0]?.closest('[data-aura-coherence-surface]')).not.toBeNull()
+    expect(shown(frame)[0]?.textContent).toBe('A new build is live: see Notices.')
+    expect(buttons(frame)).toHaveLength(0)
     // Aura read once at mount; the frame did not read at all. Aura's one read also makes Notices gold with 1, on the
     // boot screen, beside Aura's own button.
     expect(lagReads).toBe(1)
@@ -1760,6 +1781,8 @@ describe('REQUEST from the runtime: the reload notice, whichever app is open', (
     expect(lagReads).toBe(1)
     act(() => { instance.actions.selectSurface(WORK_SURFACE, undefined, 'contained') })
     await waitFor(() => { expect(shown(frame)).toHaveLength(1) })
+    expect(shown(frame)[0]?.closest('[data-work-surface]')).not.toBeNull()
+    expect(buttons(frame)).toHaveLength(0)
     expect(frame.querySelector('[data-build-notice]')).toBeNull()
     expect(lagReads).toBe(2)
     // Work's read of the same notice is the same row: still 1, never 2.

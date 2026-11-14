@@ -125,7 +125,8 @@ describe('stage_organ_promotion tool: one call, every hop', () => {
     expect(String(result.operationId)).toMatch(/^op-/)
     expect((result.hops as Array<{ hop: string; ok: boolean }>).map(hop => hop.hop)).toEqual(['live-head', 'built', 'local-staged', 'idb-flushed', 'edge-staged'])
     expect(calls.map(call => `${call.method} ${call.path}`).filter(line => !line.includes('promotion-status') && !line.includes('facts')))
-      .toEqual(['GET /_head/ball', 'POST /_head/stage'])
+      // The one extra read is her shipped reflex file (the shadow consult, once per session); it decides nothing.
+      .toEqual(['GET /_head/ball', 'GET /cells/reflexes/touch-id-tier.json', 'POST /_head/stage'])
     const post = calls.find(call => call.path === '/_head/stage')!
     expect(post.credentials).toBe('same-origin')
     expect(post.headers.get('x-x6-operation-id')).toBe(result.operationId)

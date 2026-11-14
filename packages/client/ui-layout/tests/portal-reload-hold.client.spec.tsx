@@ -14,7 +14,11 @@ import {
   resetReloadHoldsForTests,
 } from '../src/client/spatial/portal/build-notice.ts'
 import { beginApproval, endApproval, resetApprovalsForTests } from '../src/client/spatial/portal/touch-id-timing.ts'
-import { NewBuildButton, type FileRead, type WorkReader } from '../src/client/spatial/work/WorkSurface.tsx'
+import type { FileRead, WorkReader } from '../src/client/spatial/work/WorkSurface.tsx'
+import { NoticesSurface } from '../src/client/spatial/portal/NoticesSurface.tsx'
+import {
+  hostReleaseEntry, noticeEntriesOf, NOTICES_SURFACE, publishNotices, resetNoticesForTests, type NoticeEntry,
+} from '../src/client/spatial/portal/notices.ts'
 import { OutwardApprovalCell } from '../src/client/spatial/portal/OutwardApprovalCell.tsx'
 import { STAGED_OUTWARD_PATH, STAGED_OUTWARD_SCHEMA } from '../src/client/spatial/aumlok/outward-class3.ts'
 import { base64url } from '../src/client/spatial/apps/identity/webauthn.ts'
@@ -56,6 +60,7 @@ afterEach(() => {
   vi.useRealTimers()
   resetApprovalsForTests()
   resetReloadHoldsForTests()
+  resetNoticesForTests()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
   localStorage.clear()
@@ -109,10 +114,20 @@ describe('the shared guard', () => {
   })
 })
 
-describe('the Reload button, wherever it shows (the frame, Work, Aura)', () => {
+/**
+ * Work's and Aura's Reload buttons are gone; the one Reload is the row's in Notices, for
+ * every reason to reload (the edge's build, her published head, the host's selection). Notices is drawn open here, with
+ * the given rows published as a reader would publish them.
+ */
+function noticesWith(entries: readonly NoticeEntry[]): HTMLElement {
+  publishNotices('test', entries)
+  return render(<NoticesSurface {...({ activeSurface: NOTICES_SURFACE } as unknown as Parameters<typeof NoticesSurface>[0])} />).container
+}
+
+describe('the Reload in Notices, for every reason to reload', () => {
   it('a notice press during an approval does not reload and says one sentence; after settle it reloads and the sentence goes', () => {
-    const view = render(<NewBuildButton release={null} notice={reloadNoticeOf(EDGE, null, PAGE, memoryOf())} />)
-    const button = () => view.container.querySelector<HTMLButtonElement>('[data-new-build]')!
+    const view = { container: noticesWith(noticeEntriesOf(EDGE, null, PAGE, memoryOf())) }
+    const button = () => view.container.querySelector<HTMLButtonElement>('[data-notice-action]')!
     const sentence = () => view.container.querySelector('[data-reload-held]')
     expect(sentence()).toBeNull()
     let release = (): void => {}
@@ -127,8 +142,9 @@ describe('the Reload button, wherever it shows (the frame, Work, Aura)', () => {
   })
 
   it('the host\'s own release selection reloads through the same guard', () => {
-    const view = render(<NewBuildButton release={'e'.repeat(64)} words={{ button: 'Reload', what: 'A different release.' }} />)
-    const button = view.container.querySelector<HTMLButtonElement>('[data-new-build]')!
+    const container = noticesWith([hostReleaseEntry({ release: 'e'.repeat(64), what: 'A different release.' })])
+    const button = container.querySelector<HTMLButtonElement>('[data-notice-action="release"]')!
+    expect(container.querySelector('[data-notice="release"]')?.textContent).toContain('A different release.')
     let release = (): void => {}
     act(() => { release = holdReload() })
     fireEvent.click(button)
@@ -175,9 +191,10 @@ describe('the review\'s scenario: Sovereignty\'s outward request, Touch ID done,
       }
       return new Response('{}', { status: 404 })
     }) as unknown as typeof fetch
+    publishNotices('test', noticeEntriesOf(null, LAG, PAGE, memoryOf()))
     const view = render(
       <>
-        <NewBuildButton release={null} notice={reloadNoticeOf(null, LAG, PAGE, memoryOf())} />
+        <NoticesSurface {...({ activeSurface: NOTICES_SURFACE } as unknown as Parameters<typeof NoticesSurface>[0])} />
         <OutwardApprovalCell active round={0} reader={reader} sessionId={'s1' as SessionId} ownerBound
           ceremony={{ call, platform }} fetchImpl={fetchImpl} />
       </>,
@@ -190,14 +207,14 @@ describe('the review\'s scenario: Sovereignty\'s outward request, Touch ID done,
     fireEvent.click(approve)
     await waitFor(() => { expect(posted).toHaveBeenCalledTimes(1) })
     // Touch ID is done and the POST is in flight: the owner presses Reload.
-    fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-new-build]')!)
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-notice-action]')!)
     expect(reload).not.toHaveBeenCalled()
     expect(view.container.querySelector('[data-reload-held]')?.textContent?.trim()).toBe(APPROVAL_FINISHING_WORDS)
     // The answer comes and the page records it.
     await act(async () => { answer() })
     await waitFor(() => { expect(view.container.querySelector('[data-outward-outcome="sent"]')).not.toBeNull() })
     expect(view.container.querySelector('[data-reload-held]')).toBeNull()
-    fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-new-build]')!)
+    fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-notice-action]')!)
     expect(reload).toHaveBeenCalledTimes(1)
   })
 })

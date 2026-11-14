@@ -1,3 +1,4 @@
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
@@ -11,8 +12,18 @@ import type { BallManifest } from '../../src/x6/ball-loader.ts'
 
 const root = new URL('../../../../..', import.meta.url)
 const W = root.pathname.replace(/\/$/, '')
-const HEAD = JSON.parse(readFileSync(W + '/mirror/home/auma/HEAD.json', 'utf8')) as { entries: Record<string, { specifier: string; config: Record<string, unknown> }> }
-const headSource = (id: string): string => readFileSync(`${W}/mirror/home/balls/${HEAD.entries[id]!.specifier.slice(5)}.js`, 'utf8')
+// The FROZEN epoch-173 head (fixtures/frozen-head), never the live mirror: a head sync re-commits
+// mirror/home/auma/HEAD.json on every published epoch, and her first repair (the cortex export name) would remove the
+// very defect these rows probe. Each organ source is checked against its sha, the manifest against its own id.
+const FIXTURE = W + '/packages/experimental/webworker-runtime/tests/x6/fixtures/frozen-head'
+const HEAD = JSON.parse(readFileSync(FIXTURE + '/HEAD.json', 'utf8')) as { ballId: string; entries: Record<string, { specifier: string; config: Record<string, unknown> }> }
+if (headManifestIdCanon(HEAD) !== HEAD.ballId || !HEAD.ballId.startsWith('060c73c2')) throw new Error('the frozen head is not its own canonical manifest')
+const headSource = (id: string): string => {
+  const sha = HEAD.entries[id]!.specifier.slice(5)
+  const code = readFileSync(`${FIXTURE}/balls/${sha}.js`, 'utf8')
+  if (sha256HexSync(code) !== sha) throw new Error(`frozen organ ${id} does not match its sha`)
+  return code
+}
 const APPROVED_TEXT = readFileSync(W + '/packages/experimental/webworker-runtime/tests/x6/fixtures/retention-suite-approved.json', 'utf8')
 const APPROVED = JSON.parse(APPROVED_TEXT) as {
   organs: string[]
@@ -80,10 +91,10 @@ async function mount(sources: Record<string, string>, suiteText = APPROVED_TEXT)
   vfs.mkdirSync('/dsh/home/auma/seed/pearl', { recursive: true })
   vfs.writeFileSync(SUITE_PATH, suiteText)
   const mounted = await mountE4({ head, vfs, buildIdentity, nodeBuiltins: true, host: { context, dshTools },
-    respond: call => call.path === '/_host/eyes' ? Response.json({ ok: true, fixture: 'eyes-callable' })
+    respond: call => idPromotionBudgetReply(call.body) ?? (call.path === '/_host/eyes' ? Response.json({ ok: true, fixture: 'eyes-callable' })
       : call.path === '/_head/lease' ? Response.json({ ok: true, ballId: head.ball.ballId,
         lease: { ownerPeerId: (call.body as { ownerPeerId?: string } | null)?.ownerPeerId,
-          generation: 1, expiresAt: Date.now() + 60_000 } }) : null })
+          generation: 1, expiresAt: Date.now() + 60_000 } }) : null) })
   const services = (globalThis as { __X6_SERVICES__?: Record<string, unknown> }).__X6_SERVICES__!
   const organs = services.organs as { call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> }
   return { ...mounted, organs, vfs }

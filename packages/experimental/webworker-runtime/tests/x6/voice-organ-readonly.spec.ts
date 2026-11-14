@@ -54,6 +54,20 @@ function organSource(organId: string): { sha: string; code: string } {
   return { sha, code: bytes.toString('utf8') }
 }
 
+/** The same, from her FROZEN epoch-173 head (fixtures/frozen-head), for a row about one organ's own behaviour
+ * that her published repairs change on purpose (a head sync re-commits mirror/home/auma/HEAD.json on every epoch). */
+const FROZEN = path.join(import.meta.dirname, 'fixtures/frozen-head')
+function frozenOrganSource(organId: string): { sha: string; code: string } {
+  const head = JSON.parse(readFileSync(path.join(FROZEN, 'HEAD.json'), 'utf8')) as { ballId: string; entries: Record<string, { specifier?: string }> }
+  if (!head.ballId.startsWith('060c73c2')) throw new Error('not the frozen epoch-173 head')
+  const specifier = head.entries[organId]?.specifier
+  if (typeof specifier !== 'string' || !/^ball:[a-f0-9]{64}$/.test(specifier)) throw new Error(`no frozen ball for ${organId}`)
+  const sha = specifier.slice(5)
+  const bytes = readFileSync(path.join(FROZEN, 'balls', `${sha}.js`))
+  if (sha256(bytes) !== sha) throw new Error(`the frozen ball bytes of ${organId} do not match their name`)
+  return { sha, code: bytes.toString('utf8') }
+}
+
 // ---------------------------------------------------------------- the probe
 const READ_METHODS = new Set(['existsSync', 'readFileSync', 'statSync', 'lstatSync', 'readdirSync', 'realpathSync'])
 const OUTWARD_GLOBALS = ['fetch', 'WebSocket', 'EventSource', 'XMLHttpRequest'] as const
@@ -416,9 +430,10 @@ describe('left out, and the probe sees what it must (positive controls)', () => 
     expect(vfs.existsSync(`/dsh/home/balls/${sha256(code)}.js`)).toBe(true)
   })
 
+  // Epoch-173 eyes: her v2 eyes refuses (EYES_ORIGIN_UNAVAILABLE) where this probe has no page origin, by design.
   it('auma_eyes is left out: every action posts to the host (the probe sees the outward request)', async () => {
     const probe = probeOf(await makeHome('empty'))
-    const eyes = loadCommonJs(organSource('auma-eyes').code, probe.fs, probe.outward) as { run: (a: Json, c: Json) => Promise<Json> }
+    const eyes = loadCommonJs(frozenOrganSource('auma-eyes').code, probe.fs, probe.outward) as { run: (a: Json, c: Json) => Promise<Json> }
     await expect(eyes.run({ action: 'projection' }, { fs: probe.fs })).rejects.toThrow('outward')
     expect(probe.outward.join()).toContain('/_host/eyes')
   })

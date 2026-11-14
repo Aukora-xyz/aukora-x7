@@ -26,29 +26,35 @@ import { cut, parseRow, rawNeedle, record, type Row, rowType, TITLE_CHARS, title
 export const THREAD_ACTIONS = Object.freeze(['list', 'tail', 'search'] as const)
 export type ThreadAction = typeof THREAD_ACTIONS[number]
 
+/**
+ * `list` 50 threads became 200; `tail` 6 turns by default (12 at most) became 12 (50
+ * at most), 600 characters a turn became 4,000. The answer bounds and the list read budget moved in step so those numbers
+ * can arrive (list 6 KiB became 64 KiB, tail 8 KiB became 224 KiB, both under the 256 KiB answer bound; the list budget
+ * 16 MiB became 64 MiB). `search` is unchanged.
+ */
 export const THREAD_LIMITS = Object.freeze({
   /** Threads discovered at most (session directories walked). */
   discoverThreads: 2048,
-  listThreads: 50,
+  listThreads: 200,
   listTailBytes: 64 * 1024,
   /**
    * `list`: a title not in the tail window is looked for in the head of the file, by byte scan, this far. Sized so every
-   * listed thread gets its header and whole tail: 50 x (4 KiB + 64 KiB + 256 KiB) = 16,200 KiB <= 16,384 KiB.
+   * listed thread gets its header and whole tail: 200 x (4 KiB + 64 KiB + 256 KiB) = 64,800 KiB <= 65,536 KiB.
    */
   listTitleProbeBytes: 256 * 1024,
-  listTotalBytes: 16 * 1024 * 1024,
+  listTotalBytes: 64 * 1024 * 1024,
   listLineChars: 160,
-  listAnswerBytes: 6 * 1024,
-  tailDefaultTurns: 6,
-  tailMaxTurns: 12,
+  listAnswerBytes: 64 * 1024,
+  tailDefaultTurns: 12,
+  tailMaxTurns: 50,
   tailFirstBytes: 256 * 1024,
   tailMaxBytes: 4 * 1024 * 1024,
   /** `tail`: the same head byte scan for a title, for one thread. */
   tailTitleProbeBytes: 512 * 1024,
-  /** His words get at most 300 characters of a turn, hers the rest of 600. */
-  tailHeChars: 300,
-  tailTurnChars: 600,
-  tailAnswerBytes: 8 * 1024,
+  /** His words get at most 2,000 characters of a turn, hers the rest of 4,000. */
+  tailHeChars: 2000,
+  tailTurnChars: 4000,
+  tailAnswerBytes: 224 * 1024,
   searchQueryChars: 128,
   searchFirstBytes: 256 * 1024,
   searchFileBytes: 4 * 1024 * 1024,
@@ -669,7 +675,7 @@ export function registerThreadTools(register: (spec: Record<string, unknown> & {
     parameters: {
       action: { type: 'string', required: true, enum: [...THREAD_ACTIONS], description: '`list`, `tail` or `search`; required.' },
       thread: { type: 'string', description: '`tail` (required) and `search` (optional): a thread id from `list`, or a unique prefix of at least 4 characters.' },
-      turns: { type: 'number', description: '`tail`: turns to return, 1..12 (default 6).' },
+      turns: { type: 'number', description: '`tail`: turns to return, 1..50 (default 12).' },
       query: { type: 'string', description: '`search`: a literal, case-insensitive phrase of 1..128 characters.' },
     },
     output: options.output,

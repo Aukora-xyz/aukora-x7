@@ -3,41 +3,47 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write docs/DIRECTION.md
 /direction:
-  en: b2fe46d8dbc71082
-  zh: 384f87edd1f837fe
+  en: 0fbecbd305269ac5
+  zh: b7aa0fe3c9764993
 /direction/why-this-needs-to-exist:
-  en: df86fdde6573bcfa
-  zh: fd2ee572fb77f94f
+  en: ee37a726a2cbc3c8
+  zh: 49babdaf3dca83d7
 /direction/what-the-foundation-is-meant-to-become:
   en: 7bc4b3b3fd41e218
   zh: 5bd5cf934e45d581
-/direction/where-it-stands-today:
-  en: a1c075bfd3cea332
-  zh: abe8b8bc25e7439f
+/direction/where-it-stands:
+  en: 6a2da30c8e4f3ede
+  zh: b4fb1234eb42e8f9
+/direction/her-self-build-loop-as-this-tree-has-it:
+  en: fe427833ffb5090c
+  zh: ec23c607d23b5b12
+/direction/next-the-continuity-diamond:
+  en: e3a716586ca76739
+  zh: c8bb6a5f592e4b95
 /direction/the-stages:
   en: 49792ad0a0edcd94
   zh: 671bff5e2b9bb559
 /direction/the-stages/1-foundation-an-understandable-reproducible-owner-controlled-personal-node:
-  en: 27de37d92ad13463
-  zh: fa329eb1ffe8211c
+  en: 76ff48e8297d5a53
+  zh: 3642984980bdd0cc
 /direction/the-stages/2-continuity-identity-memory-receipts-and-recovery-that-survive-change:
-  en: 47043fade3960b7a
-  zh: 1103319d33837649
+  en: 92e0edca34d2845c
+  zh: 27d553ce40c23cf7
 /direction/the-stages/3-extensibility-other-people-s-organs-other-implementations-other-models:
-  en: e17e602def708796
-  zh: af47c976f9ab86ca
+  en: a822557161055c6a
+  zh: 9594424447415107
 /direction/the-stages/4-interoperability-signed-events-her-own-log-portable-state:
-  en: c2164c9f04ce1274
-  zh: b0330d4ef10ea816
+  en: de17df49e8a5f000
+  zh: 91d0efc94b289c91
 /direction/the-stages/5-expansion-voice-phones-wearables-robotics:
-  en: 532e97f82f7e9f4e
-  zh: 6d80eb5396507c37
+  en: 39b2e869eb2b3b9e
+  zh: 2ce690e92570559c
 /direction/the-stages/6-ecosystem-owned-nodes-that-cooperate-with-no-central-authority:
-  en: 5e182cf1c437d29d
-  zh: 6f8f21c99f3897ae
+  en: 11ee982d1bc6d747
+  zh: 7ea586006b3ac449
 /direction/what-would-change-our-mind:
-  en: 793e7d074114caaa
-  zh: bdda6a0cc76f7569
+  en: 3dee70748407ee97
+  zh: d139dfb773bdf777
 /direction/what-this-is-not:
   en: 12866efd31f7b59c
   zh: c943b4678888f189
@@ -47,3 +53,6 @@
 /direction/what-success-means:
   en: a8498da7f9cd773e
   zh: 79bffd6da50b06bf
+/direction/next-what-is-built:
+  en: 892c46b8e6c3d6b2
+  zh: dc0150bcb79d13e8

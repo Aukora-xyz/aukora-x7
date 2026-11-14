@@ -540,3 +540,45 @@ export function createCrewRelay({ fetchImpl, now = Date.now, upstreamTimeoutMs =
     }
   }
 }
+
+// ---- WAKE block begin ----
+/** The cloud wake's relay reader (lead's word, 2026-11-14). An internal principal, never an owner access: only
+ * HEAD imports it and no request can produce it; it can never post (the post path above still needs an owner access
+ * and same-origin). It reads exactly what the owner's GET reads: the relay issue's newest page of comments after a
+ * cursor, bounded to RELAY_WAKE_LIMITS and marked untrusted. HEAD counts the reads per UTC day in its own storage. */
+export const WAKE_RELAY_READER = Object.freeze({ kind: 'wake-relay-reader' })
+export const RELAY_WAKE_LIMITS = Object.freeze({ comments: 12, bodyChars: 600 })
+
+/**
+ * The wake's ONE read-only relay export: comments on the relay issue newer than `after` (an ISO instant), the
+ * newest RELAY_WAKE_LIMITS.comments of them, oldest first. Never throws: `{ ok: false, code }`.
+ * @param {object} reader WAKE_RELAY_READER, nothing else.
+ */
+export async function relayWakeRead(reader, { after } = {}, env, { fetchImpl, signal, upstreamTimeoutMs = UPSTREAM_TIMEOUT_MS } = {}) {
+  try {
+    if (reader !== WAKE_RELAY_READER) throw coded('RELAY_WAKE_READER_REQUIRED', 403)
+    if (!env || typeof env.LINEAR_API_KEY !== 'string' || env.LINEAR_API_KEY.trim() === '') throw coded('RELAY_NOT_CONFIGURED', 503)
+    const afterAt = after === undefined ? null : instant(after)
+    if (after !== undefined && afterAt === null) throw coded('RELAY_AFTER_INVALID', 400)
+    if (signal?.aborted) throw coded('RELAY_UPSTREAM_UNAVAILABLE', 502)
+    // The step's own abort signal joins the request's deadline, so a step that ends cancels its read.
+    const base = fetchImpl ?? globalThis.fetch
+    const send = !signal ? base : (url, init = {}) => signal.aborted ? Promise.reject(signal.reason ?? new Error('aborted'))
+      : base(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, signal]) : signal })
+    const data = await callLinear(send, upstreamTimeoutMs, env.LINEAR_API_KEY, ISSUE_QUERY, { teamKey: TEAM_KEY, number: ISSUE_NUMBER, comments: COMMENT_PAGE })
+    const node = data?.issues?.nodes?.[0]
+    if (!node || typeof node.id !== 'string' || typeof node.identifier !== 'string') throw coded('RELAY_ISSUE_NOT_FOUND', 404)
+    const { page, beyond } = newestPage(node)
+    const seen = new Map()
+    for (const comment of page) if (!seen.has(comment.id)) seen.set(comment.id, comment)
+    const ordered = [...seen.values()].sort((a, b) => (a.at - b.at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    const chosen = (afterAt === null ? ordered : ordered.filter(comment => comment.at > afterAt)).slice(-RELAY_WAKE_LIMITS.comments)
+    return { ok: true, untrusted: true, issue: node.identifier, gap: afterAt !== null && beyond && ordered.length > 0 && ordered[0].at > afterAt,
+      comments: chosen.map(comment => ({ id: String(comment.id).slice(0, 64), at: comment.createdAt, author: typeof comment.user?.name === 'string' ? comment.user.name.slice(0, 64) : null,
+        body: String(comment.body ?? '').slice(0, RELAY_WAKE_LIMITS.bodyChars) })),
+      cursor: chosen.length ? chosen.at(-1).createdAt : after ?? null }
+  } catch (error) {
+    return { ok: false, code: RELAY_ERRORS.has(error) ? error.code : 'RELAY_FAILED' }
+  }
+}
+// ---- WAKE block end ----

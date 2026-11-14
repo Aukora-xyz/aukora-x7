@@ -23,7 +23,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-const HEAD = '7c01cb98514e4ae7a6aaa0dc29653282d94bc4717b85a18968b47aa4310120a8'
+const HEAD = '79fd695ce12f6fb6614d7b4c5fb10dffe52e6ed0fdb1ab4c30f7a5c9724cd5f2'
 const FACTS = {
   ok: true, runtime: 'cloudflare', epoch: 162, ballId: HEAD, organCount: 24, activeOrganCount: 24, receiptTotal: 120, receiptsVerified: 120,
   checkpointsTotal: 12, lastCheckpointSeq: 12, lastCheckpointReceiptCount: 119, dagReachable: 5, dagDeclared: 5, auraStatus: 'calm',

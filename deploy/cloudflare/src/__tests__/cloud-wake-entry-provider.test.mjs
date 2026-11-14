@@ -53,13 +53,13 @@ function wake(t, env) {
 
 test('an unknown CLOUD_WAKE_PROVIDER is refused at the wake entry, with no dispatch to any provider', async t => {
   const w = wake(t, { CLOUD_WAKE_PROVIDER: 'anthropicc', DEEPSEEK_API_KEY: 'synthetic-deepseek', ANTHROPIC_API_KEY: 'synthetic-anthropic' })
-  assert.deepEqual(await w.run(), { status: 'failed', reason: 'provider_unavailable' })
+  assert.deepEqual(await w.run(), { status: 'failed', reason: 'provider_unavailable', cause: 'provider_unknown' }) // The closed reason beside the family word
   assert.deepEqual(w.urls, [])
 })
 
 test('a named provider without its secret is refused, never swapped for a configured one', async t => {
   const w = wake(t, { CLOUD_WAKE_PROVIDER: 'openrouter', DEEPSEEK_API_KEY: 'synthetic-deepseek' })
-  assert.deepEqual(await w.run(), { status: 'failed', reason: 'provider_unavailable' })
+  assert.deepEqual(await w.run(), { status: 'failed', reason: 'provider_unavailable', cause: 'provider_secret_not_configured' })
   assert.deepEqual(w.urls, [])
 })
 

@@ -17,7 +17,7 @@ import css from './SpatialFrame.module.css'
 import { AUMA_LIVE_SURFACE, AUMA_MINDS_PATH, AUMA_STATUS_PATH, aumaStatusOf, lanesRunningOf } from './auma-status.ts'
 import { waitingAgeText, waitingOf } from './waiting.ts'
 import { ConversationOpener } from './conversation-opener.ts'
-import { FingerprintWaiting } from './portal/FingerprintWaiting.tsx'
+import { useApprovalNoticeFeed } from './portal/ApprovalWaiting.tsx'
 import { ThreadsLane, type ThreadsLaneProps } from './portal/ThreadsLane.tsx'
 import { panelIdOfSurface } from './service.ts'
 import type { WorkReaderDoor } from './work/index.ts'
@@ -67,7 +67,7 @@ export type AppFrameProps =
     readonly setArchived?: (sessionId: SessionId, archived: boolean, stopActivity: boolean) => Promise<void>
     /** The host rename (Round 23): the durable title both the Threads card and the open thread's header read. */
     readonly renameThread?: (sessionId: SessionId, title: string) => Promise<string>
-    /** Where the page's reader of her files is (Lane B3), for the chat lane's Fingerprint card. */
+    /** Where the page's reader of her files is (Lane B3), for the Notices rows of what waits in her home. */
     readonly homeReader?: WorkReaderDoor
   }
 
@@ -385,7 +385,7 @@ export function AppFrame({
   const state = useStore(value => value)
   const currentSession = useSessions(sessions => mainViewSessionOf(sessions))
   // HER HOME, AS SOVEREIGNTY READS IT (Lane B3): the same reader, and the same Session (`sessionOf`, never a preview
-  // fixture), so the chat card and Sovereignty read one copy of her staged files and agree on what waits.
+  // fixture), so the Notices rows and Sovereignty read one copy of her staged files and agree on what waits.
   const homeSession = useSessions(sessionOf)
   const homeFiles = useSyncExternalStore(homeReader?.subscribe ?? NO_DOOR, homeReader?.current ?? NO_READER)
   // HER EYES WHERE THE HOST HAS NONE (Round 36): while this page is open, her worker can ask it what it shows.
@@ -589,6 +589,13 @@ export function AppFrame({
   const surfaceReadsNotice = state.activeSurface === WORK_SURFACE || state.activeSurface === AURA_SURFACE
     || state.activeSurface === NOTICES_SURFACE
   useNoticeFeed(!surfaceReadsNotice)
+  // NOTHING FLOATS, PART TWO
+  //. What waits for his fingerprint (a staged Pearl, a staged merge) is a row in Notices, whichever app is open:
+  // no card over the chat, no pill over the surfaces. The row opens Sovereignty, where the card is; it approves nothing.
+  const openSovereignty = useCallback(() => { actions.selectSurface('sovereignty', undefined, 'contained') }, [actions])
+  // What waits in her home (her outward request, a Pearl staged only there, an organ set) is a row too.
+  useApprovalNoticeFeed(openSovereignty, undefined, homeFiles === null || homeSession === undefined ? undefined
+    : { reader: homeFiles, sessionId: homeSession })
   const activeMenuSlot = MENU_SLOTS[menuTab]
   // EVERY FACT, EACH ONE MARKED KNOWN OR UNKNOWN. The strip never substitutes a number for a lookup that failed.
   const waitingLanes = waitingLanesOf(lanesAnswer, Date.now())
@@ -676,10 +683,6 @@ export function AppFrame({
         )}
       >
         <div className={css.threadStack} data-thread-view={state.conversationOpen ? 'conversation' : 'list'} style={{ position: 'relative' }}>
-          {/* FINGERPRINT WAITING (Lanes B2, B3): over the chat, whatever thread is open, while HEAD or her staged files hold
-              something for the passkey. */}
-          <FingerprintWaiting openSovereignty={() => { actions.selectSurface('sovereignty', undefined, 'contained') }}
-            reader={homeFiles ?? undefined} sessionId={homeSession} />
           <div className={css.threadLayer} data-thread-layer="list" hidden={state.conversationOpen}>
             {/* THE PREDECESSOR'S THREADS LANE (x5/threads.tsx), on the live DSH sessions, in place of the stock sidebar. */}
             <ThreadsLane

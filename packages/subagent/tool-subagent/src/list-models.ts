@@ -9,6 +9,8 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import type { AllowedModelRoute, ModelSelectionPolicy } from './model-selection.ts'
 import { subagentModelSelectionPolicy } from './model-selection-state.ts'
+import { NEW_SESSIONS_ONLY } from './model-selection.ts'
+import { doorState, noKeySuffix, readEdgeDoorKeys, type DoorState, type EdgeDoorKeys } from './edge-doors.ts'
 
 interface ListSubagentModelsRequest {
   readonly provider?: string
@@ -31,10 +33,38 @@ function registeredProvider(
   throw new Error(`LLM provider "${providerId}" is not registered; available providers: ${available}`)
 }
 
+/** The last line of every listing: when its choices were fixed, so an old thread is not read as broken. */
+function footer(selectionEnabled: boolean): string {
+  return selectionEnabled
+    ? NEW_SESSIONS_ONLY
+    : `This session started without a subagent model list, so only its own model is offered. ${NEW_SESSIONS_ONLY}`
+}
+
+/**
+ * Door states for the listed providers, read once per listing and only when one of them leaves through an edge door.
+ * @returns a state reader and the notes for providers the edge could not answer for.
+ */
+async function edgeDoorStates(ctx: Context, providers: readonly string[], signal: AbortSignal) {
+  const doors = ctx.get('subagentModelSelection')?.edgeDoors()
+  const routed = doors === undefined ? [] : providers.filter(provider => doors.routes.some(route => route.provider === provider))
+  const keys: EdgeDoorKeys | undefined = doors === undefined || routed.length === 0
+    ? undefined
+    : await readEdgeDoorKeys(doors.healthPath, signal)
+  const state = (provider: string): DoorState => doors === undefined || keys === undefined ? undefined : doorState(doors, keys, provider)
+  const notes = [...new Set(routed.flatMap((provider) => {
+    const current = state(provider)
+    return current?.kind === 'unknown' ? [`Edge key check not run: ${current.reason}.`] : []
+  }))]
+  return { state, notes }
+}
+
 /** Render one advertised or resolved model. */
 function modelLine(provider: string, model: { id: string; name: string; description?: string }): string {
   return `${provider}/${model.id} — ${model.name}${model.description === undefined ? '' : `: ${model.description}`}`
 }
+
+/** How her own route reads in a model row. */
+const OWN_MODEL = ' (your own model)'
 
 /** Read the requested provider, allowed models, or exact-model efforts. */
 async function listSubagentModels(
@@ -44,16 +74,23 @@ async function listSubagentModels(
   exec: ToolRunContext,
 ): Promise<string> {
   if (exec.agent === undefined) throw new Error('list_subagent_models requires a calling agent')
-  const routes = subagentModelSelectionPolicy(policyHandle, exec.agent.session)
-  let policy = routes === undefined ? undefined : { routes }
-  const selectionEnabled = policy !== undefined
-  if (policy === undefined) {
-    const { provider, model } = parentAgentOptionsForDelegation(exec.agent)
-    if (provider === undefined || model === undefined) {
-      throw new Error('cannot discover child LLM routes without a parent provider and model')
-    }
-    policy = { routes: [{ provider, model }] }
+  const recorded = subagentModelSelectionPolicy(policyHandle, exec.agent.session)
+  const selectionEnabled = recorded !== undefined
+  const parent = parentAgentOptionsForDelegation(exec.agent)
+  const own: AllowedModelRoute | undefined = parent.provider === undefined || parent.model === undefined
+    ? undefined
+    : { provider: parent.provider, model: parent.model }
+  if (own === undefined && !selectionEnabled) {
+    throw new Error('cannot discover child LLM routes without a parent provider and model')
   }
+  // Her own route is always offered and answered for, as the subagent tool always allows it: a recorded list adds
+  // routes to it and never takes it away (a main mind on a route outside the list still sees and inspects its own).
+  const listed = recorded ?? []
+  const isOwn = (provider: string, model: string) => own !== undefined && own.provider === provider && own.model === model
+  const policy: ModelSelectionPolicy = {
+    routes: own === undefined || listed.some(route => isOwn(route.provider, route.model)) ? listed : [...listed, own],
+  }
+  const ownMark = (provider: string, model: string) => isOwn(provider, model) ? OWN_MODEL : ''
   const { signal } = exec
   const llm = ctx.get('llm')
   if (llm === undefined) {
@@ -65,36 +102,56 @@ async function listSubagentModels(
   if (request.provider === undefined) {
     const providers = llm.listProviders()
       .filter(provider => policy.routes.some(route => route.provider === provider.id))
-    return providers.length === 0
-      ? '(no LLM providers)'
-      : providers.map(provider => `${provider.id} — ${provider.name}`).join('\n')
+    const doors = await edgeDoorStates(ctx, providers.map(provider => provider.id), signal)
+    const rows = providers.length === 0
+      ? ['(no LLM providers)']
+      : providers.map(provider => `${provider.id} — ${provider.name}`
+        + (own?.provider === provider.id ? ` (your own model: ${own.model})` : '')
+        + (doors.state(provider.id)?.kind === 'no-key' ? noKeySuffix(provider.name) : ''))
+    return [...rows, ...doors.notes, footer(selectionEnabled)].join('\n')
   }
   if (request.provider.length === 0) throw new Error('`provider` must be non-empty')
   const allowedRoutes = policy.routes.filter(route => route.provider === request.provider)
-  const [firstRoute] = allowedRoutes
-  if (firstRoute === undefined) {
-    throw new Error(`LLM provider "${request.provider}" is not allowed for this Session`)
+  if (allowedRoutes.length === 0) {
+    throw new Error(`LLM provider "${request.provider}" is not allowed for this Session; call list_subagent_models with no arguments for the providers it allows`)
   }
   const provider = registeredProvider(llm, policy, request.provider)
   if (request.model === undefined) {
-    const models = selectionEnabled
+    const doors = await edgeDoorStates(ctx, [provider.id], signal)
+    if (doors.state(provider.id)?.kind === 'no-key') {
+      // Every allowed route is shown, each marked: none is offered as usable and none is silently dropped.
+      return [
+        ...allowedRoutes.map(route => `${provider.id}/${route.model}${ownMark(provider.id, route.model)}${noKeySuffix(provider.name)}`),
+        footer(selectionEnabled),
+      ].join('\n')
+    }
+    // Listed routes follow the provider's catalog (a removed model is not resolved); her own route is resolved when the
+    // catalog does not advertise it, so it is never dropped.
+    const advertised = selectionEnabled
       ? (await llm.listModels(provider.id)).filter(model => allowedRoutes.some(route => route.model === model.id))
-      : [await llm.resolveModelInfo(provider.id, firstRoute.model, signal)]
+      : []
+    const ownModel = own?.provider === provider.id && !advertised.some(model => model.id === own.model) ? own.model : undefined
+    const models = ownModel === undefined
+      ? advertised
+      : [...advertised, await llm.resolveModelInfo(provider.id, ownModel, signal)]
     signal.throwIfAborted()
-    return models.length === 0
-      ? `(no advertised models for ${provider.id})`
-      : models.map(model => modelLine(provider.id, model)).join('\n')
+    const rows = models.length === 0
+      ? [`(no advertised models for ${provider.id})`]
+      : models.map(model => `${modelLine(provider.id, model)}${ownMark(provider.id, model.id)}`)
+    return [...rows, ...doors.notes, footer(selectionEnabled)].join('\n')
   }
   if (request.model.length === 0) throw new Error('`model` must be non-empty')
   if (!allowedRoutes.some(route => route.model === request.model)) {
-    throw new Error(`child LLM route "${provider.id}/${request.model}" is not allowed for this Session`)
+    throw new Error(`child LLM route "${provider.id}/${request.model}" is not allowed for this Session; call list_subagent_models with \`provider\` for the models it allows`)
   }
   const model = await llm.resolveModelInfo(provider.id, request.model, signal)
+  const doors = await edgeDoorStates(ctx, [provider.id], signal)
   const efforts = model.reasoning?.efforts.map(effort => (
     `${effort.id}${model.reasoning?.defaultEffort === effort.id ? ' (default)' : ''} — ${effort.name}`
     + (effort.description === undefined ? '' : `: ${effort.description}`)
   )).join('\n') || '(no advertised reasoning efforts)'
-  return `${modelLine(provider.id, model)}\nReasoning efforts:\n${efforts}`
+  const unavailable = doors.state(provider.id)?.kind === 'no-key' ? noKeySuffix(provider.name) : ''
+  return `${modelLine(provider.id, model)}${ownMark(provider.id, model.id)}${unavailable}\nReasoning efforts:\n${efforts}`
 }
 
 /**
@@ -111,7 +168,10 @@ export function registerListSubagentModels(
     description:
       'Inspect subagent models without changing the current Agent. No arguments: providers; '
       + '`provider`: allowed models; `provider` + `model`: that model and its reasoning efforts. '
-      + 'Inspect options here before selecting a child provider and model; use returned ids for delegation.',
+      + 'Inspect options here before selecting a child provider and model; use returned ids for delegation. '
+      + 'A row marked "unavailable" is switched on but cannot answer yet (its edge door has no key): pick another. '
+      + 'Your own model is always listed and allowed, marked "your own model". '
+      + NEW_SESSIONS_ONLY,
     parameters: {
       provider: {
         type: 'string',

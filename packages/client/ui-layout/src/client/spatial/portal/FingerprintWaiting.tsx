@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 The Aukora authors
 /**
+ * MOUNTED NOWHERE.
+ * The frame no longer draws this card over the chat; what waits is a row in Notices (portal/notices.ts,
+ * read by portal/ApprovalWaiting.tsx) that opens Sovereignty, where the approval is. The file and its exports stay
+ * (`readWaitingApprovals` is read by specs, and its approval paths are covered there) until they are retired.
+ *
  * "FINGERPRINT WAITING" IN THE CHAT LANE (Lanes B2 and B3): whenever something waits that only the owner's passkey can
  * approve, a gold card shows over the open chat with one line saying what it is, an "Approve with Touch ID" button that
  * runs the whole approval right there, "Inspect in Sovereignty", and a × that hides it for this page (it stays in
@@ -57,7 +62,8 @@ import {
   STAGED_PROMOTION_CHANGE, type HeadLeaseRead, type LandStep,
 } from '../aumlok/head-promotion.ts'
 import {
-  approveAndSendOutward, outwardWords, readStagedOutward, STAGED_OUTWARD_CHANGE, type StagedOutward,
+  approveAndSendOutward, onReasonChange, outwardMaybeSent, outwardWords, readStagedOutward, REASON_CHANGED_KEY, STAGED_OUTWARD_CHANGE,
+  type StagedOutward,
 } from '../aumlok/outward-class3.ts'
 import { markSent, onSentChange, SENT_KEY, wasSent } from '../aumlok/outward-sent.ts'
 import {
@@ -549,11 +555,13 @@ export function FingerprintWaiting({ openSovereignty, reader, sessionId, fetchIm
   useEffect(() => {
     if (!withHome) return
     const again = (): void => { setOutwardTick(n => n + 1) }
-    const onStorage = (event: StorageEvent): void => { if (event.key === SENT_KEY) again() }
+    // So is an ask the edge refused because its reason changed, here or in another tab.
+    const onStorage = (event: StorageEvent): void => { if (event.key === SENT_KEY || event.key === REASON_CHANGED_KEY) again() }
     globalThis.addEventListener('storage', onStorage)
     // This card's own send reads again when it settles.
     const off = onSentChange(() => { if (!busy.current) again() })
-    return () => { globalThis.removeEventListener('storage', onStorage); off() }
+    const offReason = onReasonChange(() => { if (!busy.current) again() })
+    return () => { globalThis.removeEventListener('storage', onStorage); off(); offReason() }
   }, [withHome])
   const reread = useDebounced(() => { setTick(n => n + 1) })
   const rereadOutward = useDebounced(() => { setOutwardTick(n => n + 1) })
@@ -648,7 +656,7 @@ export function FingerprintWaiting({ openSovereignty, reader, sessionId, fetchIm
       // Whatever failed, the passkey may already have approved and the post may have gone out: not offered again here.
       markSent(target.staged.canonical)
       settle({ state: 'unclear', key: target.key,
-        text: `No clear answer (${why}). It may have gone out: check GitHub before approving it again.` })
+        text: `No clear answer (${why}). ${outwardMaybeSent(target.staged)}` })
     }).finally(() => {
       endApproval(target.approval)
       busy.current = false

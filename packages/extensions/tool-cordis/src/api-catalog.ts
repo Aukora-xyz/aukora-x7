@@ -3650,7 +3650,14 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     key: 'subagentModelSelection',
     summary: 'Host settings owner that records Session authorization before the first model request.',
     description: 'Host settings owner that records Session authorization before the first model request.',
-    methods: [],
+    methods: [
+      {
+        signature: 'edgeDoors(): EdgeDoors | undefined',
+        description: 'The deployment\'s door table, when it names any route.',
+        parameters: [],
+        returns: 'the table, or undefined when no route leaves through an edge door.',
+      },
+    ],
   },
   {
     key: 'subagents',
@@ -6306,6 +6313,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'DynamicCordisRunRequest',
     declaration: 'export interface DynamicCordisRunRequest {\n    requestId: ApprovalRequestId;\n    agentId: SessionId;\n    pluginId: CordisDynamicPluginId;\n    packageId: CordisDynamicPackageId;\n    mode: CordisDynamicRunMode;\n    name: string;\n    purpose: string;\n    requiresApproval: boolean;\n}',
+  },
+  {
+    name: 'EdgeDoorRoute',
+    declaration: 'export interface EdgeDoorRoute {\n    readonly provider: string;\n    readonly door: string;\n}',
+  },
+  {
+    name: 'EdgeDoors',
+    declaration: 'export interface EdgeDoors {\n    readonly healthPath: string;\n    readonly routes: readonly EdgeDoorRoute[];\n}',
   },
   {
     name: 'EditGoalRequest',

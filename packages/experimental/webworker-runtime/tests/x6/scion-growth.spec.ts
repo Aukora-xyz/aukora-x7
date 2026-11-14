@@ -1,3 +1,4 @@
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 import { fileURLToPath } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { mkdtemp, mkdir, writeFile, rm, realpath, readFile } from 'node:fs/promises'
@@ -374,6 +375,7 @@ describe('trialScionCandidate & growScionOrgan isolated worker trial', () => {
       const url = new URL(request.url)
       const input = request.body ? await request.clone().json() as Record<string, unknown> : {}
       if (url.origin !== 'https://runtime-fixture.invalid') throw new Error('Unmocked network origin: ' + url.origin)
+      if (url.pathname === '/_head/lease' && input.action === 'reserve-id-promotion') return idPromotionBudgetReply(input)!
       if (url.pathname === '/_head/lease') return Response.json({ ok: true, ballId: head.ballId,
         lease: { ownerPeerId: input.ownerPeerId, generation: 1, expiresAt: Date.now() + 60_000 } })
       if (url.pathname === '/_head/ball' && request.method === 'POST') {
@@ -1127,8 +1129,8 @@ describe('J1 runtime-pinned coverage on real Cordis and ToolsService', () => {
     const writeCases = (cases: Record<string, unknown>[]) => { vfs.writeFileSync(suitePath, JSON.stringify({ ...suite, cases })) }
     writeCases(live)
     const mounted = await mountE4({ head, vfs, buildIdentity, nodeBuiltins: true, host: { context, dshTools },
-      respond: call => call.path === '/_head/lease' ? Response.json({ ok: true, ballId: head.ball.ballId,
-        lease: { ownerPeerId: call.body && typeof call.body === 'object' && 'ownerPeerId' in call.body ? call.body.ownerPeerId : '', generation: 1, expiresAt: Date.now() + 60_000 } }) : null })
+      respond: call => idPromotionBudgetReply(call.body) ?? (call.path === '/_head/lease' ? Response.json({ ok: true, ballId: head.ball.ballId,
+        lease: { ownerPeerId: call.body && typeof call.body === 'object' && 'ownerPeerId' in call.body ? call.body.ownerPeerId : '', generation: 1, expiresAt: Date.now() + 60_000 } }) : null) })
     const services = (globalThis as { __X6_SERVICES__?: Record<string, unknown> }).__X6_SERVICES__!
     const organs = services.organs as { call(name: string, args: Record<string, unknown>): Promise<Record<string, unknown>> }
     const raw = services.scion as { trialRetentionCandidate(input: Record<string, unknown>): Promise<Record<string, unknown>> }
@@ -1586,6 +1588,39 @@ describe('J1 runtime-pinned coverage on real Cordis and ToolsService', () => {
     expect(await f.challenge('seed-pearl', { candidateSource })).toMatchObject({
       admissionError: 'PEARL_SUITE_ISOLATED_FAILED', qualificationId: null,
     })
+  })
+
+  it.each(['denied', 'missing', 'lost-reply'])('refuses %s budget authority before candidate activation', async (failure) => {
+    const f = await fixture([targetCase()])
+    const candidateSource = "globalThis.__budgetMounted=true;module.exports={name:'seed-target',run(args){return {ok:true,value:args.value}}}"
+    const admission = await f.challenge('seed-pearl', { candidateSource })
+    expectToken(admission)
+    const module = await f.runtime.ballPut({ code: candidateSource, name: 'seed-target' })
+    const before = f.runtime.status().ballId
+    vi.stubGlobal('__budgetMounted', false)
+    const originalFetch = fetch
+    let attempted = 0
+    vi.stubGlobal('fetch', async (resource: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(resource, init)
+      const input: unknown = request.method === 'POST' ? await request.clone().json() : null
+      if (input && typeof input === 'object' && 'action' in input && input.action === 'reserve-id-promotion') {
+        attempted++
+        if (failure === 'lost-reply') throw new TypeError('connection lost after reservation')
+        return failure === 'denied' ? Response.json({ ok: false, code: 'ID_PROMOTION_LIMIT' }, { status: 429 })
+          : Response.json({ ok: true })
+      }
+      return originalFetch(resource, init)
+    })
+    if (typeof admission.qualificationId !== 'string') throw Error('Missing fixture qualification')
+    await expect(f.runtime.treePatch({ id: 'seed-target', specifier: module.specifier,
+      qualificationId: admission.qualificationId })).rejects.toMatchObject({ notApplied: true })
+    expect(attempted).toBe(1)
+    expect(Reflect.get(globalThis, '__budgetMounted')).toBe(false)
+    expect(f.runtime.status().ballId).toBe(before)
+    vi.stubGlobal('fetch', originalFetch)
+    await expect(f.runtime.treePatch({ id: 'seed-target', specifier: module.specifier,
+      qualificationId: admission.qualificationId })).resolves.toMatchObject({ ok: true })
+    expect(Reflect.get(globalThis, '__budgetMounted')).toBe(true)
   })
 
 })

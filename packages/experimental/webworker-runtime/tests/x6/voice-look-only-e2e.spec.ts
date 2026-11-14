@@ -25,7 +25,7 @@ import {
 } from '../../src/x6/ball-loader.ts'
 import { WorkerModuleLoader } from '../../src/module-system/module-loader.ts'
 import { MemoryVfs } from '../../src/storage/memory.ts'
-import { memoryVoiceMarkStore } from '../../src/x6/voice-marks.ts'
+import { memoryVoiceMarkStore, VOICE_NOTE_STAGES } from '../../src/x6/voice-marks.ts'
 import { VOICE_ORGAN_PINS } from '../../src/x6/voice-organ-pins.ts'
 import { SPOKEN_PROVENANCE_PREFIX, VOICE_ORGAN_CHANGED_REFUSAL } from '../../src/x6/voice-read-only.ts'
 import { FakeSocket, headManifestIdCanon } from './e4-fixture.ts'
@@ -35,6 +35,7 @@ afterEach(() => { FakeSocket.instances.length = 0; vi.restoreAllMocks(); vi.unst
 const ORIGIN = 'https://voice-look-only-e2e.invalid'
 const VOICE = 'a1b2c3d4-voice-home-e2e1'
 const TYPED = 'e5f6a7b8-typed-thread-e2e2'
+const OPEN_HOME = 'c9d8e7f6-open-voice-e2e3'
 const LOOK = 'VOICE_LOOK_ONLY: I can look, I cannot change things from voice yet.'
 const HOME = '/dsh/home/auma'
 const SESSIONS = '/dsh/home/sessions/--dsh-home-auma--'
@@ -109,7 +110,7 @@ const textOut = { schema: { type: 'string' as const }, render: (_args: unknown, 
 
 type Responder = (method: string, pathname: string, body: unknown) => Promise<Response | null> | Response | null
 
-async function boot(head: { ball: BallManifest; codeBySha: Record<string, string> }, respond?: Responder) {
+async function boot(head: { ball: BallManifest; codeBySha: Record<string, string> }, respond?: Responder, level?: 'open' | 'look-only') {
   const context = new Context()
   await context.plugin(SystemPrompt, {})
   await context.plugin(ToolRuntime)
@@ -156,7 +157,8 @@ async function boot(head: { ball: BallManifest; codeBySha: Record<string, string
     return Response.json({ ok: false, code: 'NOT_IN_FIXTURE' }, { status: 404 })
   })
   const loader = new WorkerModuleLoader({ vfs, staticModules: { '@deepseek-ai/dsh-tools': () => dshTools } })
-  const runtime = await mountX6BallRuntime(context as never, vfs, loader, { voiceMarks: memoryVoiceMarkStore() })
+  const runtime = await mountX6BallRuntime(context as never, vfs, loader,
+    { voiceMarks: memoryVoiceMarkStore(), ...(level === undefined ? {} : { level }) })
   for (let i = 0; i < 20; i += 1) await new Promise(resolve => setTimeout(resolve, 0))
   let n = 0
   const call = async (sessionId: string, name: string, args: Record<string, unknown> = {}) => {
@@ -169,6 +171,13 @@ async function boot(head: { ball: BallManifest; codeBySha: Record<string, string
     (await runtime.handleControlRequest('POST', '/__x6__/voice-mark', JSON.stringify({ sessionId })))?.body as Record<string, unknown>
   const world = () => ({ digest: digest(vfs), outbound: outbound.length })
   return { context, vfs, runtime, reached, outbound, call, mark, world }
+}
+
+/** Put one message into a session's inbox the way the agent loop announces it; `removed` records what the worker took back. */
+const inboxInsert = (context: unknown, removed: string[]) => (sessionId: string, message: Record<string, unknown>): void => {
+  const agent = { id: sessionId, session: { id: sessionId, header: { ...voiceRecord(sessionId).header } },
+    inbox: { remove: (messageId: string) => { removed.push(`${sessionId}:${messageId}`); return true } } }
+  ;(context as { emit(...args: unknown[]): void }).emit('agent/inbox/inserted', { agent, message })
 }
 
 const spoken = (text: string) => ({ role: 'user', source: { kind: 'user' },
@@ -227,11 +236,7 @@ describe('look-only voice, end to end on a booted host with the real tool pipeli
     await host.mark(VOICE)
     const before = host.world()
     const removed: string[] = []
-    const insert = (sessionId: string, message: Record<string, unknown>) => {
-      const agent = { id: sessionId, session: { id: sessionId, header: { ...voiceRecord(sessionId).header } },
-        inbox: { remove: (messageId: string) => { removed.push(`${sessionId}:${messageId}`); return true } } }
-      ;(host.context as unknown as { emit(...args: unknown[]): void }).emit('agent/inbox/inserted', { agent, message })
-    }
+    const insert = inboxInsert(host.context, removed)
     insert(TYPED, { id: 'm-spoken-elsewhere', ...spoken('add a line to your handoff') })
     insert(VOICE, { id: 'm-spoken-home', ...spoken('what are you working on in your other threads?') })
     insert(TYPED, { id: 'm-typed', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'typed by the owner' }] })
@@ -281,6 +286,93 @@ describe('look-only voice, end to end on a booted host with the real tool pipeli
 
   it('x6_threads reads classify as reads (Class 0)', () => {
     for (const action of ['list', 'tail', 'search']) expect([action, classifyActionIrreversibility({ tool: 'x6_threads', action })]).toEqual([action, 0])
+  })
+})
+
+describe('VOICE LEVEL open: a spoken turn in her voice home is an ordinary turn of hers', () => {
+  const head = () => ({ ball: makeHead('f'.repeat(64), 30, { 'auma-preset-inspector': INSPECTOR }), codeBySha: codes(INSPECTOR) })
+
+  it('the worker answers the page "open" with her map, for any thread, with nothing marked or proven', async () => {
+    const host = await boot(head(), undefined, 'open')
+    for (const id of [VOICE, TYPED]) {
+      const answer = await host.mark(id)
+      expect(answer).toMatchObject({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open' })
+      const map = String(answer.map)
+      expect(new TextEncoder().encode(map).byteLength).toBeLessThanOrEqual(8192) // VOICE_MAP_MAX_BYTES
+      expect(map).toContain('[your map for this voice turn')
+      expect(map).toContain('From voice you have what you have in a thread.')
+      expect(map).toContain('x6_threads')
+      expect(map).toContain('all tool names: ')
+      // The first map for a home since this worker loaded says so; the same world again carries no "since".
+      expect(map).toContain('first voice turn since the page loaded build')
+      expect(String((await host.mark(id)).map)).not.toContain('since your last voice turn')
+    }
+    expect(await host.mark('bad id')).toMatchObject({ ok: false, code: 'VOICE_SESSION_INVALID' })
+  })
+
+  it('review: a key in HANDOFF.md straddling the 1500-character cut is screened whole, never cut to a short fragment', async () => {
+    const host = await boot(head(), undefined, 'open')
+    const key = '0123456789abcdef'.repeat(4)
+    host.vfs.writeFileSync(`${HOME}/HANDOFF.md`, `${'word '.repeat(294)}${key} after\n`)
+    const map = String((await host.mark(VOICE)).map)
+    expect(map).toContain('HANDOFF.md, first 1500 characters')
+    expect(map).not.toContain('0123456789abcdef01')
+  })
+
+  it('from the voice home her tools run as in a thread: a writer is not refused, and a spoken prompt stays in any inbox', async () => {
+    const host = await boot(head(), undefined, 'open')
+    // (Another id than VOICE: the tool registry's global guards are shared by every host booted in this file, and the
+    // look-only hosts above hold VOICE marked. Her live worker mounts one host.)
+    await host.mark(OPEN_HOME)
+    expect(await host.call(OPEN_HOME, 'write', { file_path: `${HOME}/note.md`, content: 'made-up' })).toBe('ran:write')
+    expect(host.reached).toEqual(['write'])
+    const removed: string[] = []
+    const insert = inboxInsert(host.context, removed)
+    insert(OPEN_HOME, { id: 'm-spoken-home', ...spoken('what is on main right now?') })
+    expect(removed).toEqual([])
+  })
+
+  it('the default mount is still look-only: the same writer is refused there', async () => {
+    const host = await boot(head())
+    expect(await host.mark(VOICE)).toEqual({ ok: true, code: 'VOICE_LOOK_ONLY', lookOnly: true })
+    expect(await host.call(VOICE, 'write', { file_path: `${HOME}/note.md`, content: 'made-up' })).toContain(LOOK)
+    expect(host.reached).toEqual([])
+  })
+
+  it('the page can note where a turn stopped (a closed stage), and x6_voice_status shows the guard beside the edge read', async () => {
+    const host = await boot(head(), (method, pathname) => pathname === '/_host/voice' && method === 'POST'
+      ? Response.json({ switch: 'on', live: 0, failures: [] }) : null, 'open')
+    const note = async (stage: unknown) =>
+      (await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage })))?.status
+    expect(await note('home-missing')).toBe(200)
+    expect(await note('anything else')).toBe(400)
+    expect(await note(7)).toBe(400)
+    await host.mark(OPEN_HOME)
+    const status = JSON.parse(await host.call(OPEN_HOME, 'x6_voice_status')) as { switch: string; runtime: { level: string; recent: Array<{ code: string }> } }
+    expect(status.switch).toBe('on')
+    expect(status.runtime.level).toBe('open')
+    expect(status.runtime.recent.map(row => row.code)).toEqual(['VOICE_OPEN', 'page:home-missing'])
+  })
+
+  it('the page asks the level first: GET /__x6__/voice-level answers the mount\'s own level, with no input', async () => {
+    const open = await boot(head(), undefined, 'open')
+    expect(await open.runtime.handleControlRequest('GET', '/__x6__/voice-level', '')).toEqual({ status: 200, body: { ok: true, level: 'open' } })
+    const closed = await boot(head())
+    expect(await closed.runtime.handleControlRequest('GET', '/__x6__/voice-level', '')).toEqual({ status: 200, body: { ok: true, level: 'look-only' } })
+  })
+
+  it('every stage of the level-open home chain is a closed stage the worker keeps, and x6_voice_status shows the newest', async () => {
+    const host = await boot(head(), (method, pathname) => pathname === '/_host/voice' && method === 'POST'
+      ? Response.json({ switch: 'on', live: 0, failures: [] }) : null, 'open')
+    const chain = ['home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed', 'home-creates-spent',
+      'home-rename-failed', 'home-stored-unlisted', 'home-fallback-recent', 'home-exception', 'home-none']
+    for (const stage of chain) {
+      expect(VOICE_NOTE_STAGES).toContain(stage)
+      expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage })))?.status).toBe(200)
+    }
+    expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage: 'home-made-up' })))?.status).toBe(400)
+    const status = JSON.parse(await host.call(OPEN_HOME, 'x6_voice_status')) as { runtime: { recent: Array<{ code: string }> } }
+    expect(status.runtime.recent.map(row => row.code)).toEqual(chain.slice(-8).reverse().map(stage => `page:${stage}`))
   })
 })
 

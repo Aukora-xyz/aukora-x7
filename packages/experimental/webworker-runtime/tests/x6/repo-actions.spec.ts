@@ -151,6 +151,22 @@ describe('Wave 4 repository tool declarations and admission', () => {
   })
 })
 
+// A staged merge card can be taken back; no fingerprint, nothing merged.
+describe('withdraw_proposal in x6_repo', () => {
+  it('is advertised with the other actions, described in one sentence, the reversible class like stage_proposal, and sent with her owner session only', async () => {
+    const { repo, calls } = await mounted()
+    const actionEnum: unknown = (repo.parameters.action as { enum?: unknown }).enum
+    expect(Array.isArray(actionEnum) ? ['stage_proposal', 'merge_proposal', 'withdraw_proposal'].filter(action => !(actionEnum as unknown[]).includes(action)) : null).toEqual([])
+    expect(repo.description).toContain('`withdraw_proposal` (`branch`, `headSha` of the staged card) takes back the merge card you staged; it merges nothing and needs no fingerprint.')
+    expect(classifyActionIrreversibility({ tool: 'x6_repo', action: 'withdraw_proposal', branch: A, headSha: SHA })).toBe(1)
+    expect(classifyActionIrreversibility({ tool: 'x6_repo', action: 'stage_proposal', branch: A })).toBe(1)
+    const args = { action: 'withdraw_proposal', branch: A, headSha: SHA }
+    await repo.execute(args)
+    expect(calls.at(-1)?.body).toEqual({ ...args, ownerSession: true })
+    expect(calls.at(-1)?.request.headers.has('x-x6-class3-approval')).toBe(false)
+  })
+})
+
 describe('Wave 4 caller-owned branch drafts', () => {
   it('isolates private branches and main and pins each private commit to its acknowledged base', async () => {
     const { repo, calls } = await mounted()
@@ -178,6 +194,10 @@ describe('Wave 4 caller-owned branch drafts', () => {
     expect(await repo.execute({ action: 'read', branch: A, path: 'server/receipts.mjs' })).toMatchObject({ content: 'alpha gamma' })
     await expect(repo.execute({ action: 'edit', branch: A, path: 'server/receipts.mjs', oldString: 'missing', newString: 'x' })).rejects.toThrow('REPO_EDIT_TARGET_NOT_FOUND')
     await expect(repo.execute({ action: 'read', branch: A, path: 'server/receipts.mjs', offset: -1 })).rejects.toThrow('REPO_BYTE_RANGE_INVALID')
+    // A ranged read's length goes to 2 MiB (was 512 KiB); it returns what is there and names no next range.
+    expect(await repo.execute({ action: 'read', branch: A, path: 'server/receipts.mjs', offset: 0, length: 2 * 1024 * 1024 }))
+      .toMatchObject({ content: 'alpha gamma', nextOffset: null, truncated: false })
+    await expect(repo.execute({ action: 'read', branch: A, path: 'server/receipts.mjs', offset: 0, length: 2 * 1024 * 1024 + 1 })).rejects.toThrow('REPO_BYTE_RANGE_INVALID')
   })
 
   it('does not replace a successful draft after refusal, dry run, bad acknowledgement or changed base', async () => {
@@ -266,23 +286,38 @@ describe('Wave 4 caller-owned branch drafts', () => {
     expect(calls.at(-1)?.body).toMatchObject({ expectedHeadSha: BASE, changes: [{ path, content: content.replace('"old"', '"new"') }] })
   })
 
-  it('accepts exactly 1 MiB of private draft content and bounds individual files and assembled commits', async () => {
+  it('accepts exactly 4 MiB of private draft content (was 1 MiB) and bounds individual files and assembled commits', async () => {
     const { repo, calls } = await mounted()
     const content = 'é'.repeat(262144)
-    for (const path of ['server/one.mjs', 'server/two.mjs']) await repo.execute({ action: 'write', branch: A, path, content })
-    await expect(repo.execute({ action: 'write', branch: A, path: 'server/three.mjs', content: 'x' })).rejects.toThrow('REPO_DRAFT_LIMIT_EXCEEDED')
+    const paths = Array.from({ length: 8 }, (_v, index) => `server/part-${String(index)}.mjs`)
+    for (const path of paths) await repo.execute({ action: 'write', branch: A, path, content })
+    await expect(repo.execute({ action: 'write', branch: A, path: 'server/nine.mjs', content: 'x' })).rejects.toThrow('REPO_DRAFT_LIMIT_EXCEEDED')
     const before = calls.length
     await expect(repo.execute({ action: 'commit', branch: B, message: 'Too large', changes: [
-      { path: 'server/one.mjs', content }, { path: 'server/two.mjs', content }, { path: 'server/three.mjs', content: 'x' },
+      ...paths.map(path => ({ path, content })), { path: 'server/nine.mjs', content: 'x' },
     ] })).rejects.toThrow('REPO_COMMIT_LIMIT_EXCEEDED')
     expect(calls).toHaveLength(before)
     await repo.execute({ action: 'commit', branch: A, message: 'Exactly at limit' })
-    expect(calls.at(-1)?.body.changes).toEqual([{ path: 'server/one.mjs', content }, { path: 'server/two.mjs', content }])
+    expect(calls.at(-1)?.body.changes).toEqual(paths.map(path => ({ path, content })))
+  })
+
+  it('holds 64 files in a private draft or commit (was 16) and refuses the 65th', async () => {
+    const { repo, calls } = await mounted()
+    const paths = Array.from({ length: 65 }, (_v, index) => `server/file-${String(index).padStart(2, '0')}.mjs`)
+    for (const path of paths.slice(0, 64)) await repo.execute({ action: 'write', branch: A, path, content: path })
+    await expect(repo.execute({ action: 'write', branch: A, path: paths[64], content: 'x' })).rejects.toThrow('REPO_DRAFT_LIMIT_EXCEEDED')
+    const before = calls.length
+    await expect(repo.execute({ action: 'commit', branch: B, message: 'Sixty-five', changes: paths.map(path => ({ path, content: path })) }))
+      .rejects.toThrow('REPO_COMMIT_LIMIT_EXCEEDED')
+    expect(calls).toHaveLength(before)
+    await repo.execute({ action: 'commit', branch: A, message: 'Sixty-four' })
+    expect((calls.at(-1)?.body.changes as unknown[]).length).toBe(64)
   })
 
   it('bounds escaped request envelopes and cancels oversized streamed responses without replacing drafts', async () => {
     const { repo, calls, state } = await mounted()
-    await expect(repo.execute({ action: 'search', query: '\u0000'.repeat(1024 * 1024 + 8192) })).rejects.toThrow('REPO_REQUEST_LIMIT_EXCEEDED')
+    // The request bound is 12 MiB plus 32 KiB (was 6 MiB plus 32 KiB); 2 MiB + 8 KiB of NUL escape past it.
+    await expect(repo.execute({ action: 'search', query: '\u0000'.repeat(2 * 1024 * 1024 + 8192) })).rejects.toThrow('REPO_REQUEST_LIMIT_EXCEEDED')
     expect(calls).toHaveLength(0)
     await repo.execute({ action: 'write', branch: A, path: 'server/fix.mjs', content: 'retained' })
     let cancelled = false

@@ -98,7 +98,7 @@ const stampLiteral = (sourceRevision, sourceDirty, quote = 'escaped') => {
   return quote === 'escaped' ? JSON.stringify(json) : `'${json}'`;
 };
 const publishing = (sourceRevision = BUILD, sourceDirty = false, quote) => `function Zp(){try{const e=JSON.parse(${stampLiteral(sourceRevision, sourceDirty, quote)});if(e!==null&&typeof e=="object"){const{sourceRevision:t,sourceDirty:n}=e;return{sourceRevision:typeof t=="string"?t:null,sourceDirty:typeof n=="boolean"?n:null}}}catch{}return{sourceRevision:null,sourceDirty:null}}try{Object.defineProperty(globalThis,"__X6_PAGE_BUILD__",{value:Object.freeze(Zp()),writable:!1,enumerable:!1,configurable:!1})}catch{}`;
-/** What preview.ts emitted at job 6 (5520418a): the whole build identity, retention suite and all, inlined twice. */
+/** What preview.ts emitted at job 6 (an earlier commit): the whole build identity, retention suite and all, inlined twice. */
 const identity = `{sourceRevision:"${BUILD}",sourceDirty:!1,builtAt:"2026-11-12T00:00:00.000Z",runtimeArtifactSha256:null,retentionBaselineSuite:{schema:"aukora.pearl.retention-suite.v1",harness:"pearl-retention/v1",cases:[]},retentionBaselineDigest:"${'e'.repeat(64)}"}`;
 const jobSixPublishing = `const Zp=typeof ${identity}<"u"?${identity}:void 0;try{Object.defineProperty(globalThis,"__X6_PAGE_BUILD__",{value:Object.freeze({sourceRevision:Zp?.sourceRevision??null,sourceDirty:Zp?.sourceDirty??null}),writable:!1,enumerable:!1,configurable:!1})}catch{}`;
 
@@ -142,7 +142,7 @@ test('the bootstrap must not carry the whole build identity (the job-6 bootstrap
   assert.equal(readBootstrap(`${publishing()}const x={${RETENTION_MARKER}:null}`).code, 'BOOTSTRAP_CARRIES_RETENTION_SUITE');
 });
 
-test('a bootstrap that publishes nothing (as at d7c687bf) or carries no stamp fails by name', () => {
+test('a bootstrap that publishes nothing (as at 0b6b25a4) or carries no stamp fails by name', () => {
   assert.equal(code({ boot: bootstrap('') }), 'PAGE_PUBLICATION_MISSING');
   const unreplaced = bootstrap(publishing()).replace(/JSON\.parse\([^)]*\)/, 'JSON.parse(__X6_PAGE_STAMP__)');
   assert.equal(code({ boot: unreplaced }), 'PAGE_STAMP_MISSING');

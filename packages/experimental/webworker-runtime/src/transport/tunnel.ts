@@ -318,10 +318,10 @@ export class TunnelServer {
    * @param phase - The boot step reached.
    * @param bytes - Bytes received so far, for `image`.
    */
-  bootPhase(phase: BootPhase, bytes?: number): void {
+  bootPhase(phase: BootPhase, bytes?: number, of?: readonly [done: number, total: number]): void {
     // Negotiated: a page from before this frame existed did not announce it, and is never sent it.
     if (!this.pageFeatures.has(BOOT_PHASE_FEATURE)) return
-    this.send({ t: 'boot-phase', phase, ...(bytes === undefined ? {} : { bytes }) })
+    this.send({ t: 'boot-phase', phase, ...(bytes === undefined ? {} : { bytes }), ...(of === undefined ? {} : { of }) }) // `of`
   }
 
   /**

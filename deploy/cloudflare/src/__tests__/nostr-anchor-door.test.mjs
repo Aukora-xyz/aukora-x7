@@ -107,7 +107,7 @@ const MIRROR_HANDOFF_CAP = 64 * 1024
  * mirror's rule, an empty corpus and an empty superagent state), pinned here by SHA-256. It belongs to no real node. */
 const FROZEN_HOME = new URL('./fixtures/nostr-anchor-home/', import.meta.url)
 const FROZEN_SHA256 = Object.freeze({
-  'HANDOFF.md': 'a98e4fee93fc3c65f8cc39e283d970dcdbd070a0198fefe83d8c25fde5dbc465',
+  'HANDOFF.md': '061f57660f441b6a605ac4c0e7eaa724f743cb3571307d63a84e1c192b5c5418',
   'seed/receipts.v3.jsonl': '18aea03b30a622d57373d1d0f19ffa6810ac716dc7a31a3449d3027e6f1f9958',
   'seed/discovery-corpus.v1.jsonl': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
   'superagent/state.json': 'c0f32450e4e3cc5ccc0b84f1229315c66faba02929f7ec612e12846f2d928d15',

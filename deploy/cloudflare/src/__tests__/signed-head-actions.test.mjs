@@ -227,6 +227,8 @@ test('signed ball publication is transactionally single use and successful T1 ou
   delete draft.ballId
   const candidate = { ...draft, ballId: await manifestIdCanon(draft) }
   const grant = await fx.head.store.lease({ action: 'acquire', ownerPeerId: candidate.authorPeerId })
+  assert.equal((await fx.call('/_head/lease', { action: 'reserve-id-promotion', ownerPeerId: candidate.authorPeerId,
+    generation: grant.lease.generation, expectedBallId: fx.ball.ballId, organId: 'seed-echo', candidateSha: sha })).body.ok, true)
   const body = { ball: candidate, codeBySha: { [sha]: source }, expectedParentBallId: fx.ball.ballId, expectedEpoch: 167, writerLease: grant.lease }
   const envelope = await fx.envelope('/_head/ball', body)
   const result = await fx.call('/_head/ball', { ...body, signedAction: envelope })

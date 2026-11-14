@@ -13,7 +13,7 @@ import { withholdSecrets } from './secret-shapes.ts'
 /** A thread title leaves at most this many characters. */
 export const TITLE_CHARS = 120
 /** Framing text parts the page adds to a spoken turn; they are not his words. */
-const FRAMING_PREFIXES = Object.freeze(['[spoken to Auma Live;', '[Auma Live spoken channel', '[your other threads'])
+const FRAMING_PREFIXES = Object.freeze(['[spoken to Auma Live;', '[Auma Live spoken channel', '[your other threads', '[your map for this voice turn'])
 /** The row types whose words may leave a read tool. */
 export const WORD_ROWS: ReadonlySet<string> = Object.freeze(new Set(['user/message', 'assistant/message', 'session/title']))
 

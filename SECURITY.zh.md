@@ -50,17 +50,17 @@ Aukora 是实验性的。它没有做过安全审计，不得被当作安全的�
 
 1. **没有审计，不可用于生产环境，不是沙箱。** [SAFETY.zh.md](SAFETY.zh.md)。
 2. **passkey 不对字节签名。** 认证器签名的是一个随机质询。edge 保存与精确请求的绑定，并在批准被使用时检查它（`aumlok.mjs`）。所有者只能通过发出请求的那个页面看到条款（`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`）。被攻陷的页面可以请求批准所有者没有读过的条款。代码树里没有独立的显示途径。
-3. **并非每个修改都需要 passkey。** 有 15 个 id 是仅限所有者的（`server/ball-transition.mjs` 中的 `T2_ONLY_ORGANS`），再加上任何声明自己属于治理的条目。genesis head 中 26 个 organ 里有 14 个不受保护，其中包括自建步骤 `seed-cycle`。在 edge 上，这类 organ 的新代码用所有者登录会话（最长 8 小时）发布，不需要 passkey 批准：T1 级（`server/ball-transition.mjs` 中的 `classifyTransition`，由 `deploy/cloudflare/src/head-do.mjs` 调用；会话时长见 `worker.mjs` 第 1357 行；`deploy/cloudflare/src/__tests__/signed-head-actions.test.mjs` 第 220 行的用例，它还发送了一个已签名的动作和一个写入者租约）。night grant 让一次 passkey 点按覆盖普通 organ 的修改，最长 12 小时，最多 12 次使用，每次最多 8 个 organ（`night-grant.mjs`）。
+3. **并非每个修改都需要 passkey。** 有 15 个 id 是仅限所有者的（`server/ball-transition.mjs` 中的 `T2_ONLY_ORGANS`），再加上任何声明自己属于治理的条目。genesis head 中 26 个 organ 里有 14 个不受保护，其中包括自建步骤 `seed-cycle`。在 edge 上，这类 organ 的新代码用所有者登录会话（最长 8 小时）发布，不需要 passkey 批准：T1 级（`server/ball-transition.mjs` 中的 `classifyTransition`，由 `deploy/cloudflare/src/head-do.mjs` 调用；会话时长见 `worker.mjs` 第 1385 行；`deploy/cloudflare/src/__tests__/signed-head-actions.test.mjs` 第 220 行的用例，它还发送了一个已签名的动作和一个写入者租约）。night grant 让一次 passkey 点按覆盖普通 organ 的修改，最长 12 小时，最多 12 次使用，每次最多 8 个 organ（`night-grant.mjs`）。
 4. **恢复整个存储快照可以重新启用一个已用掉的批准。** 三个测试复现了这些缺口：整个存储的回滚会重复一次发布，仅身份的回滚会重新启用一个已用掉的批准，时钟回滚加重启会让一个已过期的批准复活（`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`，位于第 197、212 和 224 行的用例）。十个 todo 用例（建在第 140 到 152 行：九个已命名的缺口和一个正向恢复用例）说明了缺什么。代码树中没有修复。任何能写入 edge 存储的人都能做到这一点；那具体是哪些账户，是 UNVERIFIED。
 5. **恢复快照不携带所有者绑定。** 恢复之后，身份从头开始（`aumlok-restore-rehearsal.test.mjs`，第 143 行）。
 6. **仅限所有者的名单可以通过一次代码部署改变。** 这个名单是 Worker 源码，没有 passkey 把关部署。谁持有部署凭据是 UNVERIFIED；`deploy/ci/workflow-credentials.test.mjs` 固定了它可以出现在工作流中的位置。
 7. **Pearl 不把关已部署的 head。** edge 的 head 存储只把 Pearl 验证器作为一个选项接受（`head-do.mjs` 中的 `createDurableHeadStore`）；在这个代码树里只有测试会提供一个。Pearl 自己的收据写着 `authorityVerified: false` 和 `isolationProved: false`（`seed-pearl.js`）。记录的那次运行（属于较早的一棵树）中，本机宿主回答的是 `PEARL_QUALIFICATION_UNVERIFIABLE`（RECORDED RUN）。
 8. **不声称任何隔离。** 试运行的 worker 是“not proven containment”（`seed-pearl.js`，第 7 行）。构建步骤在运行中的 organ 上执行它的验收用例（`mirror/home/auma/seed/organs/seed-cycle.js`）。scion 编译器（`scion.ts`）和 `seed-cycle.js` 没有任何调用它们的测试。
-9. **edge 的决策是 JavaScript，不是 Wasm。** `deploy/` 下没有任何东西调用 judge 和 identity 的 cell。25 个 cell 中有 24 个不带源码发布，所以没有人能检查某个 cell 是否与任何源码相符（[docs/OPEN-SOURCE-READINESS.zh.md](docs/OPEN-SOURCE-READINESS.zh.md)）。
-10. **签名者信任没有建立。** 两个检查点签名者密钥是合成的；没有人持有私钥那一半（`mirror/home/auma/seed/organs/seed-receipts.js`，第 37 行）。edge 把签名者信任视为未固定，而且一个有效签名不是所有者批准（`deploy/cloudflare/README.md`，第 75 行）。哈希链不是批准。
+9. **edge 的决策是 JavaScript，不是 Wasm。** `deploy/` 下没有任何东西调用 judge 和 identity 的 cell。30 个 cell 中有 24 个不带源码发布，所以没有人能检查某个 cell 是否与任何源码相符（[docs/OPEN-SOURCE-READINESS.zh.md](docs/OPEN-SOURCE-READINESS.zh.md)）。
+10. **签名者信任没有建立。** 两个检查点签名者密钥是合成的；没有人持有私钥那一半（`mirror/home/auma/seed/organs/seed-receipts.js`，第 37 行）。edge 把签名者信任视为未固定，而且一个有效签名不是所有者批准（`deploy/cloudflare/README.md`，第 81 行）。哈希链不是批准。
 11. **ball 清单没有签名。** 发布时检查内容哈希和 epoch 加一规则，不检查 Ed25519 清单签名（[docs/ARCHITECTURE-ACTUAL.zh.md](docs/ARCHITECTURE-ACTUAL.zh.md)，第 23 和 45 行）。收据日志并不对每一种类型都强制 epoch 加一（[docs/START-HERE.zh.md](docs/START-HERE.zh.md)，第 43 行）。混合的 Ed25519 与 ML-DSA 签名动作，只有在提供时才会被检查（`head-do.mjs` 中的 `checkSignedAction`）。
-12. **不声称任何 edge 的线上行为。** 代码树里没有 edge 在真实 Cloudflare 运行时上的运行记录，而 edge 自己的 README 说，它的存储限制、线上所有者登录、公网地址强制和供应商调用都没有在那里演练过（`deploy/cloudflare/README.md`，第 39、63、129 到 131、141 行）。`selftest` 回答 `ok: true` 并不能证明任何关于凭据的事情（第 93 行）。归档桶上的写入竞争，以及事务里套事务，是 UNVERIFIED（`deploy/cloudflare/src/vault.mjs`，第 12 行；`world-budget.mjs`，第 10 行）。
-13. **筛查不是保证。** 对外请求的密钥筛查是纵深防御（`deploy/cloudflare/README.md`，第 137 行）。语音条款检查是一份拒绝清单（第 157 行）。
+12. **不声称任何 edge 的线上行为。** 代码树里没有 edge 在真实 Cloudflare 运行时上的运行记录，而 edge 自己的 README 说，它的存储限制、线上所有者登录、公网地址强制和供应商调用都没有在那里演练过（`deploy/cloudflare/README.md`，第 45、69、135 到 137、147 行）。`selftest` 回答 `ok: true` 并不能证明任何关于凭据的事情（第 99 行）。归档桶上的写入竞争，以及事务里套事务，是 UNVERIFIED（`deploy/cloudflare/src/vault.mjs`，第 12 行；`world-budget.mjs`，第 10 行）。
+13. **筛查不是保证。** 对外请求的密钥筛查是纵深防御（`deploy/cloudflare/README.md`，第 143 行）。语音条款检查是一份拒绝清单（第 163 行）。
 14. **没有只用词语的登录，也没有守护者恢复。** 解封需要 passkey 和七个词两者（`aumlok.mjs`，第 745 行）。失败十次后，代码回答 `AUMLOK_GUARDIAN_QUORUM_REQUIRED`，而代码树里没有任何代码执行这种恢复。
 
 ## 未解决的问题

@@ -16,12 +16,25 @@ const live = await import(pathToFileURL(livePath ?? 'apps/web/public/app/genesis
   createGenesisLive: (deps: Record<string, unknown>) => {
     fetch: (input: string, init?: RequestInit) => Promise<Response>
     streamTurn: (input: Record<string, unknown>) => Promise<TurnResult>
+    arrivalTurn: (input: Record<string, unknown>) => Promise<TurnResult>
   }
   threadRoster: (items: unknown[], options?: { exclude?: string[]; now?: number }) => string
   rosterClock: (ms: number, now: number) => string
   AUMA_LIVE_ALIEN_VOICE_DIRECTIVE: string
+  AUMA_LIVE_VOICE_MEDIUM: string
+  VOICE_ARRIVAL: string
+  VOICE_HOME_UNAVAILABLE: string
+  VOICE_UNREACHABLE_SAY: string
+  VOICE_RUNTIME_UNREACHABLE: string
+  VOICE_ARRIVAL_CLOSED: string
+  VOICE_LEVEL_PROBE_MS: number
+  VOICE_OPEN_CREATES_MAX: number
+  voiceHomeNoneSay: (stages: string[]) => string
+  VOICE_MAP_MAX_CHARS: number
   AUMA_LIVE_VOICE_SESSION_KEY: string
   VOICE_PROVENANCE: string
+  VOICE_PROVENANCE_OPEN: string
+  VOICE_PROVENANCE_UNJOURNALED_OPEN: string
   VOICE_UNCONFIRMED_SAY: string
   VOICE_NOT_HOME_SAY: string
   VOICE_TAKEN_BACK_SAY: string
@@ -42,7 +55,15 @@ const MARK_OK = () => json({ ok: true, code: 'VOICE_LOOK_ONLY', lookOnly: true }
 const UNPROVEN = () => json({ ok: false, code: 'VOICE_HOME_UNPROVEN:named-after-use', lookOnly: false, say: 'My voice could not confirm it is look-only, so I did not send that.' }, 403)
 
 type Call = { kind: 'rpc' | 'x6' | 'edge'; name: string; body: Record<string, unknown> }
-type Item = { sessionId: string; title?: string; displayTitle?: string; updatedAt?: unknown; blank?: boolean; origin?: string }
+type Item = {
+  sessionId: string
+  title?: string
+  displayTitle?: string
+  updatedAt?: unknown
+  blank?: boolean
+  origin?: string
+  cwd?: string
+}
 type Stream = { args: unknown; push: (frame: unknown) => void; end: () => void }
 
 /** Her worker and her edge as the page sees them: answers by contract, and one log of everything asked, in order. */
@@ -55,18 +76,33 @@ function world(options: {
   edge?: (body: Record<string, unknown>) => Response
   /** By default her turn answers by itself once the prompt is in; `manual` leaves the follow stream to the test. */
   manual?: boolean
+  /** VOICE LEVEL asked first: the worker's answer to `GET /__x6__/voice-level`; unset, the route is never answered (as before). */
+  level?: 'open' | 'look-only' | 'hang'
+  list?: () => Response | Promise<Response>
+  /** One session/create's answer, or null for the usual new thread. */
+  create?: (request: Record<string, unknown>) => Response | null
+  /** The page's DSH transport itself fails: at once ('now'), or only after the level probe's bound ('late'). */
+  transportDown?: 'now' | 'late'
 } = {}) {
   const log: Call[] = []
   const items: Item[] = options.items ?? [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 1000 }]
   const streams: Stream[] = []
   const store = new Map<string, string>()
+  /** VOICE LEVEL: the stages the page reported to the worker (best effort; kept out of `log`, which lists what a turn needs). */
+  const notes: string[] = []
   let marks = 0
   let creates = 0
+  let levelAsks = 0
   const transport = {
     fetch: async (path: string, init: { body: string }) => {
+      if (path === '/api/__x6__/voice-level' && options.level) {
+        levelAsks += 1
+        return options.level === 'hang' ? new Promise<Response>(() => {}) : json({ ok: true, level: options.level })
+      }
       const body = JSON.parse(init.body) as Record<string, unknown>
       if (path.startsWith('/api/__x6__/')) {
         const name = path.slice('/api/__x6__/'.length)
+        if (name === 'voice-note') { notes.push(String(body.stage)); return json({ ok: true }) }
         log.push({ kind: 'x6', name, body })
         if (name === 'voice-mark') { marks += 1; return (options.mark ?? MARK_OK)(String(body.sessionId), marks) }
         if (name === 'session-model') return (options.model ?? (() => json({ ok: true, sessionId: body.sessionId, selected: body, savedDefault: false })))(body)
@@ -75,8 +111,10 @@ function world(options: {
       const method = path.replace('/api/', '')
       const args = (body as { payload: { args: Record<string, unknown> } }).payload.args
       log.push({ kind: 'rpc', name: method, body: args })
-      if (method === 'session/list') return json({ result: { ok: true, value: { items } } })
+      if (method === 'session/list') return options.list ? options.list() : json({ result: { ok: true, value: { items } } })
       if (method === 'session/create') {
+        const own = options.create?.(args.request as Record<string, unknown>) ?? null
+        if (own) return own
         if (options.createFails) return json({ result: { ok: false, error: { message: 'agent-preset/not-found' } } })
         creates += 1
         const sessionId = `session-fresh-${creates}`
@@ -126,9 +164,13 @@ function world(options: {
     return options.edge ? options.edge(body) : json({ ok: true, action: body.action, turnId: body.turnId, voiceAuthority: 'none', savedBeforeDispatch: true })
   }
   const storage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => { store.set(key, value) } }
-  const g = live.createGenesisLive({ transport: Promise.resolve(transport), nativeFetch, storage, now: () => NOW })
+  const down = () => new Error('DSH transport is unavailable: open Auma Live inside the Aukora shell')
+  const carrier = options.transportDown === 'now' ? Promise.reject(down())
+    : options.transportDown === 'late' ? new Promise((_resolve, reject) => { setTimeout(() => { reject(down()) }, live.VOICE_LEVEL_PROBE_MS + 100) })
+      : Promise.resolve(transport)
+  const g = live.createGenesisLive({ transport: carrier, nativeFetch, storage, now: () => NOW })
   const prompts = () => log.filter(call => call.kind === 'rpc' && call.name === 'session/prompt').map(call => call.body.request as { requestId: string; sessionId: string; content: Array<{ type: string; text: string }> })
-  return { g, log, streams, items, store, prompts }
+  return { g, log, streams, items, store, prompts, notes, levelAsks: () => levelAsks }
 }
 
 type Frame = { t: string; v?: unknown; reason?: string; message?: string; [key: string]: unknown }
@@ -234,6 +276,366 @@ describe('a voice prompt is sent only when the worker confirms her voice home lo
     const w = world({ mark: () => json({ ok: false, code: 'VOICE_LOOK_ONLY_UNAVAILABLE', lookOnly: false }, 503) })
     await collect(await presence(w.g, { sessionId: HOME, text: 'typed in the drawer' })).done
     expect(w.prompts()).toEqual([])
+  })
+})
+
+describe('VOICE LEVEL open: the worker says "open" and her voice home is an ordinary thread', () => {
+  const MAP = '[your map for this voice turn, from your own runtime: where everything is. Look before you answer.]\nbuild made-up1; 3 tools.'
+  const openWith = (map: unknown) => () => json({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open', map })
+  const OPEN = () => openWith(MAP)
+  const emptyRoster = () => live.threadRoster([], { now: NOW })
+
+  it('the turn is sent with her map beside the roster and the open line in place of the look-only line', async () => {
+    const w = world({ mark: OPEN() })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'what is on main right now', spoken: true, visual: true }))
+    await settle()
+    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 4)).toEqual(['rpc:session/list', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    expect(w.prompts()[0]?.sessionId).toBe(HOME)
+    expect(w.prompts()[0]?.content).toEqual([
+      { type: 'text', text: live.VOICE_PROVENANCE_OPEN },
+      { type: 'text', text: emptyRoster() },
+      { type: 'text', text: MAP },
+      { type: 'text', text: live.AUMA_LIVE_VOICE_MEDIUM },
+      { type: 'text', text: 'what is on main right now' },
+    ])
+    expect(w.notes).toEqual([])
+    await read.done
+  })
+
+  it('the open marker starts as every spoken marker starts (the worker knows a spoken turn by it) and claims no lost authority', () => {
+    for (const marker of [live.VOICE_PROVENANCE_OPEN, live.VOICE_PROVENANCE_UNJOURNALED_OPEN]) {
+      expect(marker.startsWith('[spoken to Auma Live;')).toBe(true)
+      expect(marker).not.toContain('no owner authority')
+      expect(marker).toContain('passkey is still required for any Class 3 change')
+    }
+    expect(live.VOICE_PROVENANCE).toContain('voice carries no owner authority')
+  })
+
+  it('a host with no voice journal: the open marker says so, and the turn is still sent', async () => {
+    const w = world({ mark: OPEN(), edge: () => json({ error: 'no voice director' }, 404) })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+    await settle()
+    expect(w.prompts()[0]?.content[0]?.text).toBe(live.VOICE_PROVENANCE_UNJOURNALED_OPEN)
+    await read.done
+  })
+
+  it('the medium part, not a persona: facts about the channel, and none of the directive\'s instructions', () => {
+    const closed = live.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE, medium = live.AUMA_LIVE_VOICE_MEDIUM
+    expect(closed).toContain('From voice you are look-only')
+    expect(medium).not.toContain('look-only')
+    for (const fact of [
+      'spoken aloud to the owner as you write it, and shown to him in Auma Live',
+      'Lists, tables, headings and code are not read well aloud.',
+      // The exact grammar of the existing tag, as a capability.
+      '[field hue=teal|cyan|jade|gold|amber|ember|rose|magenta|violet|indigo energy=0.15..0.95 storm=0.02..0.85 form=aurora|vortex|pulse|swarm]',
+      'never spoken',
+      'In voice you have what you have in a thread',
+      'your map for this turn is above',
+      'fingerprint card',
+      'A key or a secret is never spoken.',
+      // The owner's boundary from the earlier open line (an earlier commit), kept as a fact of the channel.
+      'What is in your private folder is spoken only when the owner asks for it by name.',
+    ]) expect(medium).toContain(fact)
+    // Every instruction about who she is or how she should sound is gone at level open (and kept in the look-only one).
+    for (const instruction of ['Stay wholly yourself', 'Speak for the ear', '1 to 4 resonant sentences', 'Put one [field', 'read them with x6_threads',
+      'never describe a thread you did not read']) {
+      expect(closed).toContain(instruction)
+      expect(medium).not.toContain(instruction)
+    }
+    expect(medium).not.toMatch(/\b(you are|be yourself|stay|you should|you must)\b/i)
+  })
+
+  it('a map that is not text, or is too long, is left out; the turn is still sent', async () => {
+    for (const map of [null, 7, 'm'.repeat(live.VOICE_MAP_MAX_CHARS + 1)]) {
+      const w = world({ mark: openWith(map) })
+      const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+      await settle()
+      expect(w.prompts()[0]?.content.map(part => part.text))
+        .toEqual([live.VOICE_PROVENANCE_OPEN, emptyRoster(), live.AUMA_LIVE_VOICE_MEDIUM, 'hello'])
+      await read.done
+    }
+  })
+
+  it('an open worker needs no proof: the stored home is used as it is and no fresh home is made', async () => {
+    const w = world({ mark: OPEN() })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+    await settle()
+    expect(w.log.filter(call => call.name === 'session/create')).toEqual([])
+    expect(w.log.filter(call => call.name === 'voice-mark')).toHaveLength(1)
+    await read.done
+  })
+
+  it('"level" alone is never a yes: ok false with level open is refused, and the page notes where it stopped', async () => {
+    const w = world({ mark: () => json({ ok: false, code: 'VOICE_SESSION_INVALID', level: 'open' }, 400) })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+    await read.done
+    expect(w.prompts()).toEqual([])
+    await settle()
+    expect(w.notes).toEqual(['mark-refused'])
+  })
+
+  it('the page notes an unreachable worker and a failed create, each once per refusal', async () => {
+    const down = world({ mark: () => Promise.reject(new Error('tunnel closed')) })
+    await collect(await presence(down.g, { sessionId: HOME, text: 'hello', spoken: true })).done
+    await settle()
+    expect(down.notes).toEqual(['mark-unreachable'])
+    const none = world({ items: [], createFails: true })
+    await collect(await presence(none.g, { sessionId: HOME, text: 'hello', spoken: true })).done
+    await settle()
+    expect(none.notes).toEqual(['home-missing'])
+  })
+})
+
+describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sentence does not exist', () => {
+  const MAP = '[your map for this voice turn, from your own runtime: where everything is. Look before you answer.]\nbuild made-up2; 3 tools.'
+  const OPEN_MARK = () => json({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open', map: MAP })
+  const PRESET = { cwd: '/dsh/home/auma', agentPreset: 'auma-alien' }
+  const FOLDER = { cwd: '/dsh/home/auma' }
+  const LIST_FAILS = () => json({ result: { ok: false, error: { message: 'session/list failed' } } })
+  const CREATE_FAILS = () => json({ result: { ok: false, error: { message: 'agent-preset/not-found' } } })
+  const WORK: Item = { sessionId: 'session-work', title: 'Garden map', updatedAt: NOW - 60_000 }
+  const OLDER: Item = { sessionId: 'session-older', title: 'Older', updatedAt: NOW - 600_000 }
+  const POISON = { sessionId: 'session-poison', updatedAt: NOW, get title(): string { throw new Error('a broken row') } }
+  const POISONED_LIST = () =>
+    ({ ok: true, status: 200, json: async () => ({ result: { ok: true, value: { items: [POISON] } } }) }) as unknown as Response
+  const spokenTurn = async (w: ReturnType<typeof world>, words = 'hello', sessionId = HOME) => {
+    const read = collect(await presence(w.g, { sessionId, text: words, spoken: true }))
+    await read.done
+    await settle()
+    return read.frames
+  }
+  const creates = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/create').map(call => call.body.request)
+  const said = (frames: Frame[]) => frames.filter(frame => frame.t === 'tok').map(frame => frame.v).join('')
+
+  it('the level is asked before anything else; the turn carries her map, the roster and the medium part, and goes to her home', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK })
+    const frames = await spokenTurn(w, 'what is on main right now')
+    expect(w.levelAsks()).toBe(1)
+    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 4)).toEqual(['rpc:session/list', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    expect(w.prompts()[0]?.sessionId).toBe(HOME)
+    expect(w.prompts()[0]?.content.map(part => part.text)).toEqual([
+      live.VOICE_PROVENANCE_OPEN, live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, 'what is on main right now',
+    ])
+    expect(said(frames)).toBe('Done.')
+    expect(w.notes).toEqual([])
+  })
+
+  it('the stored voice thread is used whatever its title, when the list has it', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5 }] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-work')
+    await spokenTurn(w)
+    expect(w.prompts()[0]?.sessionId).toBe('session-work')
+    expect(creates(w)).toEqual([])
+  })
+
+  // Each failure the old sentence covered: the turn is sent whenever any thread exists, and the sentence is never said.
+  const failures: Array<[string, Parameters<typeof world>[0], (w: ReturnType<typeof world>) => void, string, string[]]> = [
+    ['the list fails: a fresh home is made with her preset and folder, renamed, and used', { list: LIST_FAILS },
+      () => {}, 'session-fresh-1', ['home-list-failed']],
+    ['the list fails and every create fails: the stored id is used as it is', { list: LIST_FAILS, createFails: true },
+      (w) => { w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored') }, 'session-stored',
+      ['home-list-failed', 'home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed', 'home-stored-unlisted']],
+    ['no voice home and agent-preset/not-found: made with her folder only', { items: [WORK], create: request => (request.agentPreset ? CREATE_FAILS() : null) },
+      () => {}, 'session-fresh-1', ['home-create-preset-failed']],
+    ['no voice home and every create fails: her most recently active top-level thread', { items: [OLDER, WORK, { sessionId: 'session-sub', origin: 'subagent', updatedAt: NOW }], createFails: true },
+      () => {}, 'session-work', ['home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed', 'home-fallback-recent']],
+    ['the mark is unreachable: sent without the map', { mark: () => Promise.reject(new Error('tunnel closed')) }, () => {}, HOME, ['mark-unreachable']],
+    ['the mark answers 404: sent', { mark: () => json({ error: 'Unknown X6 control route' }, 404) }, () => {}, HOME, ['mark-refused']],
+    ['the mark answers 400 VOICE_SESSION_INVALID: sent', { mark: () => json({ ok: false, code: 'VOICE_SESSION_INVALID' }, 400) }, () => {}, HOME, ['mark-refused']],
+    ['the mark answers 503: sent', { mark: () => json({ ok: false, code: 'VOICE_MARK_NOT_SAVED', say: 'not saved' }, 503) }, () => {}, HOME, ['mark-refused']],
+    ['an exception inside the block: the stored id is used', {
+      // A row that throws when read (a Response is the only way past JSON, which would read it in the fixture instead).
+      list: () => POISONED_LIST(),
+    }, (w) => { w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored') }, 'session-stored',
+    ['home-exception', 'home-stored-unlisted']],
+  ]
+  for (const [name, options, before, sentTo, stages] of failures) {
+    it(name, async () => {
+      const w = world({ level: 'open', mark: OPEN_MARK, ...options })
+      before(w)
+      const frames = await spokenTurn(w)
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([sentTo])
+      expect(said(frames)).toBe('Done.')
+      expect(JSON.stringify(frames)).not.toContain(live.VOICE_UNCONFIRMED_SAY)
+      expect(w.notes).toEqual(stages)
+      const content = w.prompts()[0]?.content.map(part => part.text) ?? []
+      expect(content[0]).toBe(live.VOICE_PROVENANCE_OPEN)
+      expect(content).toContain(live.AUMA_LIVE_VOICE_MEDIUM)
+      // Her map rides only an answer that carried it.
+      expect(content.includes(MAP)).toBe(!stages.some(stage => stage.startsWith('mark-')))
+    })
+  }
+
+  it('the made home is created in order (preset and folder, folder, nothing) and each new thread is renamed to the voice title', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [], create: request => (Object.keys(request).length > 0 ? CREATE_FAILS() : null) })
+    await spokenTurn(w)
+    expect(creates(w)).toEqual([PRESET, FOLDER, {}])
+    expect(w.log.find(call => call.name === 'session/rename')?.body).toEqual({ request: { sessionId: 'session-fresh-1', title: VOICE_TITLE } })
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe('session-fresh-1')
+    expect(w.prompts()[0]?.sessionId).toBe('session-fresh-1')
+  })
+
+  it('nothing exists and nothing can be made: she says which steps failed, in her own channel, never the look-only sentence', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [], createFails: true })
+    const frames = await spokenTurn(w)
+    const sentence = 'My voice thread would not open (create failed). Try me again.'
+    expect(frames).toEqual([{ t: 'tok', v: sentence }, { t: 'done', reason: live.VOICE_HOME_UNAVAILABLE, message: sentence }])
+    expect(w.prompts()).toEqual([])
+    expect(w.notes.at(-1)).toBe('home-none')
+    const down = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS, createFails: true })
+    const none = await spokenTurn(down)
+    expect(said(none)).toBe('My voice thread would not open (list failed, create failed). Try me again.')
+    expect(live.voiceHomeNoneSay([])).toBe('My voice thread would not open (no thread found). Try me again.')
+  })
+
+  it('the one-fresh-home limit does not apply at open: at most three creates per page, then the last fallback', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK], createFails: true })
+    await spokenTurn(w, 'one')
+    await spokenTurn(w, 'two')
+    expect(creates(w)).toHaveLength(live.VOICE_OPEN_CREATES_MAX)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work', 'session-work'])
+    expect(w.notes.slice(-2)).toEqual(['home-creates-spent', 'home-fallback-recent'])
+    // A page whose first fresh home works makes a second one when that thread is gone from the list (look-only never would).
+    const v = world({ level: 'open', mark: OPEN_MARK, items: [] })
+    await spokenTurn(v, 'one')
+    v.items.length = 0
+    v.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-gone')
+    await spokenTurn(v, 'two')
+    expect(v.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-1', 'session-fresh-2'])
+  })
+
+  it('a spoken turn naming another thread goes to her voice home (not refused); a typed one goes where it was named', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5 }, WORK] })
+    const frames = await spokenTurn(w, 'hello', 'session-work')
+    expect(said(frames)).toBe('Done.')
+    expect(w.prompts()[0]?.sessionId).toBe(HOME)
+    const typed = collect(await presence(w.g, { sessionId: 'session-work', text: 'typed' }))
+    await typed.done
+    expect(w.prompts()[1]?.sessionId).toBe('session-work')
+    expect(w.prompts()[1]?.content.at(-1)).toEqual({ type: 'text', text: 'typed' })
+    expect(w.log.filter(call => call.name === 'voice-mark')).toHaveLength(1)
+  })
+
+  it('Canvas speech at open: the honest sentence through onToken when nothing can be sent; sent to the found home otherwise', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [], createFails: true })
+    const heard: string[] = []
+    const result = await w.g.streamTurn({ sessionId: 'session-x', text: 'hi', spoken: true, signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) } })
+    expect(result.reason).toBe(live.VOICE_HOME_UNAVAILABLE)
+    expect(heard.join('')).toBe('My voice thread would not open (create failed). Try me again.')
+    const v = world({ level: 'open', mark: OPEN_MARK })
+    const sent = await v.g.streamTurn({ sessionId: 'session-x', text: 'hi', spoken: true, signal: new AbortController().signal })
+    expect(sent.text).toBe('Done.')
+    expect(v.prompts()[0]?.sessionId).toBe(HOME)
+  })
+
+  it('a level probe that never answers holds the turn at most VOICE_LEVEL_PROBE_MS, then the look-only flow runs unchanged', async () => {
+    const w = world({ level: 'hang', mark: MARK_OK })
+    const started = Date.now()
+    const frames = await spokenTurn(w)
+    expect(Date.now() - started).toBeGreaterThanOrEqual(live.VOICE_LEVEL_PROBE_MS - 50)
+    expect(said(frames)).toBe('Done.')
+    expect(w.prompts()[0]?.content[0]?.text).toBe(live.VOICE_PROVENANCE)
+    const refused = await spokenTurn(world({ level: 'look-only', mark: UNPROVEN, createFails: true }))
+    expect(said(refused)).toBe(live.VOICE_UNCONFIRMED_SAY)
+  }, 10_000)
+
+  it('an answered level is asked once, then trusted; each page asks its own worker', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK })
+    await spokenTurn(w, 'one')
+    await spokenTurn(w, 'two')
+    expect(w.levelAsks()).toBe(1)
+  })
+
+  it('her own mind: an effort a previous build lowered goes back to the model default, once; any other effort is left as it is', async () => {
+    const projections = (effort?: string) => ({ asOfSeq: 2, values: { modelSelection: { lastUsed: null, next: { provider: 'deepseek', model: 'deepseek-v4', ...(effort ? { reasoningEffort: effort } : {}) } } } })
+    const low = world({ level: 'open', mark: OPEN_MARK, projections: projections('low') })
+    await spokenTurn(low, 'one')
+    await spokenTurn(low, 'two', HOME)
+    expect(low.log.filter(call => call.name === 'session-model').map(call => call.body)).toEqual([{ sessionId: HOME, provider: 'deepseek', model: 'deepseek-v4' }])
+    for (const effort of ['max', 'high', undefined]) {
+      const kept = world({ level: 'open', mark: OPEN_MARK, projections: projections(effort) })
+      await spokenTurn(kept, 'one')
+      const deep = collect(await presence(kept.g, { sessionId: HOME, text: 'two', spoken: true, mind: 'deep' }))
+      await deep.done
+      expect(kept.log.some(call => call.name === 'session-model')).toBe(false)
+    }
+  })
+
+  it('the last fallback never picks a thread working in her private folder; with only such a thread, nothing is sent', async () => {
+    const PRIVATE: Item = { sessionId: 'session-private', title: 'Kira notes', updatedAt: NOW, cwd: '/dsh/home/auma/private/kira' }
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [PRIVATE, WORK], createFails: true })
+    const frames = await spokenTurn(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work'])
+    expect(said(frames)).toBe('Done.')
+    const only = world({ level: 'open', mark: OPEN_MARK, items: [{ ...PRIVATE, cwd: '/dsh/home/auma/private' }], createFails: true })
+    const none = await spokenTurn(only)
+    expect(only.prompts()).toEqual([])
+    expect(said(none)).toBe('My voice thread would not open (create failed). Try me again.')
+    expect(only.notes.at(-1)).toBe('home-none')
+  })
+
+  it('her most recent ordinary thread carries spoken turns only: the page is never given it as her home', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK], createFails: true })
+    const minds = await (await w.g.fetch('http://localhost/api/auma-live/minds')).json() as { homeSession?: string }
+    expect(minds).not.toHaveProperty('homeSession')
+    const grant = await presence(w.g, { action: 'start-voice', sessionId: 'session-work', recipient: live.GENESIS_PROVIDER, classes: live.GENESIS_VOICE_CLASSES })
+    expect(grant.status).toBe(404)
+    expect(await grant.json()).toEqual({ refusal: 'session-not-found' })
+    // A spoken turn still reaches her, in that thread.
+    await spokenTurn(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work'])
+    // A made voice home is still the page's home.
+    const v = world({ level: 'open', mark: OPEN_MARK, items: [WORK] })
+    const made = await (await v.g.fetch('http://localhost/api/auma-live/minds')).json() as { homeSession?: string }
+    expect(made.homeSession).toBe('session-fresh-1')
+  })
+
+  it('a page that cannot reach her runtime at all says so, at any level, and never the look-only sentence', async () => {
+    const w = world({ transportDown: 'now' })
+    const frames = await spokenTurn(w)
+    expect(frames).toEqual([
+      { t: 'tok', v: live.VOICE_UNREACHABLE_SAY },
+      { t: 'done', reason: live.VOICE_RUNTIME_UNREACHABLE, message: live.VOICE_UNREACHABLE_SAY },
+    ])
+    expect(w.log).toEqual([])
+    const heard: string[] = []
+    const result = await w.g.streamTurn({ sessionId: HOME, text: 'hi', spoken: true, signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) } })
+    expect(result.reason).toBe(live.VOICE_RUNTIME_UNREACHABLE)
+    expect(heard.join('')).toBe(live.VOICE_UNREACHABLE_SAY)
+    expect(live.VOICE_UNREACHABLE_SAY).not.toContain('look-only')
+  })
+
+  it('a transport that fails only after the level probe gave up: the look-only flow says the runtime is unreachable', async () => {
+    const w = world({ transportDown: 'late' })
+    const frames = await spokenTurn(w)
+    expect(said(frames)).toBe(live.VOICE_UNREACHABLE_SAY)
+    expect(frames.at(-1)).toMatchObject({ t: 'done', reason: live.VOICE_RUNTIME_UNREACHABLE })
+    expect(w.prompts()).toEqual([])
+  }, 10_000)
+
+  it('the arrival turn: one turn in her voice home framed only by the moment (with map, roster, medium), journaled nowhere', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK })
+    const heard: string[] = []
+    const result = await w.g.arrivalTurn({ signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) } })
+    expect(result).toMatchObject({ reason: 'completed', text: 'Done.' })
+    expect(heard.join('')).toBe('Done.')
+    expect(w.prompts()[0]?.sessionId).toBe(HOME)
+    expect(w.prompts()[0]?.content.map(part => part.text))
+      .toEqual([live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_ARRIVAL])
+    expect(w.log.some(call => call.kind === 'edge')).toBe(false)
+    expect(live.VOICE_ARRIVAL).toContain('has not spoken yet')
+    expect(live.VOICE_ARRIVAL).not.toMatch(/curious|greet|introduce|say hello/i)
+  })
+
+  it('no arrival turn below level open, or with no home: nothing is prompted, nothing is said', async () => {
+    for (const options of [{}, { level: 'look-only' as const }, { level: 'open' as const, items: [], createFails: true }]) {
+      const w = world({ mark: OPEN_MARK, ...options })
+      const heard: string[] = []
+      const result = await w.g.arrivalTurn({ signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) } })
+      expect(result.text).toBe('')
+      expect(heard).toEqual([])
+      expect(w.prompts()).toEqual([])
+    }
   })
 })
 

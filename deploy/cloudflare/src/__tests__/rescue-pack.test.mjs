@@ -528,7 +528,7 @@ test('the length words past 512 MB: the padding for a synthetic counter equals t
   assert.throws(() => kit.padding(2 ** 53))
 })
 
-/** The rows and their bytes as 61b1e3b6 hashed them: WebCrypto over the whole row and over each piece. */
+/** The rows and their bytes as an earlier commit hashed them: WebCrypto over the whole row and over each piece. */
 async function oldCut(bytes) {
   const digest = async view => toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', view)))
   const pieces = []

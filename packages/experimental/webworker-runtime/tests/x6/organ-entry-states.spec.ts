@@ -11,7 +11,7 @@
  * `@deepseek-ai/dsh-tools` defineTool), as her worker does; earlier stand-ins proved the wrong thing.
  * Every answer is local (reserved `.invalid` origin, fake socket); no provider, owner approval or live DO is touched.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -24,8 +24,13 @@ afterEach(() => { FakeSocket.instances.length = 0; vi.restoreAllMocks(); vi.unst
 const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setTimeout(resolve, 0)) }
 
 const MIRROR = fileURLToPath(new URL('../../../../../mirror/home/', import.meta.url))
+/** Her FROZEN epoch-173 head and the organ sources it pins (a head sync re-commits mirror/home/auma/HEAD.json on every
+ * published epoch, and her repairs end the two misnamed organs this file is about). Modules not frozen there are read
+ * from mirror/home/balls by sha (the sync only adds there), checked against their names below, so a pruned one is loud. */
+const FROZEN = fileURLToPath(new URL('./fixtures/frozen-head/', import.meta.url))
 const stored = (sha: string): string => {
-  const code = readFileSync(`${MIRROR}balls/${sha}.js`, 'utf8')
+  const frozen = `${FROZEN}balls/${sha}.js`
+  const code = readFileSync(existsSync(frozen) ? frozen : `${MIRROR}balls/${sha}.js`, 'utf8')
   expect(sha256(code)).toBe(sha)
   return code
 }
@@ -224,9 +229,10 @@ describe('ball_status never hides the whole answer behind its byte limit', () =>
 })
 
 describe('her real head', () => {
-  it('every stored ball of mirror/home/auma/HEAD.json: her two misnamed organs say so, one support module, the rest running', async () => {
-    const ball = JSON.parse(readFileSync(`${MIRROR}auma/HEAD.json`, 'utf8')) as BallManifest
+  it('every stored ball of her frozen epoch-173 HEAD: her two misnamed organs say so, one support module, the rest running', async () => {
+    const ball = JSON.parse(readFileSync(`${FROZEN}HEAD.json`, 'utf8')) as BallManifest
     expect(headManifestIdCanon(ball as unknown as Record<string, unknown>)).toBe(ball.ballId)
+    expect(ball.ballId.startsWith('060c73c2')).toBe(true)
     expect(ball.epoch).toBeGreaterThanOrEqual(171)
     const codeBySha: Record<string, string> = {}
     for (const entry of Object.values(ball.entries)) codeBySha[entry.specifier.slice(5)] = stored(entry.specifier.slice(5))

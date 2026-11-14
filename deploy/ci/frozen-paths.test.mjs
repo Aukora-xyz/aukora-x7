@@ -35,6 +35,22 @@ test('the list holds itself, every workflow and the whole deploy gate', () => {
   assert.equal(new Set(FROZEN_FILES).size, FROZEN_FILES.length)
 })
 
+test('the cell-call journal and handoff are refused exactly like the cell host', () => {
+  const host = 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts'
+  const journal = 'packages/experimental/webworker-runtime/src/x6/cell-journal.ts'
+  const handoff = 'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts'
+  const cord = 'packages/experimental/webworker-runtime/src/x6/cord-run.ts'
+  // Her tool registry (the policy that qualifies and mounts her tools) is closed exactly like the cell host.
+  const tools = 'packages/experimental/webworker-runtime/src/x6/tool-registry.ts'
+  const menger = 'packages/experimental/webworker-runtime/src/x6/menger-run.ts'
+  const mengerObserve = 'packages/experimental/webworker-runtime/src/x6/menger-observe.ts'
+  for (const path of [journal, handoff, cord, tools, menger, mengerObserve]) for (const status of ['added', 'modified', 'removed']) {
+    assert.deepEqual(proposalPathRefusal(path, status), { code: 'REPO_FROZEN_PATH_REFUSED', next: FROZEN_PATH_NEXT })
+    assert.deepEqual(proposalPathRefusal(path, status), proposalPathRefusal(host, status))
+    assert.equal(isOpenRepoPath(path, status), false)
+  }
+})
+
 test('every listed file is in the tree; the organ sources missing from main are named, and the list still freezes them', () => {
   for (const path of [...FROZEN_DIRECTORIES, ...FROZEN_TEST_DIRECTORIES, ...FROZEN_FILES, ...FROZEN_TEST_FILES]) assert.equal(existsSync(join(ROOT, path)), !FROZEN_ABSENT_FILES.includes(path), path)
   // The four absent manifests are frozen so a proposal may not ADD one; each is still in FROZEN_FILES.
@@ -131,6 +147,10 @@ test('only open paths; everything the outside review named is closed and frozen'
   assert.deepEqual([...OPEN_NEW_PATHS], ['packages/client/*/tests/**/*.spec.ts', 'packages/client/*/tests/**/*.spec.tsx',
     'packages/experimental/webworker-runtime/tests/**/*.spec.ts', 'deploy/cloudflare/src/__tests__/auma-*.test.mjs', 'deploy/cloudflare/src/auma/**'])
   assert.deepEqual([...CLOSED_INSIDE_OPEN], ['packages/experimental/webworker-runtime/src/x6/ball-loader.ts', 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
+    'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', 'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+    'packages/experimental/webworker-runtime/src/x6/cord-run.ts', 'packages/experimental/webworker-runtime/src/x6/tool-registry.ts',
+    'packages/experimental/webworker-runtime/src/x6/menger-run.ts', 'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
+    'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts', 'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
     'packages/experimental/webworker-runtime/src/storage/**'])
   const named = ['package.json', 'deploy/package.json', 'deploy/cloudflare/package.json', 'deploy/cloudflare/src/package.json', 'deploy/cloudflare/src/__tests__/package.json',
     'scripts/coverage-exempt.ts', 'scripts/coverage-partitions.ts', 'scripts/parallelism.ts', 'scripts/pnpm-invocation.ts', 'packages/shell/pwsh-local/src/resolve.ts',
@@ -264,8 +284,19 @@ test('the judges a frozen edge file or the card imports are frozen by name, thre
   for (const path of ['deploy/cloudflare/src/proof-failure-rule.mjs', 'deploy/cloudflare/src/webauthn-screen.mjs', 'deploy/cloudflare/src/owner-login-slots.mjs',
     'deploy/cloudflare/src/provider-budget.mjs', 'deploy/cloudflare/src/world-budget.mjs', 'deploy/cloudflare/src/mirror-do.mjs', 'deploy/cloudflare/src/mirror-secret-paths.mjs',
     'deploy/cloudflare/src/wake-evidence.mjs', 'packages/client/ui-layout/src/client/spatial/aumlok/repo-proposal.ts',
-    'packages/client/ui-layout/src/client/spatial/aumlok/class3-approval.ts', 'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx']) {
+    'packages/client/ui-layout/src/client/spatial/aumlok/class3-approval.ts', 'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx',
+    // The owner mandate's policy and card
+    'deploy/cloudflare/src/owner-mandate.mjs', 'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts', 'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx']) {
     assert.equal(FROZEN_FILES.includes(path), true, path)
+    for (const status of ['added', 'modified', 'removed']) assert.equal(proposalPathRefusal(path, status)?.code, 'REPO_FROZEN_PATH_REFUSED', `${path} ${status}`)
+  }
+})
+
+test('the capsule contract: its canonical form, record verifier and vectors are frozen by name (CONTRACT.md section 11)', () => {
+  for (const path of ['deploy/cloudflare/src/capsule-canon.mjs', 'deploy/cloudflare/src/capsule-envelope.mjs', 'deploy/cloudflare/src/capsule-canon.vectors.json',
+    'deploy/cloudflare/src/capsule-act-shapes.mjs']) {
+    assert.equal(FROZEN_FILES.includes(path), true, path)
+    assert.equal(isFrozenRepoPath(path), true, path)
     for (const status of ['added', 'modified', 'removed']) assert.equal(proposalPathRefusal(path, status)?.code, 'REPO_FROZEN_PATH_REFUSED', `${path} ${status}`)
   }
 })

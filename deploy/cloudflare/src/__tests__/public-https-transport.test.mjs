@@ -63,7 +63,7 @@ test('fixed docs transport rejects methods, redirect/credential changes and arbi
   for (const init of [{ method: 'POST' }, { method: 'HEAD' }, { redirect: 'follow' }, { redirect: 'error' }, { credentials: 'include' }, { body: 'secret' }, { cf: { resolveOverride: 'localhost' } }, { dispatcher: {} }, { signal: null }, null, []]) {
     await assert.rejects(transport(target, init), { code: 'WEB_EYES_REQUEST_INVALID' })
   }
-  for (const options of [{}, { networkFetch: async () => plain() }, { networkFetch: async () => plain(), publicHost, timeoutMs: 10001 }, { networkFetch: async () => plain(), publicHost, timeoutMs: 0 }]) assert.throws(() => createTrustedDocsHttpsTransport(options))
+  for (const options of [{}, { networkFetch: async () => plain() }, { networkFetch: async () => plain(), publicHost, timeoutMs: 30001 }, { networkFetch: async () => plain(), publicHost, timeoutMs: 0 }]) assert.throws(() => createTrustedDocsHttpsTransport(options))
 })
 
 test('fixed docs transport accepts private/reserved application hosts only as refusal identities', async () => {
@@ -153,8 +153,9 @@ test('fixed docs transport checks deadlines at headers and complete-body boundar
     let elapsed = 0, signal
     const transport = create(async (_url, init) => {
       signal = init.signal
-      if (stage === 'headers') { elapsed = 10000; return plain() }
-      return plain(new ReadableStream({ pull(controller) { elapsed = 10000; controller.enqueue(Uint8Array.of(120)); controller.close() } }))
+      // The ceiling is 30 s (was 10 s).
+      if (stage === 'headers') { elapsed = 30000; return plain() }
+      return plain(new ReadableStream({ pull(controller) { elapsed = 30000; controller.enqueue(Uint8Array.of(120)); controller.close() } }))
     }, { now: () => elapsed })
     await assert.rejects(transport(target), { code: 'WEB_EYES_TIMEOUT' }); assert.equal(signal.aborted, true)
   }

@@ -6,7 +6,7 @@ import { OWNER_GRANT_MAX_BODY_BYTES, normalizeOwnerGrantBinding, ownerGrantFailu
 import { aumlokClass3Binding, AUMLOK_SIGNIN_CHALLENGE_MAX, AUMLOK_SIGNIN_LIMITS, sessionTokenAuthentic, signinAssertionShape /* DEVICES hook */, sessionTokenParts, signinChallengeDigest, signinChallengeMac, signinPayloadCheck, signinPayloadText } from './aumlok.mjs'
 import { verifyAuthenticationResponse } from '@simplewebauthn/server'
 import { isoBase64URL } from '@simplewebauthn/server/helpers'
-import { providerBudgetLimits, providerRequestReservation } from './provider-budget.mjs'
+import { providerBudgetLimits, providerRequestReservation, primeConfigured, primeRefusal, primeRefusalDetail, primeSettings } from './provider-budget.mjs' // The Prime names
 import { createPlatformPublicHttpsTransport, createTrustedDocsHttpsTransport, TRUSTED_DOCS_HTTPS_ORIGINS } from './public-https-transport.mjs'
 import { createEdgeDiagnostics } from './edge-diagnostics.mjs'
 import { executeEdgeArchiveOperation, COLD_ARCHIVE_SCHEMA, archiveErrorReply } from './cold-archive.mjs'
@@ -27,12 +27,17 @@ import { createSharedCalls, SHARED_CALL_BUSY, SHARED_CALL_MAX_WAITS, SHARED_CALL
 import { PASSKEY_DEVICE_SIGNIN_LINK, PASSKEY_DEVICE_SIGNIN_LINK_STYLE, PASSKEY_DEVICE_ROUTES, passkeyDeviceDoor, signinAllowCredentials, signinCredentialFor, signinKeyDeviceCode, signinKeyDevices } from './passkey-devices.mjs'
 export { X61HeadDurableObject } from './head-do.mjs'
 export { MirrorDO } from './mirror-do.mjs'
+export { VoiceBridgeDO } from './voice-bridge-do.mjs' // The managed voice's one bridge object
+import { VOICE_BRIDGE_ROUTES, voiceBridgeProviderDoor, voiceBridgeTabDoor, voiceManagedOn } from './voice-bridge.mjs'
 import { bootstrapResetPaths, validateMirrorEntries, MIRROR_LIMITS, mirrorSnapshotPrefixBytes, mirrorSnapshotEntryBytes } from './mirror-do.mjs'
 // ANYBROWSER hook: the vault (hash-named pieces and checked rescue indexes in the private bucket) and the /rescue page.
 import { handleVaultRequest } from './vault.mjs' // ANYBROWSER hook
 import { rescuePageResponse, rescueBusyResponse, wantsRescueDocument } from './rescue-page.mjs' // ANYBROWSER hook
 import { createThreadMount, isThreadMountRoute, threadFetchRefused } from './thread-mount.mjs' // ANYBROWSER hook: threads (thread-log.mjs) and the lease forward
 import { createCrewRelay } from './crew-relay.mjs'
+import { createLinearDoor, LINEAR_DOOR_LIMITS, LINEAR_DOOR_ROUTE } from './linear-door.mjs'
+import { readerWindowRefusal } from './reader-window.mjs'
+import { threadSyncDocument } from './thread-sync-mode.mjs' // The switch in the boot document, only while on
 
 const MAX_BODY = 16 * 1024 * 1024
 const MESSAGE_METHODS = new Map([
@@ -43,6 +48,7 @@ const MESSAGE_METHODS = new Map([
 ])
 const HEX_64 = /^[0-9a-f]{64}$/
 const crewRelay = createCrewRelay()
+const linearDoor = createLinearDoor()
 
 async function edgeOwnerKey(env) {
   const publicKeyHex = env.OWNER_PUBLIC_KEY_HEX
@@ -98,6 +104,8 @@ const PROVIDERS = {
   openai: { origin: 'https://api.openai.com', secret: 'OPENAI_API_KEY' },
   anthropic: { origin: 'https://api.anthropic.com', secret: 'ANTHROPIC_API_KEY' },
   xai: { origin: 'https://api.x.ai', secret: 'XAI_API_KEY' },
+  // The same constant as PRIME_ORIGIN (provider-budget.mjs; prime-door.test.mjs pins them equal); HEAD dispatches there.
+  prime: { origin: 'https://api.pinference.ai/api', secret: 'PRIME_API_KEY' },
 }
 const json = (value, status = 200) => Response.json(value, { status, headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } })
 const unavailable = capability => json({ ok: false, code: 'CLOUD_CAPABILITY_UNAVAILABLE', capability, macFallback: false }, 501)
@@ -923,7 +931,7 @@ async function estateProjection(request, env, bootstrap, access) {
     archive: { ...archive, latestMatchesSelectedHead: archive.latest === null ? null : archive.latest.epoch === selected.head.epoch && archive.latest.ballId === selected.head.ballId },
     worker: { sourceRevision: stampedRevision(env),
       capabilities: { head: Boolean(env.HEAD), mirror: Boolean(env.MIRROR), archive: Boolean(env.ARCHIVE_BUCKET), browser: Boolean(env.BROWSER) },
-      secretPresence: Object.fromEntries(['GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN', ...Object.values(PROVIDERS).map(provider => provider.secret)].map(key => [key, typeof env[key] === 'string' && env[key].length > 0])) } })
+      secretPresence: Object.fromEntries(['GITHUB_TOKEN', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_EMAIL', ...Object.values(PROVIDERS).map(provider => provider.secret)].map(key => [key, typeof env[key] === 'string' && env[key].length > 0])) } })
 }
 
 async function estateAcknowledge(request, env, seedId, access, wakeId) {
@@ -1004,7 +1012,8 @@ async function bootstrapCall(env, name, path, body, signal) {
     text += decoder.decode()
     const result = JSON.parse(text)
     check()
-    if (!response.ok || result?.ok !== true) bootstrapFailure(typeof result?.code === 'string' ? result.code : 'BOOTSTRAP_ACK_MISSING', response.status >= 400 ? response.status : 503)
+    // A Prime refusal keeps its one detail (window and retryAt, or the missing setting's name) for the door's answer.
+    if (!response.ok || result?.ok !== true) { const prime = primeRefusal(result); if (prime) throw Object.assign(new Error(prime.code), prime); bootstrapFailure(typeof result?.code === 'string' ? result.code : 'BOOTSTRAP_ACK_MISSING', response.status >= 400 ? response.status : 503) }
     completed = true
     return result
   } finally {
@@ -1099,6 +1108,9 @@ async function providerDoor(request, env, url, seedId) {
   if (!['GET', 'POST'].includes(request.method) || !/^\/(?:(?:anthropic\/)?v1\/)?(?:models|chat\/completions|messages|responses)$/.test(match[2]) || url.search || url.hash
     || (match[2].endsWith('/models') ? request.method !== 'GET' : request.method !== 'POST')) return json({ ok: false, code: 'PROVIDER_ENDPOINT_UNAVAILABLE' }, 404)
   const limits = providerBudgetLimits(env)
+  // Prime needs all five settings before anything else; the first absent or malformed one is named.
+  const primeConfig = match[1] === 'prime' ? primeSettings(env) : null
+  if (primeConfig && !primeConfig.ok) return json({ ok: false, code: 'PRIME_NOT_CONFIGURED', provider: 'prime', missing: primeConfig.missing }, 503)
   const rawKey = env[provider.secret]
   const key = typeof rawKey === 'string' ? rawKey.trim().replace(/^Bearer\s+/i, '').trim() : ''
   if (!key) return json({ ok: false, code: 'PROVIDER_SECRET_NOT_CONFIGURED', provider: match[1] }, 503)
@@ -1119,10 +1131,22 @@ async function providerDoor(request, env, url, seedId) {
         requestedModel,
       })
     : null
-  await bootstrapCall(env, 'HEAD', '/_head/provider-budget', { provider: match[1], tokens: reservation.tokens }, request.signal)
-  const turnJournal = turnSummary
-    ? await bootstrapCall(env, 'HEAD', '/_head/turn-journal', turnSummary, request.signal)
-    : null
+  // Prime also sends its output share and its model, so HEAD admits only a model the set prices cover and charges
+  // an upper estimate against the day and month caps.
+  let budget
+  try { budget = await bootstrapCall(env, 'HEAD', '/_head/provider-budget', { provider: match[1], tokens: reservation.tokens, ...(primeConfig ? { outputTokens: reservation.outputTokens, model: reservation.requestedModel } : {}) }, request.signal) }
+  catch (error) { const refusal = primeConfig ? primeRefusal(error) : null; if (refusal) return json({ ok: false, code: refusal.code, provider: 'prime', ...primeRefusalDetail(refusal) }, refusal.status); throw error }
+  const chargeId = primeConfig && typeof budget?.spend?.chargeId === 'string' ? budget.spend.chargeId : null
+  let turnJournal
+  try {
+    turnJournal = turnSummary
+      ? await bootstrapCall(env, 'HEAD', '/_head/turn-journal', turnSummary, request.signal)
+      : null
+  } catch (error) {
+    // The call never left the edge: its charge is given back before the refusal travels on.
+    if (chargeId) await bootstrapCall(env, 'HEAD', '/_head/provider-spend-release', { provider: 'prime', chargeId }).catch(_error => {})
+    throw error
+  }
   const turnJournalHeader = turnJournal?.entry
     ? JSON.stringify({
         savedBeforeInference: true,
@@ -1142,6 +1166,7 @@ async function providerDoor(request, env, url, seedId) {
       if (turnJournal.entry.parentTurnId) headers.set('x-x6-parent-turn-id', turnJournal.entry.parentTurnId)
     }
     if (request.headers.has('anthropic-beta')) headers.set('anthropic-beta', request.headers.get('anthropic-beta'))
+    if (chargeId) headers.set('x-x6-spend-charge', chargeId) // Lets HEAD give back a call that never leaves
     upstream = await forward(new Request('https://x61.internal/_head/provider-dispatch', {
       method: request.method, headers, body: reservation.bodyBytes, signal: request.signal,
     }), env.HEAD, 'HEAD', seedId)
@@ -1703,6 +1728,11 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         // NOSTR hook: signed out, read-only, cached; HEAD is asked at most once per isolate per minute while its reads settle
         // (while they do not: at most one new read per `shareWaitMs`, see createNostrReadDoor).
         if (NOSTR_PUBLIC_ROUTES.has(url.pathname)) return await nostrReadDoor.serve(incoming, url, signal => bootstrapCall(env, 'HEAD', NOSTR_ANCHOR_LATEST_PATH, undefined, signal))
+        // The provider's brain socket, only with VOICE_MANAGED exactly "1" and only with its JWT AND the
+        // bridge secret. A refused request that carries a JWT records one closed stage, at most once per stage per minute
+        // per isolate (one object call); with no JWT nothing is recorded. Anything short of that falls through and is
+        // answered as any unknown path is.
+        if (url.pathname === VOICE_BRIDGE_ROUTES.provider && voiceManagedOn(env)) { const door = await voiceBridgeProviderDoor(incoming, env, url, now); if (door) return door }
         if (!ownerAccessConfigured(env)) return json({ ok: false, code: 'OWNER_ACCESS_NOT_CONFIGURED' }, 503)
         const origin = incoming.headers.get('origin')
         if (origin && origin !== url.origin) return json({ ok: false, code: 'ORIGIN_REFUSED' }, 403)
@@ -1716,6 +1746,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           ? incoming.headers.get('sec-fetch-site') !== 'same-origin' && !(incoming.headers.get('sec-fetch-site') === 'none' && incoming.headers.get('sec-fetch-mode') === 'navigate') // ANYBROWSER hook
           : origin !== url.origin || incoming.headers.get('sec-fetch-site') !== 'same-origin')) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 401) // ANYBROWSER hook
         if (threadFetchRefused(incoming, url, origin)) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 401) // ANYBROWSER hook: the same rule for /_thread/ and /_mirror/lease
+        { const readerRefused = readerWindowRefusal(incoming, url, env); if (readerRefused) return readerRefused } // A reader-marked browser changes nothing (reader-window.mjs); the thread sync switch: only while THREAD_SYNC is exactly on
         if (url.pathname === '/_auth/owner') {
           if (url.search || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           if (incoming.method !== 'POST') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
@@ -1824,6 +1855,11 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         if (!access && url.pathname === GUEST_DOOR.route) return await guestRedeemDoor(incoming, env, url, origin, shield, now)
         if (!access && wantsRescueDocument(incoming, url)) return await ownerSignin() // ANYBROWSER hook: signed out on /rescue: the owner sign-in page itself
         if (!access) return wantsOwnerSignin(incoming, url) ? await ownerSignin() : json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 401)
+        // ---- KYBERHAND hook begin ----
+        // The weight CPU cell on this edge (kyber-cell.mjs): owner-only, from her own page, a pure computation. Answered
+        // here, before any bootstrap read: it reads and writes no storage and calls no object, lease, receipt or HEAD.
+        if (url.pathname === '/_host/cell-run') return await (await import('./kyber-cell.mjs')).cellRunDoor(incoming, url, origin, access)
+        // ---- KYBERHAND hook end ----
         const estateRoute = url.pathname === '/_host/estate'
         // DEVICES hook: the devices list is an owner-only GET read, judged exactly as the invites list.
         const aumlokInvitesRoute = url.pathname === '/_host/aumlok/invites' || url.pathname === PASSKEY_DEVICE_ROUTES.list
@@ -1907,6 +1943,13 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (!['GET', 'POST'].includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
           if ((origin !== url.origin && !(incoming.method === 'GET' && origin === null)) || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
         }
+        // Her Linear door (linear-door.mjs) is an owner POST from her own page, judged before any body is read.
+        if (url.pathname === LINEAR_DOOR_ROUTE) {
+          if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
+          if (incoming.method !== 'POST') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
+          if (origin !== url.origin || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
+          if (access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
+        }
         if (nightGrantRoute) {
           if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           const methods = url.pathname === '/_head/night-grant' ? ['GET', 'POST'] : ['POST']
@@ -1915,6 +1958,18 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
           if (incoming.method === 'GET' && (incoming.body !== null || (incoming.headers.has('content-length') && incoming.headers.get('content-length') !== '0'))) return json({ ok: false, code: 'NIGHT_GRANT_REQUEST_INVALID' }, 400)
         }
+        // ---- MANDATE block begin ----
+        // The owner mandate: owner-only (his email, a live session), same-origin, exactly like the night grant. No session
+        // was answered 401 above; any other session is 403 here and reaches no object.
+        const mandateRoute = url.pathname === '/_head/mandate'
+        if (mandateRoute) {
+          if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
+          if (!['GET', 'POST'].includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
+          if ((origin !== url.origin && !(incoming.method === 'GET' && origin === null)) || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
+          if (access.type !== 'owner' || typeof access.email !== 'string' || typeof env.OWNER_EMAIL !== 'string' || access.email.toLowerCase() !== env.OWNER_EMAIL.toLowerCase() || !Number.isFinite(access.expires) || access.expires <= now() / 1000) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
+          if (incoming.method === 'GET' && (incoming.body !== null || (incoming.headers.has('content-length') && incoming.headers.get('content-length') !== '0'))) return json({ ok: false, code: 'MANDATE_REQUEST_INVALID' }, 400)
+        }
+        // ---- MANDATE block end ----
         if (transcriptRoute) {
           if (url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           if (!['GET', 'POST'].includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
@@ -1959,6 +2014,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (failure) return json({ ok: false, code: failure.code }, failure.status)
         }
         if (url.pathname === '/_head/ws' && origin !== url.origin) return json({ ok: false, code: 'ORIGIN_REFUSED' }, 403)
+        if (url.pathname === VOICE_BRIDGE_ROUTES.tab && voiceManagedOn(env)) return await voiceBridgeTabDoor(incoming, env, url, access, now) // The owner tab's socket
         // ANYBROWSER hook: the vault reads its own bodies (hard limit while reading, 30 s idle, 120 s in all). Its fetch-site
         // ANYBROWSER hook: rules are judged BEFORE the session (above, where they cost no HEAD, bootstrap or key read).
         const vaultRoute = url.pathname.startsWith('/_vault/') // ANYBROWSER hook
@@ -1966,7 +2022,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         // Bootstrap, mirror, messages and wake own their bounded readers and
         // deadlines before storage; do not buffer those streams twice.
         if (url.pathname === '/_bootstrap') return await bootstrapOperation(incoming, env)
-        const request = vaultRoute /* ANYBROWSER hook */ || threadRoute /* ANYBROWSER hook */ || estateRoute || messagesRoute || wakeRoute || archiveRoute || cloudBodyRoute || voiceControlRoute || voiceDoorRoute || headStageOrPromoteRoute || nightGrantRoute || brokerRoute || aumlokRoute || url.pathname === '/_mirror/delta' ? incoming : await boundedRequest(incoming, ownerRoute ? OWNER_GRANT_MAX_BODY_BYTES : url.pathname === '/_host/crew-relay' ? 16 * 1024 : MAX_BODY, ownerRoute)
+        const request = vaultRoute /* ANYBROWSER hook */ || threadRoute /* ANYBROWSER hook */ || estateRoute || messagesRoute || wakeRoute || archiveRoute || cloudBodyRoute || voiceControlRoute || voiceDoorRoute || headStageOrPromoteRoute || nightGrantRoute || brokerRoute || aumlokRoute || url.pathname === '/_mirror/delta' ? incoming : await boundedRequest(incoming, ownerRoute ? OWNER_GRANT_MAX_BODY_BYTES : url.pathname === '/_host/crew-relay' ? 16 * 1024 : url.pathname === LINEAR_DOOR_ROUTE ? LINEAR_DOOR_LIMITS.requestBytes : MAX_BODY, ownerRoute)
         const bootstrap = await bootstrapStatus(env, request.signal)
         const publicHttpsFetch = createPlatformPublicHttpsTransport({ publicHost: env.PUBLIC_HOST })
         const coldR2Backup = Boolean(env.ARCHIVE_BUCKET)
@@ -2006,7 +2062,8 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
               headlessBrowserBody,
               voiceDirector: true,
               voiceDuplex: voiceDuplex.configured,
-              providerDoors: Object.fromEntries(Object.entries(PROVIDERS).map(([name, value]) => [name, typeof env[value.secret] === 'string' && Boolean(env[value.secret])])),
+              // Prime shows configured only with all five of its settings, not its key alone.
+              providerDoors: Object.fromEntries(Object.entries(PROVIDERS).map(([name, value]) => [name, name === 'prime' ? primeConfigured(env) : typeof env[value.secret] === 'string' && Boolean(env[value.secret])])),
               // Booleans only: whether each door is configured, never a value. Speech is the Deepgram pass the voice
               // director mints; the cloud wake is what lets her think with every tab closed (HEAD's own rule).
               speechProvider: typeof env.DEEPGRAM_API_KEY === 'string' && env.DEEPGRAM_API_KEY.trim().length > 0,
@@ -2075,6 +2132,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         }
         if (brokerRoute) return await handleCloudBroker(request, env, { access, bootstrap, networkFetch, approveRepoPublication, now, diagnostics: diagnostics.snapshot, publicHttpsFetch,
           trustedDocsHttpsFetch: createTrustedDocsHttpsTransport({ networkFetch, publicHost: env.PUBLIC_HOST }), authorizeClass3: input => edgeClass3(request, env, input) })
+        if (url.pathname === LINEAR_DOOR_ROUTE) return await linearDoor(request, env, { access, authorizeClass3: input => edgeClass3(request, env, input) })
         if (aumlokRoute || url.pathname === '/_host/governance/verify' || url.pathname === '/_host/checkpoint-policy') {
           const response = await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
           // A bind or rotation that this Worker carried changes the identity generation: drop the sign-in caches now, and
@@ -2084,6 +2142,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         }
         if (messagesRoute || statusRoute || factsRoute || wakeRoute) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId)
         if (url.pathname === NOSTR_ANCHOR_ROUTE) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access) // NOSTR hook
+        if (mandateRoute) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
         if (['/_head/ball', '/_head/lease', '/_head/status', '/_head/ws', '/_head/promotion-status', '/_head/transcript', '/_head/stage', '/_head/promote', '/_head/night-grant', '/_head/night-grant/promote'].includes(url.pathname)) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
         if (['/_mirror/delta', '/_mirror/status', '/_mirror/memory-history', '/_mirror/conflicts', '/api/snapshot'].includes(url.pathname)) return await forward(request, env.MIRROR, 'MIRROR', bootstrap.head.seedId)
         if (url.pathname === '/_mirror/export') {
@@ -2111,7 +2170,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         headers.set('cache-control', staticCachePolicy(target.pathname, result.status, headers))
         headers.set('x-content-type-options', 'nosniff')
         headers.delete('set-cookie')
-        return new Response(result.body, { status: result.status, headers })
+        return new Response(await threadSyncDocument(result, headers, env, request.method, target.pathname), { status: result.status, headers }) // result.body unchanged unless THREAD_SYNC is exactly on
       } catch (error) {
         const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : error?.status === 413 ? 'REQUEST_BODY_TOO_LARGE' : 'CLOUD_REQUEST_FAILED'
         return json({ ok: false, code }, [400, 403, 408, 409, 413, 423, 429, 503].includes(error?.status) ? error.status : 503)

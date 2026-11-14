@@ -406,6 +406,14 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 Host settings owner that records Session authorization before the first model request.
 
+```ts cordis-catalog
+/**
+ * The deployment's door table, when it names any route.
+ * @returns the table, or undefined when no route leaves through an edge door.
+ */
+edgeDoors(): EdgeDoors | undefined
+```
+
 Source: [`packages/subagent/tool-subagent/src/model-selection-settings.ts`](../../packages/subagent/tool-subagent/src/model-selection-settings.ts)
 
 <a id="ctxsubagents--subagentruntime"></a>

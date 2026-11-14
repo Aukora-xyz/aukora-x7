@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
- * Wave 4, Lane B: the repo proposal card (Wall 2), the "Approval waiting" pill on the outer chrome, the live events they
- * listen for, and Auma Live's voice fences (a cancelled request never runs; a spoken turn is journaled as voice).
+ * Wave 4, Lane B: the repo proposal card (Wall 2), what waits for the passkey (a row in Notices, no longer a
+ * pill on the outer chrome), the live events they listen for, and Auma Live's voice fences (a cancelled request never
+ * runs; a spoken turn is journaled as voice).
  * The run through the real Worker and a real passkey ceremony is in r29-edge-e2e.client.spec.tsx ("Wave 4").
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,6 +16,8 @@ import {
 import { canonicalJson, class3Action } from '../src/client/spatial/aumlok/class3-approval.ts'
 import { RepoProposalCell } from '../src/client/spatial/portal/RepoProposalCell.tsx'
 import { ApprovalWaiting, readWaiting, waitingWords } from '../src/client/spatial/portal/ApprovalWaiting.tsx'
+import { NoticesSurface } from '../src/client/spatial/portal/NoticesSurface.tsx'
+import { NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
 import { parseLiveMessage } from '../src/client/spatial/work/autonomy.ts'
 import { resetApprovalsForTests } from '../src/client/spatial/portal/touch-id-timing.ts'
 
@@ -38,7 +41,7 @@ class FakeSocket {
 }
 // The page's live hub is one per page and outlives a test by a second: pushes go to every socket still open.
 beforeEach(() => { vi.stubGlobal('BroadcastChannel', FakeChannel); vi.stubGlobal('WebSocket', FakeSocket) })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); resetApprovalsForTests() })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); resetApprovalsForTests(); resetNoticesForTests() })
 
 const ORIGIN = 'http://localhost:3000'
 const sha = (c: string) => c.repeat(40)
@@ -138,7 +141,7 @@ describe('the repo proposal card', () => {
     const { fetchImpl } = cellFetch([statusBody(await proposalValue())])
     const { container } = render(<RepoProposalCell active round={0} ownerBound fetchImpl={fetchImpl} />)
     const card = await openCard(container)
-    expect(card.textContent).toContain('Enforce the checkpoint signer policy · auma/proposal/fix-receipts-signer-policy · 2 files · CI passed')
+    expect(card.textContent).toContain('Enforce the checkpoint signer policy · auma/proposal/fix-receipts-signer-policy · 2 files · checks passed')
     expect(card.querySelector('[data-repo-proposal-move]')?.textContent).toBe(`${sha('a').slice(0, 12)} → ${sha('b').slice(0, 12)}`)
     expect(card.textContent).toContain('2 changed, 1 of them protected (T2)')
     expect(card.querySelector('[data-repo-proposal-file="mirror/home/auma/seed/organs/seed-echo.js"]')?.textContent)
@@ -148,13 +151,19 @@ describe('the repo proposal card', () => {
     expect(container.querySelector('[role="dialog"]')).toBeNull()
   })
 
-  it('warns plainly when CI did not pass, and offers nothing when the checks fail', async () => {
-    for (const [ciStatus, words] of [['failed', 'CI FAILED on this exact commit'], ['pending', 'CI has not finished'], ['none', 'No CI ran']] as const) {
+  // MOVED: the warning is in "checks" words. Only failed checks disable the approval; checks still
+  // running or none yet keep it, because the host reads the checks again at approval and merges only if they pass then
+  // (portal-approval-notices.client.spec.tsx has the full sentences).
+  it('warns plainly when the checks did not pass, disables the approval only when they failed, and offers nothing when the page\'s checks fail', async () => {
+    for (const [ciStatus, words, disabled] of [['failed', 'Checks failed. This card cannot be approved.', true],
+      ['pending', 'Checks were not green when this card was made', false], ['none', 'Approving checks them again now', false]] as const) {
       cleanup()
       const { fetchImpl } = cellFetch([statusBody(await proposalValue({ ciStatus }))])
       const { container } = render(<RepoProposalCell active round={0} ownerBound fetchImpl={fetchImpl} />)
       await openCard(container)
       await waitFor(() => { expect(container.querySelector('[data-repo-proposal-ci-warning]')?.textContent).toContain(words) })
+      expect(container.querySelector<HTMLButtonElement>('[data-repo-proposal-approve]')?.disabled).toBe(disabled)
+      expect(container.textContent).toContain(disabled ? 'CANNOT MERGE' : 'CLASS 3')
     }
     cleanup()
     const base = await proposalValue()
@@ -197,8 +206,11 @@ describe('the repo proposal card', () => {
   })
 })
 
-describe('"Approval waiting" on the outer chrome', () => {
-  it('shows while HEAD holds a Pearl or a merge, opens Sovereignty, and says nothing when HEAD did not say', async () => {
+// MOVED: what waits is
+// no longer a pill over every surface but a row in Notices. Every case the pill showed now shows its row, on the same
+// reads and pushes; the old component draws nothing.
+describe('what waits for the passkey: rows in Notices, never a pill on the outer chrome', () => {
+  it('a row while HEAD holds a Pearl or a merge, opens Sovereignty, and says nothing when HEAD did not say', async () => {
     expect(waitingWords({ pearl: true, repo: false })).toBe('Approval waiting: a Pearl')
     expect(waitingWords({ pearl: false, repo: true })).toBe('Approval waiting: a merge')
     expect(waitingWords({ pearl: true, repo: true })).toBe('Approvals waiting: a Pearl and a merge')
@@ -209,21 +221,32 @@ describe('"Approval waiting" on the outer chrome', () => {
     let body: unknown = statusBody(null)
     const fetchImpl = (async () => json(body)) as unknown as typeof fetch
     const openSovereignty = vi.fn()
-    const { container } = render(<ApprovalWaiting openSovereignty={openSovereignty} fetchImpl={fetchImpl} />)
+    const { container } = render(
+      <>
+        <div data-testid="pill"><ApprovalWaiting openSovereignty={openSovereignty} fetchImpl={fetchImpl} /></div>
+        <NoticesSurface {...({ activeSurface: NOTICES_SURFACE } as unknown as Parameters<typeof NoticesSurface>[0])} />
+      </>,
+    )
+    const pill = container.querySelector('[data-testid="pill"]') as HTMLElement
+    const row = (kind: string): HTMLElement | null => container.querySelector<HTMLElement>(`[data-notice="${kind}"]`)
     await new Promise((r) => { setTimeout(r, 20) })
-    expect(container.querySelector('[data-approval-waiting]')).toBeNull()
-    // A push that a merge was staged: read again, and the pill shows above everything.
+    expect(container.querySelector('[data-notice]')).toBeNull()
+    // A push that a merge was staged: read again, and the merge's row is in Notices; nothing is drawn where the pill was.
     body = statusBody(await proposalValue())
     for (const socket of FakeSocket.open.filter(open => !open.closed)) socket.onmessage?.({ data: JSON.stringify({ type: 'repo:staged', proposal: { branch: 'x' } }) })
-    await waitFor(() => { expect(container.querySelector('[data-approval-waiting]')?.getAttribute('data-approval-waiting')).toBe('repo') })
-    fireEvent.click(container.querySelector('[data-approval-waiting]') as HTMLButtonElement)
+    await waitFor(() => { expect(row('merge')?.textContent).toContain(`A merge is waiting for your fingerprint: ${mergeBody.branch} → main.`) })
+    expect(pill.innerHTML).toBe('')
+    expect(container.querySelector('[data-approval-waiting]')).toBeNull()
+    fireEvent.click(row('merge')?.querySelector('button') as HTMLButtonElement)
     expect(openSovereignty).toHaveBeenCalledTimes(1)
     body = statusBody(null, { ballId: 'e'.repeat(64) })
     for (const socket of FakeSocket.open.filter(open => !open.closed)) socket.onmessage?.({ data: JSON.stringify({ type: 'head:staged' }) })
-    await waitFor(() => { expect(container.querySelector('[data-approval-waiting]')?.textContent).toContain('Approval waiting: a Pearl') })
+    await waitFor(() => { expect(row('pearl')?.textContent).toContain('A Pearl is waiting for your fingerprint') })
+    expect(row('merge')).toBeNull()
     body = statusBody(null)
     for (const socket of FakeSocket.open.filter(open => !open.closed)) socket.onmessage?.({ data: JSON.stringify({ type: 'repo:merged', commitSha: sha('b') }) })
-    await waitFor(() => { expect(container.querySelector('[data-approval-waiting]')).toBeNull() })
+    await waitFor(() => { expect(container.querySelector('[data-notice]')).toBeNull() })
+    expect(pill.innerHTML).toBe('')
   })
 
   it('the pushes are only facts: nothing in a frame is read', () => {

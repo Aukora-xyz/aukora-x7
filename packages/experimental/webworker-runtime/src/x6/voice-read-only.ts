@@ -53,7 +53,7 @@ export interface VoiceValueRow {
   readonly edgeProven: boolean
   /** file:line where this value's branch was read. */
   readonly source: string
-  /** `github-class-0`: only a plain GET of this repository (ball-loader.ts githubApiClass, :613). */
+  /** `github-class-0`: only a plain GET of this repository (`x6_github`). */
   readonly requires?: 'github-class-0'
   /** Argument constraints for this value: the argument must be absent or match the pattern. */
   readonly argPatterns?: Readonly<Record<string, string>>
@@ -87,8 +87,11 @@ export interface VoiceToolRow {
 }
 
 const BL = 'webworker-runtime/src/x6/ball-loader.ts'
-/** GET /_head/promotion-status may write ONE mark (head-do.mjs readStaged, `publishedEpoch` on an unmarked published ancestor). */
-const PROMOTION_STATUS_MARK = 'one idempotent mark on first read of a published ancestor'
+/**
+ * GET /_head/promotion-status writes nothing: an unmarked published ancestor is recognised on every read,
+ * and its mark is persisted only by a publication (head-do.mjs readStaged and publish).
+ */
+const PROMOTION_STATUS_MARK = 'a pure read: the published-ancestor mark is persisted only by a publication, never by this read'
 const local = (source: string, extra: Partial<VoiceValueRow> = {}): VoiceValueRow => ({ where: 'local', edgeProven: false, source, ...extra })
 const edge = (source: string, extra: Partial<VoiceValueRow> = {}): VoiceValueRow => ({ where: 'edge', edgeProven: false, source, ...extra })
 
@@ -122,6 +125,19 @@ export const VOICE_SWITCH_TABLE: Readonly<Record<string, VoiceToolRow>> = deepFr
   x6_facts: { origin: 'builtin', selector: 'whole', selectorSource: `${BL}:5186-5201`, values: { '*': edge(`${BL}:5201 readX6Facts GET`) } },
   self_facts: { origin: 'builtin', selector: 'whole', selectorSource: `${BL}:5186-5201`, values: { '*': edge(`${BL}:5201 readX6Facts GET`) } },
   x6_host_facts: { origin: 'builtin', selector: 'whole', selectorSource: 'host-facts.ts:193', values: { '*': edge(`host-facts.ts:144 GET; ${PROMOTION_STATUS_MARK}`, { edgeProven: true }) } },
+  // One GET /api/build (worker.mjs buildRevision: no durable call, no storage, no secret; proven by
+  // deploy/cloudflare/src/__tests__/edge-signin-door.test.mjs "F2: GET /api/build ..."); the rest is memory and VFS reads.
+  x6_self_state: { origin: 'builtin', selector: 'whole', selectorSource: 'self-state.ts selfStateToolSpec (single purpose)',
+    values: { '*': edge('self-state.ts readEdgeBuild: GET /api/build only', { edgeProven: true }) } },
+  // x6_self_check takes no argument that steers a request (`only` picks probes by closed id); its
+  // probes run fixed reads: the x6_self_state, x6_cloudflare status, x6_linear status and x6_voice_status requests
+  // proven on their rows here, pinned cells and the shipped reflex (same-origin GETs of static files), and fixed
+  // compute and compile_and_run calls that keep nothing (self-check.spec.ts proves no write and every request it sends).
+  x6_self_check: { origin: 'builtin', selector: 'whole', selectorSource: 'self-check.ts selfCheckToolSpec (single purpose)',
+    values: { '*': edge('self-check.ts SELF_CHECK_PROBES: GET /api/build, GET /cells/**, POST /_host/cloudflare|linear status, '
+      + 'POST /_host/voice managed_status, POST /_host/repo exec_runs', { edgeProven: true }) } },
+  x6_voice_status: { origin: 'builtin', selector: 'whole', selectorSource: `${BL} x6_voice_status (single purpose)`,
+    values: { '*': edge(`${BL} POST /_host/voice managed_status; voice-bridge.mjs handleManagedStatus`, { edgeProven: true }) } },
   head_adopt: { origin: 'builtin', selector: 'whole', selectorSource: `${BL}:5216-5217`, values: { '*': edge(`${BL}:5217 describePublishedHead GET /_head/ball`) } },
   x6_repo: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:6302-6305 (required, no default), dispatch :6373-6414`,
     values: {
@@ -140,7 +156,32 @@ export const VOICE_SWITCH_TABLE: Readonly<Record<string, VoiceToolRow>> = deepFr
         argPatterns: { endpoint: '^(?![\\s\\S]*/actions/jobs/[0-9]+/logs)' } }) } },
   x6_cloudflare: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:6904-6907 (required)`,
     values: { status: edge(`${BL}:6926 POST /_host/cloudflare`, { edgeProven: true }), versions: edge(`${BL}:6926 POST /_host/cloudflare`, { edgeProven: true }) } },
-  x6_cell: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:6974-6977 (required)`, values: { list: local(`${BL}:6992 cells.list()`) } },
+  // Her Linear door's reads, each one fixed query to Linear and no storage written (deploy/cloudflare/src/__tests__/
+  // linear-door.test.mjs proves it per read). Every write (and every other action) is refused from voice: closed by default.
+  x6_linear: { origin: 'builtin', selector: 'action', selectorSource: `${BL} x6_linear (action required)`,
+    values: Object.fromEntries(['status', 'teams', 'projects', 'issue', 'issues', 'search', 'comments', 'documents', 'document', 'labels', 'states', 'users']
+      .map(action => [action, edge(`${BL} x6_linear POST /_host/linear; linear-door.mjs LINEAR_READS`, { edgeProven: true })])) },
+  // x6_exec (exec-tool.ts). `run` and `cancel` are refused from voice (closed by default: no row). `list`, `status`
+  // and `artifacts` are GETs of this repository's auma-exec.yml runs at api.github.com and write no storage (proven by
+  // deploy/cloudflare/src/__tests__/auma-exec-door.test.mjs "the reads voice may call"). `logs` is a read but stays off from
+  // voice, as x6_github job logs do: GitHub answers a log with a 302 to a second host.
+  x6_exec: { origin: 'builtin', selector: 'action', selectorSource: 'x6/exec-tool.ts createExecTool (action required, EXEC_TOOL_ACTIONS)',
+    values: { list: edge('exec-tool.ts list: POST /_host/repo exec_runs', { edgeProven: true }),
+      status: edge('exec-tool.ts status: POST /_host/repo exec_run (run) or exec_runs (label)', { edgeProven: true }),
+      artifacts: edge('exec-tool.ts artifacts: POST /_host/repo exec_artifacts', { edgeProven: true }),
+      logs: edge('exec-tool.ts logs: POST /_host/repo exec_logs; cloud-brokers.mjs jobLogs follows a 302 to a second host') } },
+  // `journal` reads the cell host's in-memory journal (wasm-cells.ts journal()); it calls no cell and writes nothing.
+  // ---- CORDECHO block begin ----
+  // x6_cell `cord` (cord-run.ts): only `step: "status"` is on this row (argEquals). `start` and `feed` write her home
+  // (/dsh/home/cord/) and `feed` may call her edge: refused from voice. `status` fetches the shipped skill files and the
+  // pinned cell bytes (same-origin GETs of /cells/**), reads head.json, calls no cell and writes nothing (proven by
+  // tests/x6/cord-echo.spec.ts "voice may read status"). The capability index keeps `cord` under write: a value with
+  // argEquals reads only for some calls of that action (capability-index.ts classifyToolMutation).
+  x6_cell: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:6974-6977 (required)`, values: { list: local(`${BL}:6992 cells.list()`),
+    journal: local(`${BL} x6_cell cells.journal()`),
+    cord: edge('cord-run.ts createCordShelf status: GET /cells/kyber/skills/**, /cells/cord/**, /cells/cord-echo.wasm; reads head.json',
+      { edgeProven: true, argEquals: { step: 'status' } }) } },
+  // ---- CORDECHO block end ----
   x6_nostr: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:7203 (defaults to status when absent; voice needs it explicit)`,
     values: { status: edge(`${BL}:7209 POST /_head/transcript nostr_status`, { edgeProven: true }) } },
   x6_web_eyes: { origin: 'builtin', selector: 'action', selectorSource: `${BL}:7022 (INFERRED from url/query when absent; voice needs it explicit)`,
@@ -186,6 +227,14 @@ export const VOICE_REFUSED_TOOLS: readonly string[] = deepFreeze([
   // Her worker built-ins that change things or spend (ball-loader.ts).
   'scion_grow', 'stage_organ_promotion', 'stage_organ_set_promotion', 'stage_head_promotion', 'ball_put', 'pearl_put',
   'tree_patch', 'tree_undo', 'self_apply', 'self_undo', 'x6_consult', 'x6_swarm', 'x6_wish', 'x6_trusted_docs',
+  // ---- KYBERSKILL block begin ----
+  // Her skills tool: `keep` and `forget` write her home; `check` and `run` call cells; `list` fetches. None from voice.
+  'x6_skill',
+  // ---- KYBERSKILL block end ----
+  // Her own tools. `propose`, `mount` and `unmount` write her home; `qualify` runs cells. None from a look-only
+  // voice turn (`list` too, for now: closed by default). A mounted x6t_<name> tool is registered by her runtime but not
+  // as a built-in voice row, so it is refused from a look-only turn as well (tool-registry.ts).
+  'x6_tools',
   // `say` posts under the owner's name; `read` is an edge call with no voice-edge-reads proof.
   'crew_relay',
   // Preset plugins that change things, spawn, spend, or reach the open web (MAP-2 section 2).

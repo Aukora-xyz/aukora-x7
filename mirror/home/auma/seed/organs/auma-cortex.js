@@ -241,7 +241,7 @@ async function run(args, ctx) {
 }
 
 module.exports = {
-  name: 'auma_cortex',
+  name: 'auma-cortex',
   description: 'Read-only awareness surface for Auma Live voice: resident epoch truth, a derived capability index with digest and staleness gate, federated search with trust labels, bounded bit ledger, and thread resolution. Zero write authority.',
   parameters: {
     type: 'object',

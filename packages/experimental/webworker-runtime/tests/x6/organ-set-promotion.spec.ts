@@ -200,7 +200,8 @@ describe('stage_organ_set_promotion tool', () => {
     expect(result).toMatchObject({ ok: true, staged: true, edgeStaged: true, epoch: 8, organSet, hint: 'Awaiting one Touch ID on the Add organs card.' })
     expect((result.hops as Array<{ hop: string }>).map(hop => hop.hop)).toEqual(['live-head', 'built', 'local-staged', 'idb-flushed', 'edge-staged'])
     expect(calls.map(call => `${call.method} ${call.path}`).filter(line => !line.includes('promotion-status') && !line.includes('facts')))
-      .toEqual(['GET /_head/ball', 'POST /_head/stage'])
+      // The one extra read is her shipped reflex file (the shadow consult, once per session); it decides nothing.
+      .toEqual(['GET /_head/ball', 'GET /cells/reflexes/touch-id-tier.json', 'POST /_head/stage'])
     const written = vfs.readFileSync(STAGED_HEAD_PROMOTION_PATH, 'utf8') as string
     expect(calls.find(call => call.path === '/_head/stage')!.body).toEqual(JSON.parse(written))
   })

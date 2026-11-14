@@ -318,8 +318,20 @@ export type WakeRequest =
   | { readonly action: 'trigger' }
   | { readonly action: 'configure'; readonly enabled: boolean; readonly intervalMs?: number }
 
-/** POST one wake request; the host answers with the timer's state. */
+/**
+ * While this page only reads her (a browser that never saved her), the reader sentence
+ * its client set (webworker-runtime client/reader-window.ts); null otherwise. Page-owned controls that would change her
+ * node refuse with it, before any request; her edge refuses the same requests by the page's mark (reader-window.mjs).
+ */
+export function readerWindowSentence(): string | null {
+  const said = (globalThis as Record<string, unknown>).__AUKORA_READER__
+  return typeof said === 'string' && said !== '' ? said : null
+}
+
+/** POST one wake request; the host answers with the timer's state. A reader page sends nothing. */
 export function postWake(request: WakeRequest, fetchImpl: WakeFetch = pageFetch): Promise<WakeRead> {
+  const reader = readerWindowSentence()
+  if (reader !== null) return Promise.resolve({ kind: 'refused', status: 0, detail: reader })
   if (request.action === 'configure' && request.intervalMs !== undefined
     && !(Number.isSafeInteger(request.intervalMs) && request.intervalMs >= WAKE_MIN_MS && request.intervalMs <= WAKE_MAX_MS)) {
     return Promise.resolve({ kind: 'refused', status: 0, detail: 'interval outside 60 s to 24 h; not sent' })

@@ -407,7 +407,7 @@ describe('outward Class 3 requests wait for the owner\'s passkey', () => {
 })
 
 describe('Auma runs her Wasm cells through x6_cell', () => {
-  it('lists the 24 pinned cells and computes with one, fetched same-origin and admitted in her runtime', async () => {
+  it('lists the 26 pinned cells and computes with one, fetched same-origin and admitted in her runtime', async () => {
     const value = await mountedFixture()
     const { readFile } = await import('node:fs/promises')
     const fetched: string[] = []
@@ -420,7 +420,7 @@ describe('Auma runs her Wasm cells through x6_cell', () => {
     const cell = value.tools.get('x6_cell')!
     const listed = await cell.execute({ action: 'list' }) as { ok: boolean; cells: { cell: string }[] }
     expect(listed.ok).toBe(true)
-    expect(listed.cells).toHaveLength(25)
+    expect(listed.cells).toHaveLength(30) // 25 + nucleus + kyber-cpu + pentora-codec + cord-echo + menger-hive
     expect(fetched).toEqual([])
     expect(await cell.execute({ action: 'compute', cell: 'nostr-core', op: 'nostr.ping' }))
       .toMatchObject({ ok: true, cell: 'nostr-core', result: { pong: true, version: 1 } })
@@ -429,6 +429,11 @@ describe('Auma runs her Wasm cells through x6_cell', () => {
     expect(fetched).toEqual(['https://stage-fixture.invalid/cells/nostr-core.wasm', 'https://stage-fixture.invalid/cells/seed-judge.wasm'])
     expect(classifyActionIrreversibility({ tool: 'x6_cell', action: 'compute' })).toBe(0)
     expect(classifyActionIrreversibility({ tool: 'x6_cell', action: 'list' })).toBe(0)
+    // Both calls are journal lines of her one cell host (newest first), and reading them is a read.
+    const journal = await cell.execute({ action: 'journal' }) as { ok: boolean; lines: { cell: string; status: string; caller: string }[] }
+    expect(journal.ok).toBe(true)
+    expect(journal.lines.slice(0, 2).map(line => [line.cell, line.status, line.caller])).toEqual([['seed-judge', 'ok', 'x6_cell'], ['nostr-core', 'ok', 'x6_cell']])
+    expect(classifyActionIrreversibility({ tool: 'x6_cell', action: 'journal' })).toBe(0)
   })
 })
 
@@ -781,7 +786,9 @@ async function consultEdgeFixture(networkFetch: typeof fetch) {
   const seedId = await headModule.digest(headModule.canonicalBootstrap(payload))
   const env: Record<string, unknown> = { PUBLIC_HOST: 'stage-fixture.invalid', OWNER_EMAIL: 'owner@example.invalid',
     OWNER_PUBLIC_KEY_HEX: '11'.repeat(32), AUMLOK_CUSTODY_PEPPER: '22'.repeat(32), DEEPSEEK_API_KEY: 'synthetic-key',
-    PROVIDER_BUDGET_WINDOW_MS: '60000', PROVIDER_BUDGET_REQUESTS: '20', PROVIDER_BUDGET_TOKENS: '100000', PROVIDER_MAX_OUTPUT_TOKENS: '8192' }
+    // A consult left without a cap asks for 32000, so the fixture edge takes the deployed edge's
+    // output ceiling and token window (deploy/cloudflare/wrangler.toml: 256000 and 50000000), not 8192 and 100000.
+    PROVIDER_BUDGET_WINDOW_MS: '60000', PROVIDER_BUDGET_REQUESTS: '20', PROVIDER_BUDGET_TOKENS: '50000000', PROVIDER_MAX_OUTPUT_TOKENS: '256000' }
   const head = new headModule.X61HeadDurableObject({ storage, getWebSockets: () => [] }, env, { networkFetch })
   const mirrorStatus = { ok: true, phase: 'ready', seedId, ballId: ball.ballId, epoch: ball.epoch, entryCount: 0, nextBatch: 0, batchCount: 0 }
   expect((await head.store.bootstrapPrepare({ ...payload, seedId })).ok).toBe(true)

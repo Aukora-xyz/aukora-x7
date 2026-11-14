@@ -13,6 +13,7 @@ import {
 } from '../src/client/spatial/work/autonomy.ts'
 import { WORK_SURFACE, WorkSurface, type FileRead } from '../src/client/spatial/work/WorkSurface.tsx'
 import { en } from '../src/client/spatial/work/labels.ts'
+import { currentNotices, NEW_BUILD_LINE, resetNoticesForTests } from '../src/client/spatial/portal/notices.ts'
 import { BALL_HEAD_PATH, MEMORY_DAG_HEAD_PATH, SUPERAGENT_STATE_PATH } from '../src/client/spatial/work/work-model.ts'
 
 /** Stand-ins for the page's BroadcastChannel and WebSocket: every one opened is kept, so a test can push a message. */
@@ -40,7 +41,7 @@ beforeEach(() => {
   vi.stubGlobal('BroadcastChannel', FakeChannel)
   vi.stubGlobal('WebSocket', FakeSocket)
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); document.head.innerHTML = '' })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); document.head.innerHTML = ''; resetNoticesForTests() })
 
 /** A SYNTHETIC root note (the organ's `parentIds` shape), built by the export. It is no one's memory. */
 const ROOT_ID = 'ee682b1f111d9d3b92f18ee57bf81e9904e70a0398a04a88c077395a40bd7668'
@@ -179,6 +180,22 @@ describe('the wake timer', () => {
     expect(wakeInterval({ ...parseWake(STATUS)!, intervalMs: 60_000 })).toBe(3_600_000)
     expect(wakeInterval({ ...parseWake(STATUS)!, intervalMs: 10 })).toBe(3_600_000)
     expect(wakeInterval(parseWake(STATUS))).toBe(900_000)
+  })
+  it('a page that only reads her sends no wake (Wake now, the timer): it says why, and the request never leaves', async () => {
+    const fetchImpl = vi.fn<WakeFetch>(async () => json(STATUS))
+    const sentence = 'Reading an older copy of her from her cloud. She answers in the browser that holds her home. Nothing typed here is saved.'
+    vi.stubGlobal('__AUKORA_READER__', sentence)
+    try {
+      expect(await postWake({ action: 'trigger' }, fetchImpl)).toEqual({ kind: 'refused', status: 0, detail: sentence })
+      expect(await postWake({ action: 'configure', enabled: false }, fetchImpl)).toEqual({ kind: 'refused', status: 0, detail: sentence })
+      expect(fetchImpl).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+    // Not a reader (the mark cleared): the same press is sent, as before.
+    vi.stubGlobal('__AUKORA_READER__', undefined)
+    try {
+      expect((await postWake({ action: 'trigger' }, fetchImpl)).kind).toBe('ok')
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+    } finally { vi.unstubAllGlobals() }
   })
 })
 
@@ -432,7 +449,9 @@ describe('the Work surface updates live, without a refresh', () => {
     push({ type: 'wake:updated', wake: { ...wakeBody(true), wakeCount: 1, lastWakeAt: 1_794_120_000_000, lastWakeOutcome: 'executor_unavailable' } })
     await waitFor(() => { expect(container.querySelector('[data-work-wake="on"]')?.textContent).toContain('executor_unavailable') })
   })
-  it('a different runtime release shows one inline Reload button; the same release shows none', async () => {
+  // MOVED: Work draws no Reload button any more. A different release is one quiet line in Work's own flow and a
+  // row in Notices in the host's own words, whose Reload is the press; the same release shows neither.
+  it('a different runtime release shows one quiet line and a Notices row with Reload; the same release shows none', async () => {
     const script = document.createElement('script')
     script.src = `/_runtime/${'c'.repeat(64)}/assets/index-x.js`
     document.head.append(script)
@@ -442,14 +461,19 @@ describe('the Work surface updates live, without a refresh', () => {
     const { container } = render(<WorkSurface {...props} />)
     await waitFor(() => { expect(FakeSocket.open.length).toBeGreaterThan(0) })
     await new Promise(r => setTimeout(r, 50))
-    expect(container.querySelector('[data-new-build]')).toBeNull()
+    expect(container.querySelector('[data-new-build-line]')).toBeNull()
+    expect(currentNotices()).toEqual([])
     push({ type: 'runtime:updated', releaseId: 'd'.repeat(64), buildSha: 'x' })
     await waitFor(() => {
-      expect(container.querySelector(`[data-new-build="${'d'.repeat(64)}"]`)?.textContent).toBe(en['build.button'])
+      expect(container.querySelector('[data-new-build-line]')?.textContent).toBe(NEW_BUILD_LINE)
     })
+    expect(currentNotices().map(notice => [notice.id, notice.what, notice.action.label]))
+      .toEqual([[`release:${'d'.repeat(64)}`, en['build.what'], 'Reload']])
+    expect(container.querySelector('[data-new-build]')).toBeNull()
     expect(document.querySelector('[role="dialog"]')).toBeNull()
     push({ type: 'runtime:updated', releaseId: 'c'.repeat(64) })
-    await waitFor(() => { expect(container.querySelector('[data-new-build]')).toBeNull() })
+    await waitFor(() => { expect(container.querySelector('[data-new-build-line]')).toBeNull() })
+    expect(currentNotices()).toEqual([])
   })
 })
 
@@ -957,7 +981,7 @@ describe('the arena and the status cannot be talked into more than they show', (
 describe('where this page runs: Mac host or Cloudflare edge, read from the host itself', () => {
   const answer = (routes: Record<string, unknown>) => vi.fn(async (input: string) =>
     (Object.hasOwn(routes, input) ? json(routes[input]) : new Response('nope', { status: 404 })))
-  const health = (over: Record<string, unknown> = {}) => ({ ok: true, ready: true, runtime: 'cloudflare', macDependency: false, buildSha: 'd07baa83',
+  const health = (over: Record<string, unknown> = {}) => ({ ok: true, ready: true, runtime: 'cloudflare', macDependency: false, buildSha: '6d235f72',
     capabilities: { head: true, mirror: true, providerDoors: { deepseek: true, anthropic: false } }, unsupported: ['eyes', 'no-tab-agent-loop'], ...over })
   it('the Mac host is said to be the Mac, and the edge is never claimed or probed from it', async () => {
     const { hostModeWords, readHostMode } = await import('../src/client/spatial-components.tsx')
@@ -971,7 +995,7 @@ describe('where this page runs: Mac host or Cloudflare edge, read from the host 
   it('the edge, seeded with a model door bound, says the Mac is not in the path; unseeded or doorless is NOT READY', async () => {
     const { hostModeWords, readHostMode } = await import('../src/client/spatial-components.tsx')
     const ready = await readHostMode(answer({ '/__x6/status': { ok: true, runtime: 'cloudflare' }, '/api/health': health() }), undefined, 'node.example.invalid')
-    expect(ready).toMatchObject({ kind: 'cloudflare', edge: { ready: true, doorsBound: 1, doorsTotal: 2, buildSha: 'd07baa83' } })
+    expect(ready).toMatchObject({ kind: 'cloudflare', edge: { ready: true, doorsBound: 1, doorsTotal: 2, buildSha: '6d235f72' } })
     expect(hostModeWords(ready)).toMatchObject({ pill: 'CLOUDFLARE EDGE · node.example.invalid', tone: 'mint' })
     expect(hostModeWords(ready).detail).toMatch(/the Mac is not in the path/)
     const doorless = await readHostMode(answer({ '/__x6/status': { ok: true, runtime: 'cloudflare' },

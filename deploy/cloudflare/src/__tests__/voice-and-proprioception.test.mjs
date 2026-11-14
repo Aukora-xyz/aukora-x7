@@ -97,7 +97,7 @@ async function createSeededEdgeFixture({ networkFetch = async () => { throw new 
     PROVIDER_BUDGET_REQUESTS: '20',
     PROVIDER_BUDGET_TOKENS: '100000',
     PROVIDER_MAX_OUTPUT_TOKENS: '256',
-    SOURCE_REVISION: '67fde49f4c67ddeb8c408ce99c22f9d60fb8163c',
+    SOURCE_REVISION: 'b21a240a390faee033246f10ad9347f6fd467245',
   }
   const headDo = new X61HeadDurableObject({ storage: headStorage, getWebSockets: () => [] }, env, { networkFetch })
   const mirrorDo = new MirrorDO({ storage: mirrorStorage }, env)
@@ -158,7 +158,7 @@ test('Mouth-Brain Voice Director: enforces grounded speakable clauses, idle back
   // State slot strictly bounded to <= 1200 UTF-8 bytes (~300 tokens).
   const hugeSlot = compileVoiceStateSlot({
     epoch: 167,
-    ballId: '7c4938450b882917000000000000000000000000000000000000000000000067',
+    ballId: '688d831c4e8e159b000000000000000000000000000000000000000000000067',
     topic: 'A'.repeat(2000),
     activeWish: 'B'.repeat(2000),
     openThreads: Array.from({ length: 10 }, (_, i) => `Thread ${String(i)} ${'C'.repeat(400)}`),
@@ -270,7 +270,7 @@ test('Cost proprioception (`providerUsage`) and `/api/body/run` alias report det
   assert.equal(doorRes.status, 200)
 
   const health = await (await fx.worker.fetch(new Request(`${ORIGIN}/api/health`), fx.env)).json()
-  assert.equal(health.buildSha, '67fde49f4c67ddeb8c408ce99c22f9d60fb8163c')
+  assert.equal(health.buildSha, 'b21a240a390faee033246f10ad9347f6fd467245')
   assert.deepEqual(health.liveHead, { ballId: fx.ball.ballId, epoch: 167 })
   assert.equal(health.capabilities.voiceDirector, true)
   assert.equal(health.providerUsage.configured, true)
@@ -281,7 +281,7 @@ test('Cost proprioception (`providerUsage`) and `/api/body/run` alias report det
 
   const facts = await (await fx.worker.fetch(new Request(`${ORIGIN}/__x6/facts`), fx.env)).json()
   assert.deepEqual(facts.providerUsage, health.providerUsage)
-  assert.equal(facts.deployedSourceRevision, '67fde49f4c67ddeb8c408ce99c22f9d60fb8163c')
+  assert.equal(facts.deployedSourceRevision, 'b21a240a390faee033246f10ad9347f6fd467245')
   assert.equal(facts.voiceDuplex.protocol, VOICE_DIRECTOR_PROTOCOL)
 
   // Verify `/api/body/run` alias works identically to `/_host/cloud-body`

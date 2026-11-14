@@ -5,4 +5,8 @@
  * new wake tool cannot be recorded by one and refused by the other. `appendWakeCheckpoint` itself is never evidence.
  * @module wake-evidence
  */
-export const CLOUD_WAKE_EVIDENCE_TOOLS = Object.freeze(['readMirrorText', 'inspectHeadWish', 'readRepoFile', 'searchRepository', 'recentCommits'])
+export const CLOUD_WAKE_EVIDENCE_TOOLS = Object.freeze(['readMirrorText', 'inspectHeadWish', 'readRepoFile', 'searchRepository', 'recentCommits',
+  // Her reads of her own work (all read-only; none acts).
+  'listMyBranches', 'execRuns', 'execLogTail', 'proposalChecks', 'stagedProposal',
+  // Her Linear and relay reads (read-only). Her ACT tools are never evidence and are not in this list.
+  'linearRead', 'relayRead'])

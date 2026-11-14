@@ -17,6 +17,7 @@ import { PREVIEW_FIXTURE_MANIFEST_FILE } from '../fixture-manifest.ts'
 import { WorkerTunnel, type TunnelFetch } from './client.ts'
 import { applyIndexInjections } from './apply-injections.ts'
 import { choosePreviewSource } from './source-chooser.ts'
+import { servedThreadSync, startPageThreadSync } from './reader-window.ts'
 
 export { WorkerTunnel, type TunnelFetch } from './client.ts'
 export { applyIndexInjections } from './apply-injections.ts'
@@ -155,9 +156,14 @@ export async function connectWorkerHost(worker: Worker, options?: WorkerHostConn
   void ready.promise.catch(() => {})
   try {
     const tunnel = new WorkerTunnel(worker)
+    // This page's id for its worker's thread-sync messages, and the reader mark (client/reader-window.ts).
+    // Only when this page's boot document carried the switch as exactly `on`; otherwise undefined, with
+    // nothing minted, listened to or set, and the init frame exactly main's.
+    const pageId = startPageThreadSync(servedThreadSync())
     tunnel.init(
       new URL(options?.image ?? IMAGE_FILE_NAME, document.baseURI).href,
       (options?.overlays ?? []).map(overlay => new URL(overlay, document.baseURI).href),
+      pageId,
     )
     const [payload, resolveAsset] = await Promise.all([tunnel.bootPayload(), tunnel.packageAssets()])
     ;(globalThis as ClientTransportGlobal).__DSH_TRANSPORT__ = {

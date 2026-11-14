@@ -55,8 +55,34 @@
 
     # Host-owned authorization sampled at Agent creation. The Plugins page
     # edits this settings namespace independently of the selected preset.
+    # Aukora: on for every NEW session, offering every model her main mind can select through an
+    # edge door: the official DeepSeek route's catalog, then the composer's Anthropic and OpenRouter routes (the
+    # `llm-pi-ai` row below), under the same provider/model ids. A thread started before a change keeps its own list.
+    # `edgeDoors` names the door each route leaves by, so list_subagent_models marks a route whose door has no key at
+    # the edge (GET /api/health capabilities.providerDoors) as unavailable instead of offering it.
     - id: subagent-model-selection-settings
       name: '@deepseek-ai/dsh-tool-subagent/model-selection-settings'
+      config:
+        enabled: true
+        allowedModels:
+          - { provider: deepseek-official, model: deepseek-flash }
+          - { provider: deepseek-official, model: deepseek-v4-pro }
+          - { provider: anthropic-door, model: claude-opus-5-5 }
+          - { provider: anthropic-door, model: claude-fable-5-2 }
+          - { provider: anthropic-door, model: claude-sonnet-5-5 }
+          - { provider: openrouter-door, model: moonshotai/kimi-k3.1-pro }
+          - { provider: openrouter-door, model: openai/gpt-6.1-sol }
+          - { provider: openrouter-door, model: openai/gpt-6-astra }
+          - { provider: openrouter-door, model: meta/muse-spark-1.3 }
+          - { provider: openrouter-door, model: z-ai/glm-5.3 }
+          - { provider: openrouter-door, model: google/gemini-4-argon }
+          - { provider: openrouter-door, model: x-ai/grok-4.7 }
+        edgeDoors:
+          healthPath: /api/health
+          routes:
+            - { provider: deepseek-official, door: deepseek }
+            - { provider: anthropic-door, door: anthropic }
+            - { provider: openrouter-door, door: openrouter }
 
     - id: message-feedback
       name: '@deepseek-ai/dsh-message-feedback'

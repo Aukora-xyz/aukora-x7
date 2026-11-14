@@ -1,8 +1,8 @@
 /**
- * Auma's Wasm cells in the browser. Twenty-five pinned cells (24 compiled from Rust in an earlier repository, and
- * aura-focus built here from WAT), each speaking Microverse ABI v1: zero imports, exports exactly `memory`,
- * `mv_abi_version`, `mv_alloc`, `mv_run`, `__mv_fuel_set`, `__mv_fuel_remaining`, canonical JSON in and out.
- *
+ * Auma's Wasm cells in the browser. Thirty pinned cells: twenty-four compiled from Rust (twenty-three in an earlier
+ * repository, plus skillsmith) and six hand-written integer WAT cells,
+ * each speaking Microverse ABI v1: zero imports, exports exactly `memory`, `mv_abi_version`, `mv_alloc`, `mv_run`,
+ * `__mv_fuel_set`, `__mv_fuel_remaining`, canonical JSON in and out.
  * The cells are served same-origin at `/cells/<name>.wasm` (apps/web/public/cells, Cloudflare static assets on the edge)
  * and admitted here, fail-closed and in this order:
  *   1. size: 0 < bytes <= the pinned size;
@@ -16,8 +16,19 @@
  * Every export call runs on a fresh fuel grant in a separate worker. The host terminates that worker after
  * 5000 ms of execution, including instance startup and ABI exports; a trap discards the affected instance.
  * A cell computes and returns; it has no imports, so it cannot reach the network, storage, or the host.
+ * The host also keeps, for observation only, what each load of a pinned cell ended as and a journal line per
+ * call to a pinned cell (cell-journal.ts). Neither is consulted by any admission rule or changes any answer.
+ * `forge` compiles and admits a cell she wants to keep (the same skillsmith path and admitCell as compile_and_run)
+ * and hands back its bytes; ball-loader.ts keeps them in her home. forge: `runForged` never trusts the kept bytes:
+ * it checks the kept WAT against its manifest hash, builds it again through that same pinned skillsmith path, requires the
+ * fresh metered bytes to hash to the kept address, still checks the kept bytes against that address, and admits and runs
+ * the FRESH bytes; one journal line as `forged:<name>` (plus the compiler's own lines). Never pinned.
  * @module x6/wasm-cells
  */
+import {
+  cellLoadFailure, createCellJournal, type CellCallRecord, type CellCaller, type CellJournal, type CellJournalRead,
+  type CellJournalSummary, type CellLoadState, type CellRow,
+} from './cell-journal.ts'
 
 /** One cell's pin: its exact bytes and its per-call fuel grant (from the predecessor's own pins). */
 export interface CellPin {
@@ -96,6 +107,42 @@ export const CELL_PINS: Readonly<Record<string, CellPin>> = Object.freeze({
     sha256: 'd8c1a74d4298b8f419934b2beefc50a6042cd0532945b2cd693bec08fa930e8c', bytes: 331409, fuel: 1500000000,
     ops: Object.freeze(['kira.store_ping', 'kira.store_default_permissions', 'kira.store_terms', 'kira.store_flags', 'kira.store_draft', 'kira.store_supersede', 'kira.store_quarantine', 'kira.store_slot_note', 'kira.store_get', 'kira.store_recent', 'kira.store_recall', 'kira.resume_candidates', 'kira.bridge_agent', 'kira.get_caller']),
   },
+  // ---- KYBERCPU block begin ----
+  // The Kyber Kernel weight CPU: hand-written integer WAT (kyber-cpu.wat beside it), built and metered by the pinned
+  // skillsmith cell (server/kyber-cpu-cell.build.mjs). An instrument: nothing in her authority path reads it.
+  // Fuel covers the worst call (4,096 steps with a checkpoint at every step: 182,920,414) under CELL_BROWSER_FUEL_CAP.
+  'kyber-cpu': {
+    sha256: 'dcbd53f9cfb2d55753c07ee182dd7f247b32ae0e3f08b568b1266339ce92ee14', bytes: 9750, fuel: 250000000,
+    ops: Object.freeze(['cpu.step', 'cpu.run', 'cpu.resume']),
+  },
+  // ---- KYBERCPU block end ----
+  // ---- PENTCODEC block begin ----
+  // PENTORA as an exact instrument on her own geometry: hand-written integer WAT (pentora-codec.wat beside it, its integer
+  // tables generated and proved by server/pentora-codec.build.mjs), built and metered by the pinned skillsmith cell.
+  // Fuel covers the worst call measured by its spec (a 24-block decode, about 150,000,000) under CELL_BROWSER_FUEL_CAP.
+  'pentora-codec': {
+    sha256: '1c865fe9069b01277ad54450be4a9123007bcb6f39cf0962e777662edcb3811b', bytes: 104972, fuel: 250000000,
+    ops: Object.freeze(['pentora.encode', 'pentora.decode', 'pentora.info']),
+  },
+  // ---- PENTCODEC block end ----
+  // ---- CORDECHO block begin ----
+  // One ongoing Cord skill (docs/auma/cord-echo.md): hand-written integer WAT (cord-echo.wat beside it), built and metered
+  // by the pinned skillsmith cell (server/cord-echo-cell.build.mjs). An instrument: it computes a checkpoint and grants nothing.
+  // Fuel is twice the measured worst call (1,000 inputs from a checkpoint, about 26,100,000; tests/x6/cord-echo.spec.ts), rounded up.
+  'cord-echo': {
+    sha256: '9d5935d3c5062bb440c62489144ddce820659839b46cf22b8713316d5b5132fa', bytes: 13530, fuel: 60000000,
+    ops: Object.freeze(['cord.genesis', 'cord.run', 'cord.info']),
+  },
+  // ---- CORDECHO block end ----
+  // ---- MENGERHIVE block begin ----
+  // 80-site Menger sponge skeleton and 80-site plain two-sided control in one cell (docs/auma/menger-hive.md): hand-written
+  // integer WAT (menger-hive.wat beside it), built and metered by the pinned skillsmith cell (server/menger-hive-cell.build.mjs).
+  // An instrument: computes monolith and rank-7 split-body wave steps mod 65,521; zero authority and zero privacy claim.
+  'menger-hive': {
+    sha256: '80fba1f9ea6de88c9618429044dfb1d04693696c4125e55b53fe8e69ca6e99c6', bytes: 25300, fuel: 2000000,
+    ops: Object.freeze(['hive.info', 'hive.step_monolith', 'hive.boundary', 'hive.step_organ', 'hive.step_body']),
+  },
+  // ---- MENGERHIVE block end ----
   'lane-contract': {
     sha256: 'd8f04fd101cb711ead3ce11dea06c21de016da527d1c9320ba4803a849302b28', bytes: 97854, fuel: 1500000000,
     ops: Object.freeze(['lane.contract']),
@@ -115,6 +162,13 @@ export const CELL_PINS: Readonly<Record<string, CellPin>> = Object.freeze({
   'nostr-core': {
     sha256: '1b00e08461e6c2e9a99e5d32a93389d633aeb776a5d3e4a3e2b173cd6ce82530', bytes: 757615, fuel: 400000000,
     ops: Object.freeze(['nostr.ping', 'nostr.public_key', 'nostr.key_valid', 'nostr.event_id', 'nostr.event_sign', 'nostr.event_verify', 'nostr.npub_encode', 'nostr.npub_decode', 'nostr.nsec_encode', 'nostr.nsec_decode', 'nostr.nip44_conversation_key', 'nostr.nip44_message_keys', 'nostr.nip44_padded_len', 'nostr.nip44_encrypt', 'nostr.nip44_decrypt', 'nostr.gift_wrap', 'nostr.unwrap', 'nostr.dm_seal', 'nostr.dm_open']),
+  },
+  // Her deterministic nucleus: the reflex machine from an ideas lab, hand-written integer WAT (nucleus.wat beside it), built
+  // and metered by the pinned skillsmith cell (server/nucleus-cell.build.mjs). It runs a reflex given as DATA (a table
+  // or a small int8 net) and lists every changed decision between two reflexes. An instrument: no authority.
+  'nucleus': {
+    sha256: '4b85c891e9e9796665b12a7adb196cb1b48e609b12b6a94264f0e56596e8a703', bytes: 24654, fuel: 300000000,
+    ops: Object.freeze(['reflex.run', 'reflex.diff', 'reflex.digest', 'reflex.census']),
   },
   'organism-tools': {
     sha256: 'e647338d059f57e78d8827249303b1552fdd7335f80ab13a122c170f2a0a7e96', bytes: 368213, fuel: 20000000000, maxRequestBytes: 12 * 1024 * 1024,
@@ -180,6 +234,57 @@ export type CompileAndRunAnswer = CellAnswer & {
   readonly compilerFuelUsed?: number
   readonly expectedExports?: readonly string[]
   readonly gotExports?: readonly string[]
+}
+
+/**
+ * A cell she forges and keeps. It is compiled through the same pinned `skillsmith` path and admitted by the same
+ * `admitCell` as `compile_and_run` (zero imports, binary memory maximum <= SKILL_MAX_MEMORY_PAGES, the metered ABI
+ * exports), and run on the same fuel bounds, worker and deadline. It is never pinned: these caps add to the admission,
+ * they replace nothing in it.
+ */
+export const FORGED_CELL_MAX_WASM_BYTES = 64 * 1024
+export const FORGED_CELL_MAX_WAT_BYTES = 128 * 1024
+/** A kept cell's name; it may not equal a pinned cell's name. */
+export const FORGED_CELL_NAME = /^[a-z][a-z0-9-]{0,31}$/u
+/** The journal names a forged cell `forged:<name>`, so a line can never be mistaken for a pinned cell's. */
+export const FORGED_CELL_JOURNAL_PREFIX = 'forged:'
+/** The default fuel grant of `compile_and_run` and `run_forged` (bounds 1..SKILL_MAX_FUEL). */
+export const SKILL_DEFAULT_FUEL = 1_000_000
+
+export interface ForgeSpec { readonly wat: string; readonly name: string }
+/** A forged cell admitted and ready to keep: the exact metered bytes that passed admission, and what they are. */
+export interface ForgedBuild {
+  readonly ok: true
+  readonly name: string
+  /** SHA-256 of `wasm` (the metered bytes `admitCell` accepted). */
+  readonly sha256: string
+  readonly wasm: Uint8Array
+  /** The declared memory maximum, in pages, read from the binary by `inspectWasmMemory`. */
+  readonly memoryPages: number
+  /** The `skillsmith` pin that compiled it. */
+  readonly skillsmith: string
+  readonly compilerFuelUsed: number
+}
+export type ForgeAnswer = ForgedBuild | (CompileAndRunAnswer & { readonly ok: false })
+
+/**
+ * One run of a kept cell: what its manifest says (name, content address, source hash, compiler pin), and the source text
+ * and bytes read from her home for THIS call. The source is the truth: the bytes are only checked, never run.
+ */
+export interface RunForgedSpec {
+  readonly name: string
+  readonly sha256: string
+  /** The manifest's `watSha256`: SHA-256 of the kept WAT's UTF-8 bytes. */
+  readonly watSha256: string
+  /** The manifest's `skillsmith`: the compiler pin it was forged under. */
+  readonly skillsmith: string
+  /** The kept WAT text read now (null when missing or unreadable). */
+  readonly wat: string | null
+  /** The kept `.wasm` read now (checked against `sha256`; never admitted). */
+  readonly bytes: Uint8Array
+  readonly op?: string
+  readonly input?: unknown
+  readonly fuel?: number
 }
 
 const normalizeWatSkillExports = (wat: string): string =>
@@ -651,6 +756,30 @@ class CellExecutor {
   }
 }
 
+/** The one WAT-to-metered-Wasm path's inputs (compile_and_run and forge forge). */
+interface MeteredBuildArgs {
+  readonly wat: string
+  readonly name: string
+  readonly version: string
+  readonly op: string
+  readonly fuel: number
+  readonly inputSchema?: unknown
+  readonly outputSchema?: unknown
+}
+/** Its answer when skillsmith built and metered the WAT (not yet admitted). */
+interface MeteredBuild {
+  readonly ok: true
+  readonly buildRes: CellResult
+  readonly rawSha: string
+  readonly meteredSha: string
+  readonly meteredBytes: Uint8Array<ArrayBuffer>
+  readonly compilerFuelUsed: number
+}
+type MeteredBuildAnswer = MeteredBuild | (CompileAndRunAnswer & { readonly ok: false })
+
+/** The exact request bytes one call sent and the answer text it received, set as they exist (for the journal). */
+interface CellExchange { request?: Uint8Array; answer?: string }
+
 /** One admitted cell; the host serializes calls and owns the independently terminable execution worker. */
 class MeteredCell {
   private seq = 0
@@ -662,11 +791,11 @@ class MeteredCell {
     private readonly options?: { readonly relaxSeq?: boolean; readonly detailedMalformed?: boolean },
   ) {}
 
-  invoke(op: string, input: unknown): Promise<CellAnswer> {
-    return this.executor.schedule(() => this.run(op, input))
+  invoke(op: string, input: unknown, exchange?: CellExchange): Promise<CellAnswer> {
+    return this.executor.schedule(() => this.run(op, input, exchange))
   }
 
-  private async run(op: string, input: unknown): Promise<CellAnswer> {
+  private async run(op: string, input: unknown, exchange?: CellExchange): Promise<CellAnswer> {
     const seq = this.seq + 1
     let request: Uint8Array
     try {
@@ -678,6 +807,7 @@ class MeteredCell {
     // Only a module admitted by admitCell (pin + binary memory limits) ever reaches the execution worker.
     const memory = admittedMemory.get(this.module)
     if (memory === undefined) return { ok: false, cell: this.name, op, code: 'MODULE_MEMORY_UNADMITTED', fuelUsed: null, sha256: this.pin.sha256 }
+    if (exchange) exchange.request = request
     const execution = await this.executor.execute({
       key: `${this.name}:${this.pin.sha256}`, module: this.module, request,
       fuel: Math.min(this.pin.fuel, CELL_BROWSER_FUEL_CAP), maxResponseBytes: CELL_MAX_RESPONSE_BYTES,
@@ -686,6 +816,7 @@ class MeteredCell {
     if (!execution.ok) return { ...execution, cell: this.name, op, sha256: this.pin.sha256 }
     this.seq = seq
     const { text, fuelUsed: used } = execution
+    if (exchange) exchange.answer = text
     let parsed: unknown
     try {
       parsed = JSON.parse(text)
@@ -741,18 +872,78 @@ class MeteredCell {
 export interface CellHost {
   /** Terminate execution, settle queued calls, and release modules. This host cannot execute again. */
   dispose(): Promise<void>
-  /** The admitted cell names, pins, and verified op manifests. */
+  /** Every pinned cell, its op manifest, and this session's load state; never size-capped. */
   list(): readonly {
     readonly cell: string
     readonly sha256: string
     readonly bytes: number
     readonly fuel: number
     readonly ops: readonly string[]
+    readonly loaded: CellRow['loaded']
+    readonly failure?: CellRow['failure']
   }[]
-  /** Run one op of one cell. Never throws: a refusal, a bad request or an unadmitted cell comes back as `ok: false`. */
-  invoke(cell: string, op: string, input?: unknown): Promise<CellAnswer>
+  /**
+   * Run one op of one cell. Never throws: a refusal, a bad request or an unadmitted cell comes back as `ok: false`.
+   * `caller` only labels the journal line (default `other`); it changes nothing about the call.
+   */
+  invoke(cell: string, op: string, input?: unknown, caller?: CellCaller): Promise<CellAnswer>
   /** Compile WAT via pinned `skillsmith` (`build` + `meter`), admit the metered Wasm (0 imports, binary max <= 16 pages), and run it. */
-  compileAndRun(spec: CompileAndRunSpec): Promise<CompileAndRunAnswer>
+  compileAndRun(spec: CompileAndRunSpec, caller?: CellCaller): Promise<CompileAndRunAnswer>
+  /**
+   * Compile WAT exactly as `compileAndRun` does (default name-less options: version `v1`, default fuel) and admit
+   * the metered bytes, without running them. Answers the admitted bytes for the caller to keep; stores nothing itself.
+   */
+  forge(spec: ForgeSpec, caller?: CellCaller): Promise<ForgeAnswer>
+  /**
+   * Run a kept cell from its source. In order, each a closed refusal where nothing runs: the WAT hashes to
+   * `watSha256` (FORGED_SOURCE_CHANGED); `skillsmith` is the current compiler pin (FORGED_COMPILER_CHANGED); the WAT is
+   * built again through the one pinned build-and-meter path (its own journal lines) and the fresh metered bytes hash to
+   * `sha256` (FORGED_BUILD_CHANGED); the kept `bytes` hash to `sha256` too (FORGED_BYTES_CHANGED). Then the FRESH bytes
+   * pass the full admission and make one metered call; one journal line as `forged:<name>` with its SHA-256 as pin.
+   */
+  runForged(spec: RunForgedSpec, caller?: CellCaller): Promise<CompileAndRunAnswer>
+  /**
+   * SKILLS: the exact bytes of one pinned cell as THIS host admitted them (loading it through the one admission path
+   * first when nothing has asked for it yet), as a private copy; null for a name that is not pinned or bytes that were
+   * refused. It adds nothing to admission: these are the bytes that hashed to the pin before they compiled.
+   */
+  verifiedBytes(cell: string): Promise<Uint8Array | null>
+  /** One row per pinned cell, sorted by name, with what THIS host saw when it loaded it (cell-journal.ts). */
+  cellRows(): readonly CellRow[]
+  /** This session's cell-call journal, every queued line settled. A session fact, not a receipt. */
+  journal(): Promise<CellJournalRead>
+  /** The journal's settled count and root, synchronously. */
+  journalSummary(): CellJournalSummary
+  /**
+   * One journal line, caller `edge`, for a call the EDGE ran (x6_cell `handoff`, cell-handoff.ts): the pin the
+   * edge answered with, or `unanswered`, the exact body sent there and the answer text read back. Runs nothing; never throws.
+   * It is the only way a line gets caller `edge` (any other call that asks for `edge` is journalled as `other`).
+   */
+  noteEdgeCall(call: Omit<CellCallRecord, 'caller'>): void
+}
+
+/**
+ * What organs reach through `ctx.wasm`: never `forge` or `runForged` (keeping and re-running is hers alone), never
+ * `noteEdgeCall` (the two-hosts handoff's journal line is hers alone), and never `verifiedBytes` (SKILLS: checking a skill
+ * against the admitted bytes is hers alone).
+ */
+export type OrganCellHost = Omit<CellHost, 'forge' | 'runForged' | 'noteEdgeCall' | 'verifiedBytes'>
+
+/**
+ * Give organs the cell host with caller labels fixed to `other`, without `forge` or `runForged`.
+ * @param host - the session's cell host.
+ * @returns the same operations; caller arguments cannot change journal labels.
+ */
+export function organCellHost(host: CellHost): OrganCellHost {
+  return {
+    dispose: () => host.dispose(),
+    list: () => host.list(),
+    invoke: (cell, op, input) => host.invoke(cell, op, input, 'other'),
+    compileAndRun: spec => host.compileAndRun(spec, 'other'),
+    cellRows: () => host.cellRows(),
+    journal: () => host.journal(),
+    journalSummary: () => host.journalSummary(),
+  }
 }
 
 /**
@@ -766,26 +957,58 @@ export function createCellHost(deps: {
   readonly pins?: Readonly<Record<string, CellPin>>
   /** Separate-worker transport; omitted in browsers. Other hosts must supply real worker isolation. */
   readonly createWorker?: (source: string) => CellWorker
+  /** The session's cell-call journal (tests pass one that fails); a fresh one by default. */
+  readonly journal?: CellJournal
+  /** The clock for a journal line's `ms` (milliseconds; tests pass a fixed one). */
+  readonly now?: () => number
 }): CellHost {
   const pins = deps.pins ?? CELL_PINS
   const executor = new CellExecutor(deps.createWorker ?? browserCellWorker)
   const loaded = new Map<string, Promise<MeteredCell>>()
+  // What each load of a pinned cell ended as in THIS host (set only below, at the end of a load).
+  const loadStates = new Map<string, CellLoadState>()
+  // SKILLS: the bytes each pinned cell was admitted from in THIS host (set only below, after admitCell resolved).
+  const admittedBytes = new Map<string, Uint8Array>()
+  const journal = deps.journal ?? createCellJournal({ canonical: cellCanonicalJson })
+  const now = deps.now ?? (() => globalThis.performance.now())
   const load = (name: string, pin: CellPin): Promise<MeteredCell> => {
     const existing = loaded.get(name)
     if (existing !== undefined) return existing
     const next = (async () => {
-      if (!deps.origin || deps.origin === 'null') throw new CellError(name, 'ORIGIN_UNAVAILABLE')
-      const response = await (deps.fetchImpl ?? globalThis.fetch)(new URL(`${CELL_BASE_PATH}${name}.wasm`, deps.origin).href,
-        { credentials: 'same-origin', signal: AbortSignal.timeout(30_000) })
-      if (!response.ok) throw new CellError(name, 'MODULE_UNAVAILABLE', `HTTP ${String(response.status)}`)
-      return new MeteredCell(name, pin, await admitCell(name, pin, new Uint8Array(await response.arrayBuffer())), executor)
+      let fetching = true
+      try {
+        if (!deps.origin || deps.origin === 'null') throw new CellError(name, 'ORIGIN_UNAVAILABLE')
+        const response = await (deps.fetchImpl ?? globalThis.fetch)(new URL(`${CELL_BASE_PATH}${name}.wasm`, deps.origin).href,
+          { credentials: 'same-origin', signal: AbortSignal.timeout(30_000) })
+        if (!response.ok) throw new CellError(name, 'MODULE_UNAVAILABLE', `HTTP ${String(response.status)}`)
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        fetching = false
+        const module = await admitCell(name, pin, bytes)
+        // admitCell resolved: these bytes hashed to the pin before compiling and passed every admission rule.
+        loadStates.set(name, { state: 'verified' })
+        admittedBytes.set(name, Uint8Array.from(bytes))
+        return new MeteredCell(name, pin, module, executor)
+      } catch (error) {
+        loadStates.set(name, { state: 'failed', reason: cellLoadFailure(error instanceof CellError ? error.code : null, fetching) })
+        throw error
+      }
     })()
     loaded.set(name, next)
     // A failed load is not kept: the next call tries again.
     next.catch(() => { if (loaded.get(name) === next) loaded.delete(name) })
     return next
   }
-  const invokeCell = async (cell: string, op: string, input: unknown = {}): Promise<CellAnswer> => {
+  /** Hand one finished call to the journal. Never throws and never awaits: the answer is already decided. */
+  const note = (cell: string, pin: CellPin, op: string, exchange: CellExchange, answer: CellAnswer, started: number,
+    caller: CellCaller): void => {
+    try {
+      journal.record({ cell, op, pin: pin.sha256, request: exchange.request ?? null, answer: exchange.answer ?? null,
+        code: answer.ok ? null : answer.code, fuelUsed: answer.fuelUsed, ms: now() - started,
+        // `edge` is written only by noteEdgeCall; a call run HERE that asks for it is `other`.
+        caller: caller === 'edge' ? 'other' : caller })
+    } catch { /* A journal failure never changes a cell call. */ }
+  }
+  const invokeCell = async (cell: string, op: string, input: unknown = {}, caller: CellCaller = 'other'): Promise<CellAnswer> => {
     const pin = Object.hasOwn(pins, cell) ? pins[cell] : undefined
     if (pin === undefined) return { ok: false, cell, op, code: 'CELL_UNKNOWN', fuelUsed: null, sha256: null }
     if (typeof op !== 'string' || !OP.test(op)) return { ok: false, cell, op: String(op), code: 'OP_INVALID', fuelUsed: null, sha256: pin.sha256 }
@@ -794,32 +1017,124 @@ export function createCellHost(deps: {
       const matches = pin.ops.filter(candidate => candidate === op || candidate.endsWith(`.${op}`))
       if (matches.length === 1 && matches[0]) resolvedOp = matches[0]
     }
+    const started = now()
+    const exchange: CellExchange = {}
+    let metered: MeteredCell
     try {
-      return (await load(cell, pin)).invoke(resolvedOp, input)
+      metered = await load(cell, pin)
     } catch (error) {
       const detail = error instanceof CellError && error.message.includes('(')
         ? error.message.slice(error.message.indexOf(' ('))
         : ''
       const code = error instanceof CellError ? `${error.code}${detail}` : 'CELL_LOAD_FAILED'
-      return { ok: false, cell, op: resolvedOp, code, fuelUsed: null, sha256: pin.sha256 }
+      const refused: CellAnswer = { ok: false, cell, op: resolvedOp, code, fuelUsed: null, sha256: pin.sha256 }
+      note(cell, pin, resolvedOp, exchange, refused, started, caller)
+      return refused
     }
+    const answer = await metered.invoke(resolvedOp, input, exchange)
+    note(cell, pin, resolvedOp, exchange, answer, started, caller)
+    return answer
+  }
+  /**
+   * The one WAT-to-metered-Wasm path (`compile_and_run` and forge `forge` both take it): pinned `skillsmith` `build`, the
+   * raw bytes' hash against the compiler's own, then `meter`. Its refusals are compile_and_run's, byte for byte.
+   */
+  const buildMetered = async (args: MeteredBuildArgs, caller: CellCaller): Promise<MeteredBuildAnswer> => {
+    const { wat, name, version, op, fuel } = args
+    const normalizedWat = normalizeWatSkillExports(wat)
+    const buildRes = await invokeCell('skillsmith', 'build', {
+      wat: normalizedWat,
+      name,
+      version,
+      input_schema: args.inputSchema ?? { type: 'object' },
+      output_schema: args.outputSchema ?? { type: 'object' },
+      fuel,
+    }, caller)
+    if (!buildRes.ok) {
+      return {
+        ...buildRes,
+        cell: name,
+        op,
+        sha256: null,
+        ...(buildRes.sha256 ? { cellSha256: buildRes.sha256 } : {}),
+        ...(buildRes.code === 'EXPORTS' || buildRes.code === 'MODULE_EXPORTS'
+          ? { expectedExports: SKILL_EXPECTED_EXPORTS, gotExports: extractWatExports(wat) }
+          : {}),
+      }
+    }
+    const buildOut = buildRes.result !== null && typeof buildRes.result === 'object'
+      ? buildRes.result as Record<string, unknown>
+      : {}
+    if (typeof buildOut.bytes !== 'string' || typeof buildOut.code_sha256 !== 'string') {
+      return { ok: false, cell: name, op, code: 'SKILLSMITH_BUILD_INVALID', fuelUsed: buildRes.fuelUsed, sha256: null, cellSha256: buildRes.sha256 }
+    }
+    const rawBytes = fromBase64Bytes(buildOut.bytes)
+    const rawSha = await sha256Hex(rawBytes)
+    if (rawSha !== buildOut.code_sha256) {
+      return { ok: false, cell: name, op, code: 'SKILLSMITH_HASH_MISMATCH', fuelUsed: buildRes.fuelUsed, sha256: rawSha, cellSha256: buildRes.sha256 }
+    }
+    const meterRes = await invokeCell('skillsmith', 'meter', { bytes: buildOut.bytes }, caller)
+    if (!meterRes.ok) {
+      return {
+        ...meterRes,
+        cell: name,
+        op,
+        sha256: null,
+        ...(meterRes.sha256 ? { cellSha256: meterRes.sha256 } : {}),
+        codeSha256: rawSha,
+      }
+    }
+    const meterOut = meterRes.result !== null && typeof meterRes.result === 'object'
+      ? meterRes.result as Record<string, unknown>
+      : {}
+    if (typeof meterOut.bytes !== 'string' || typeof meterOut.metered_sha256 !== 'string') {
+      return { ok: false, cell: name, op, code: 'SKILLSMITH_METER_INVALID', fuelUsed: meterRes.fuelUsed, sha256: rawSha, cellSha256: meterRes.sha256 }
+    }
+    return { ok: true, buildRes, rawSha, meteredSha: meterOut.metered_sha256, meteredBytes: fromBase64Bytes(meterOut.bytes),
+      compilerFuelUsed: buildRes.fuelUsed + meterRes.fuelUsed }
   }
   return {
     async dispose() {
       await executor.dispose()
       loaded.clear()
+      admittedBytes.clear()
     },
-    list: () => Object.entries(pins).map(([cell, pin]) => ({
-      cell, sha256: pin.sha256, bytes: pin.bytes, fuel: Math.min(pin.fuel, CELL_BROWSER_FUEL_CAP), ops: pin.ops ?? [],
-    })),
+    list: () => Object.entries(pins).map(([cell, pin]): ReturnType<CellHost['list']>[number] => {
+      const seen = loadStates.get(cell)
+      return {
+        cell, sha256: pin.sha256, bytes: pin.bytes, fuel: Math.min(pin.fuel, CELL_BROWSER_FUEL_CAP), ops: pin.ops ?? [],
+        loaded: seen?.state ?? 'not-loaded', ...(seen?.state === 'failed' ? { failure: seen.reason } : {}),
+      }
+    }),
     invoke: invokeCell,
-    async compileAndRun(spec) {
+    async verifiedBytes(cell) {
+      const pin = typeof cell === 'string' && Object.hasOwn(pins, cell) ? pins[cell] : undefined
+      if (pin === undefined) return null
+      try { await load(cell, pin) } catch { return null }
+      const bytes = admittedBytes.get(cell)
+      return bytes === undefined ? null : Uint8Array.from(bytes)
+    },
+    cellRows: () => Object.keys(pins).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((cell): CellRow => {
+      const pin = pins[cell] as CellPin
+      const seen = loadStates.get(cell)
+      return {
+        cell, sha256: pin.sha256, bytes: Number.isSafeInteger(pin.bytes) ? pin.bytes : null,
+        fuel: Math.min(pin.fuel, CELL_BROWSER_FUEL_CAP), ops: [...(pin.ops ?? [])],
+        loaded: seen?.state ?? 'not-loaded', ...(seen?.state === 'failed' ? { failure: seen.reason } : {}),
+      }
+    }),
+    journal: () => journal.read(),
+    journalSummary: () => journal.summary(),
+    noteEdgeCall(call) {
+      try { journal.record({ ...call, caller: 'edge' }) } catch { /* A journal failure never changes an answer. */ }
+    },
+    async compileAndRun(spec, caller = 'other') {
       const name = typeof spec.name === 'string' && /^[a-z][a-z0-9-]{0,31}$/u.test(spec.name) ? spec.name : 'skill'
       const version = typeof spec.version === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$/u.test(spec.version)
         ? spec.version
         : 'v1'
       const op = typeof spec.op === 'string' && OP.test(spec.op) ? spec.op : 'run'
-      const fuel = spec.fuel === undefined ? 1_000_000 : spec.fuel
+      const fuel = spec.fuel === undefined ? SKILL_DEFAULT_FUEL : spec.fuel
       if (!Number.isSafeInteger(fuel) || fuel <= 0 || fuel > SKILL_MAX_FUEL) {
         return { ok: false, cell: name, op, code: 'SKILL_FUEL_LIMIT', fuelUsed: null, sha256: null }
       }
@@ -829,64 +1144,17 @@ export function createCellHost(deps: {
       if (!hasBoundedWatMemory(spec.wat)) {
         return { ok: false, cell: name, op, code: 'SKILL_MEMORY_LIMIT', fuelUsed: null, sha256: null }
       }
-      const normalizedWat = normalizeWatSkillExports(spec.wat)
-      const buildRes = await invokeCell('skillsmith', 'build', {
-        wat: normalizedWat,
-        name,
-        version,
-        input_schema: spec.inputSchema ?? { type: 'object' },
-        output_schema: spec.outputSchema ?? { type: 'object' },
-        fuel,
-      })
-      if (!buildRes.ok) {
-        return {
-          ...buildRes,
-          cell: name,
-          op,
-          sha256: null,
-          ...(buildRes.sha256 ? { cellSha256: buildRes.sha256 } : {}),
-          ...(buildRes.code === 'EXPORTS' || buildRes.code === 'MODULE_EXPORTS'
-            ? { expectedExports: SKILL_EXPECTED_EXPORTS, gotExports: extractWatExports(spec.wat) }
-            : {}),
-        }
-      }
-      const buildOut = buildRes.result !== null && typeof buildRes.result === 'object'
-        ? buildRes.result as Record<string, unknown>
-        : {}
-      if (typeof buildOut.bytes !== 'string' || typeof buildOut.code_sha256 !== 'string') {
-        return { ok: false, cell: name, op, code: 'SKILLSMITH_BUILD_INVALID', fuelUsed: buildRes.fuelUsed, sha256: null, cellSha256: buildRes.sha256 }
-      }
-      const rawBytes = fromBase64Bytes(buildOut.bytes)
-      const rawSha = await sha256Hex(rawBytes)
-      if (rawSha !== buildOut.code_sha256) {
-        return { ok: false, cell: name, op, code: 'SKILLSMITH_HASH_MISMATCH', fuelUsed: buildRes.fuelUsed, sha256: rawSha, cellSha256: buildRes.sha256 }
-      }
-      const meterRes = await invokeCell('skillsmith', 'meter', { bytes: buildOut.bytes })
-      if (!meterRes.ok) {
-        return {
-          ...meterRes,
-          cell: name,
-          op,
-          sha256: null,
-          ...(meterRes.sha256 ? { cellSha256: meterRes.sha256 } : {}),
-          codeSha256: rawSha,
-        }
-      }
-      const meterOut = meterRes.result !== null && typeof meterRes.result === 'object'
-        ? meterRes.result as Record<string, unknown>
-        : {}
-      if (typeof meterOut.bytes !== 'string' || typeof meterOut.metered_sha256 !== 'string') {
-        return { ok: false, cell: name, op, code: 'SKILLSMITH_METER_INVALID', fuelUsed: meterRes.fuelUsed, sha256: rawSha, cellSha256: meterRes.sha256 }
-      }
-      const meteredBytes = fromBase64Bytes(meterOut.bytes)
-      const compilerFuelUsed = (buildRes.fuelUsed ?? 0) + (meterRes.fuelUsed ?? 0)
+      const built = await buildMetered({ wat: spec.wat, name, version, op, fuel,
+        inputSchema: spec.inputSchema, outputSchema: spec.outputSchema }, caller)
+      if (!built.ok) return built
+      const { buildRes, rawSha, meteredSha, meteredBytes, compilerFuelUsed } = built
       try {
-        const guestPin: CellPin = { sha256: meterOut.metered_sha256, bytes: SKILL_MAX_WASM_BYTES, fuel }
+        const guestPin: CellPin = { sha256: meteredSha, bytes: SKILL_MAX_WASM_BYTES, fuel }
         // The binary check is authoritative: the WAT pre-check above is only an early, friendlier refusal.
         const module = await admitCell(name, guestPin, meteredBytes, SKILL_MAX_MEMORY_PAGES)
         const guestCell = new MeteredCell(name, guestPin, module, executor, { relaxSeq: true, detailedMalformed: true })
         const answer = await guestCell.invoke(op, spec.input ?? {})
-        return { ...answer, cellSha256: buildRes.sha256, codeSha256: rawSha, meteredSha256: meterOut.metered_sha256, compilerFuelUsed }
+        return { ...answer, cellSha256: buildRes.sha256, codeSha256: rawSha, meteredSha256: meteredSha, compilerFuelUsed }
       } catch (error) {
         const code = error instanceof CellError ? error.code : 'SKILL_ADMISSION_FAILED'
         return {
@@ -895,14 +1163,94 @@ export function createCellHost(deps: {
           op,
           code,
           fuelUsed: null,
-          sha256: meterOut.metered_sha256,
+          sha256: meteredSha,
           cellSha256: buildRes.sha256,
           codeSha256: rawSha,
-          meteredSha256: meterOut.metered_sha256,
+          meteredSha256: meteredSha,
           compilerFuelUsed,
           ...(code === 'MODULE_EXPORTS' ? { expectedExports: SKILL_EXPECTED_EXPORTS, gotExports: extractWatExports(spec.wat) } : {}),
         }
       }
+    },
+    async forge(spec, caller = 'other') {
+      const name = typeof spec.name === 'string' ? spec.name : ''
+      const op = 'forge'
+      const refuse = (code: string): ForgeAnswer => ({ ok: false, cell: name, op, code, fuelUsed: null, sha256: null })
+      if (!FORGED_CELL_NAME.test(name)) return refuse('FORGE_NAME_INVALID')
+      if (Object.hasOwn(pins, name) || Object.hasOwn(CELL_PINS, name)) return refuse('FORGE_NAME_PINNED')
+      if (typeof spec.wat !== 'string' || spec.wat.length === 0) return refuse('SKILL_WAT_INVALID')
+      if (encoder.encode(spec.wat).byteLength > FORGED_CELL_MAX_WAT_BYTES) return refuse('FORGE_WAT_LIMIT')
+      if (!hasBoundedWatMemory(spec.wat)) return refuse('SKILL_MEMORY_LIMIT')
+      // The very options compileAndRun uses when none are given, so the same WAT and name give the same metered bytes.
+      const built = await buildMetered({ wat: spec.wat, name, version: 'v1', op, fuel: SKILL_DEFAULT_FUEL }, caller)
+      if (!built.ok) return built
+      const { buildRes, rawSha, meteredSha, meteredBytes, compilerFuelUsed } = built
+      const refused = (code: string): ForgeAnswer => ({ ok: false, cell: name, op, code, fuelUsed: null, sha256: meteredSha,
+        cellSha256: buildRes.sha256, codeSha256: rawSha, meteredSha256: meteredSha, compilerFuelUsed })
+      if (meteredBytes.byteLength > FORGED_CELL_MAX_WASM_BYTES) return refused('FORGE_WASM_LIMIT')
+      let memoryPages: number
+      try {
+        const module = await admitCell(name, { sha256: meteredSha, bytes: FORGED_CELL_MAX_WASM_BYTES, fuel: SKILL_DEFAULT_FUEL },
+          meteredBytes, SKILL_MAX_MEMORY_PAGES)
+        memoryPages = (admittedMemory.get(module) as WasmMemoryLimits).maximum
+      } catch (error) {
+        return refused(error instanceof CellError ? error.code : 'SKILL_ADMISSION_FAILED')
+      }
+      return { ok: true, name, sha256: meteredSha, wasm: Uint8Array.from(meteredBytes), memoryPages, skillsmith: buildRes.sha256,
+        compilerFuelUsed }
+    },
+    async runForged(spec, caller = 'other') {
+      const name = typeof spec.name === 'string' ? spec.name : ''
+      const asked: unknown = spec.op
+      const op = asked === undefined ? 'run' : asked
+      const opText = typeof op === 'string' ? op.slice(0, 64) : ''
+      const fuel = spec.fuel === undefined ? SKILL_DEFAULT_FUEL : spec.fuel
+      const sha = typeof spec.sha256 === 'string' && /^[a-f0-9]{64}$/u.test(spec.sha256) ? spec.sha256 : null
+      // Refused before a cell is chosen (like an unknown pinned cell or a bad op): no journal line.
+      if (!FORGED_CELL_NAME.test(name) || sha === null) return { ok: false, cell: name, op: opText, code: 'FORGED_UNKNOWN', fuelUsed: null, sha256: null }
+      if (typeof op !== 'string' || !OP.test(op)) return { ok: false, cell: name, op: opText, code: 'OP_INVALID', fuelUsed: null, sha256: sha }
+      if (!Number.isSafeInteger(fuel) || fuel <= 0 || fuel > SKILL_MAX_FUEL) return { ok: false, cell: name, op, code: 'SKILL_FUEL_LIMIT', fuelUsed: null, sha256: sha }
+      const pin: CellPin = { sha256: sha, bytes: FORGED_CELL_MAX_WASM_BYTES, fuel }
+      const label = `${FORGED_CELL_JOURNAL_PREFIX}${name}`
+      const started = now()
+      const exchange: CellExchange = {}
+      const refusal = (code: string): CellRefusal => ({ ok: false, cell: name, op, code, fuelUsed: null, sha256: sha })
+      // Private copies, taken now: nothing read from her home is looked at twice.
+      const wat = typeof spec.wat === 'string' ? spec.wat : null
+      const watBytes = wat === null ? null : encoder.encode(wat)
+      const bytes = spec.bytes instanceof Uint8Array ? Uint8Array.from(spec.bytes) : new Uint8Array()
+      const compiler = Object.hasOwn(pins, 'skillsmith') ? (pins.skillsmith as CellPin).sha256 : null
+      let answer: CompileAndRunAnswer
+      if (watBytes === null || watBytes.byteLength === 0 || watBytes.byteLength > FORGED_CELL_MAX_WAT_BYTES
+        || typeof spec.watSha256 !== 'string' || await sha256Hex(watBytes) !== spec.watSha256) {
+        answer = refusal('FORGED_SOURCE_CHANGED')
+      } else if (compiler === null || spec.skillsmith !== compiler) {
+        answer = { ...refusal('FORGED_COMPILER_CHANGED'), expected: compiler, got: typeof spec.skillsmith === 'string' ? spec.skillsmith : null }
+      } else {
+        // The source is the truth: build it again exactly as `forge` did (same path, same name, version and fuel).
+        const built = await buildMetered({ wat: wat as string, name, version: 'v1', op, fuel: SKILL_DEFAULT_FUEL }, caller)
+        if (!built.ok) {
+          answer = built
+        } else if (built.meteredSha !== sha || await sha256Hex(built.meteredBytes) !== sha) {
+          answer = { ...refusal('FORGED_BUILD_CHANGED'), meteredSha256: built.meteredSha, compilerFuelUsed: built.compilerFuelUsed }
+        } else if (await sha256Hex(bytes) !== sha) {
+          // The kept bytes are only checked (she may read that file), never run: a changed file is still refused.
+          answer = refusal('FORGED_BYTES_CHANGED')
+        } else {
+          try {
+            // The FRESH bytes, through the full admission again (size, the hash as its pin, binary memory limits, zero
+            // imports, exact exports). The kept file is never admitted.
+            const module = await admitCell(name, pin, built.meteredBytes, SKILL_MAX_MEMORY_PAGES)
+            const forged = new MeteredCell(name, pin, module, executor, { relaxSeq: true, detailedMalformed: true })
+            // The answer keeps its shape; what the rebuild cost is in the compiler's own journal lines.
+            answer = await forged.invoke(op, spec.input ?? {}, exchange)
+          } catch (error) {
+            answer = refusal(error instanceof CellError ? error.code : 'SKILL_ADMISSION_FAILED')
+          }
+        }
+      }
+      note(label, pin, op, exchange, answer, started, caller)
+      return answer
     },
   }
 }

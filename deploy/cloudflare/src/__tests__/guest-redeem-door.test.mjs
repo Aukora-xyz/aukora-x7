@@ -167,7 +167,7 @@ test('the door is guest-scoped: without a session no other route opens, and forg
     ['/_host/aumlok/refresh', 'POST'], ['/_head/ball', 'GET'], ['/_head/promote', 'POST'], ['/_head/stage', 'POST'], ['/_host/estate', 'GET'],
     ['/__x6/status', 'GET'], ['/__x6/facts', 'GET'], ['/_mirror/export', 'GET'], ['/_mirror/delta', 'POST'], ['/_bootstrap', 'POST'],
     ['/_host/archive', 'POST'], ['/_host/owner-grant', 'POST'], ['/_host/repo', 'POST'], ['/door/anthropic/v1/messages', 'POST'],
-    ['/aukora-messages/send', 'POST'], ['/_host/wake', 'POST'], ['/_host/aumlok/redeem/', 'POST'], ['/_host/aumlok/redeem?x=1', 'POST']]) {
+    ['/aukora-messages/send', 'POST'], ['/_host/wake', 'POST'], ['/_host/cell-run', 'POST'], ['/_host/aumlok/redeem/', 'POST'], ['/_host/aumlok/redeem?x=1', 'POST']]) {
     const result = await fx.call(path, { method, ...(method === 'POST' ? { body: {} } : {}) })
     assert.ok([401, 404].includes(result.response.status), `${method} ${path} answered ${String(result.response.status)}`)
     if (result.response.status === 404) assert.equal(path.startsWith(GUEST_DOOR.route), true)

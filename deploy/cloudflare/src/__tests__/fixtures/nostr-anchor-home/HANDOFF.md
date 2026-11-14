@@ -4,6 +4,6 @@ Synthetic test data for nostr-anchor-door.test.mjs. It describes no real node.
 
 | field | value |
 | --- | --- |
-| ballId | `e70d86bd8972997f283291ab5c69d589ec20283ef12045b4eedea8832d772cfd` |
+| ballId | `4f0b5750e8cfd79c3d3da00a835ff1e7a9b9df1769908a66d77be500d4fab398` |
 | epoch | **1** |
 | parentBallId | none |

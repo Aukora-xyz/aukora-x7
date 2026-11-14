@@ -18,6 +18,7 @@ import { MIRROR_WAKE_CLIENT_ID, retireClientSlot, retiredClientAnswer, slotRetir
 import { readTombstone } from './mirror-slot-tombstone.mjs' // ANYBROWSER hook
 import { noteWrote, recordHomePending, validHomeInput, worldStatus } from './world-home.mjs' // ANYBROWSER hook: when a browser last wrote; home pending
 import { threadCommit, threadLimits } from './thread-log.mjs' // ANYBROWSER hook: the thread log's MIRROR half
+import { threadSyncMode } from './thread-sync-mode.mjs' // THREAD_SYNC (off, pull, on), told to the client on the thread index only
 
 const BOOTSTRAP = 'mirror:bootstrap:v1'
 // JOIN hook (MUST 2b): the thread ops that write, and the named answer that rolls a committing transaction back.
@@ -412,13 +413,22 @@ async function enforceHistoryPrefixes(tx, before, after) {
   }
 }
 
-async function wakeFileText(tx, path, limit) {
+// ---- WAKE block begin ----
+/** A wake file's stored metadata, checked; null when the file is absent. */
+async function wakeFileMetadata(tx, path) {
   const id = await pathKey(path), metadata = await tx.get(ENTRY + id)
   if (metadata === undefined) return null
   if (!auraObject(metadata) || metadata.path !== path || metadata.kind !== 'file' || Object.hasOwn(metadata, 'b64')
     || !Number.isInteger(metadata.mode) || metadata.mode < 0 || metadata.mode > 0o777
     || !Number.isFinite(metadata.mtimeMs) || metadata.mtimeMs < 0) fail('MIRROR_WAKE_FILE_INVALID', 503)
   fileCharacters(metadata)
+  return { id, metadata }
+}
+
+async function wakeFileText(tx, path, limit) {
+  const file = await wakeFileMetadata(tx, path)
+  if (file === null) return null
+  const { id, metadata } = file
   if (metadata.bytes > limit) fail('MIRROR_WAKE_FILE_LIMIT', 413)
   let b64 = ''
   for (let index = 0; index < metadata.chunks; index++) b64 += await storedChunk(tx, id, metadata, index)
@@ -427,6 +437,65 @@ async function wakeFileText(tx, path, limit) {
   return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(binary, char => char.charCodeAt(0)))
 }
 
+/** The end marker of a PEM private key (also refused when its BEGIN line is present: cloudWakeTextSafe). */
+const WAKE_KEY_END = /-----END [A-Z ]*PRIVATE KEY/
+/** The largest continuity file the wake reads at all (it is read and screened whole); a larger one
+ * answers MIRROR_WAKE_FILE_LIMIT (413) before any chunk is read. Far under the isolate's memory at any file size. */
+export const WAKE_READ_FILE_BYTES = 1024 * 1024
+/** Whether text holds credential-shaped content (the wake's own screen plus a PEM END line). */
+const wakeTextRefused = (text, env) => !cloudWakeTextSafe(text, env) || WAKE_KEY_END.test(text)
+/**
+ * The byte offset of the START of the line where the first credential-shaped text ends, so she can
+ * find and rewrite it; a number only, never the text. Each screen only grows with a longer prefix, so a binary search
+ * over line ends finds the first refused prefix (about 20 screens for 1 MiB). Null when the text is clean.
+ */
+function wakeRefusedLineOffset(text, env) {
+  if (!wakeTextRefused(text, env)) return null
+  const ends = []
+  for (let index = text.indexOf('\n'); index !== -1; index = text.indexOf('\n', index + 1)) ends.push(index + 1)
+  if (ends.at(-1) !== text.length) ends.push(text.length)
+  let low = 0, high = ends.length - 1
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    if (wakeTextRefused(text.slice(0, ends[middle]), env)) high = middle
+    else low = middle + 1
+  }
+  const lineStart = low === 0 ? 0 : ends[low - 1]
+  return new TextEncoder().encode(text.slice(0, lineStart)).length
+}
+/** The refusal for credential-shaped text, with the line's byte offset (`atByte`). */
+const wakeTextRefusal = atByte => { throw Object.assign(new Error('MIRROR_WAKE_TEXT_REFUSED'), { code: 'MIRROR_WAKE_TEXT_REFUSED', status: 403, atByte }) }
+/**
+ * A continuity file within `limit` bytes answers whole (as before). A longer one answers its NEWEST
+ * whole lines that fit `limit` bytes: the cut is just after a newline, so the text is valid UTF-8 and no line is cut;
+ * a tail with no newline in it answers MIRROR_WAKE_FILE_LIMIT (413) as before.
+ * The WHOLE file is read and decoded (bounded by MIRROR_LIMITS.fileBytes) and returned as `screen`, so a
+ * credential anywhere in it (a `private_key: |` line far above bare base64 lines) refuses the read; only the tail is
+ * ever returned.
+ * @returns {Promise<null | { text: string, truncated: false } | { text: string, truncated: true, totalBytes: number, fromByte: number, screen: string }>}
+ */
+async function wakeFileTail(tx, path, limit) {
+  const file = await wakeFileMetadata(tx, path)
+  if (file === null) return null
+  const { id, metadata } = file
+  if (metadata.bytes <= limit) return { text: await wakeFileText(tx, path, limit), truncated: false }
+  if (metadata.bytes > WAKE_READ_FILE_BYTES) fail('MIRROR_WAKE_FILE_LIMIT', 413) // Before any chunk is read
+  let b64 = ''
+  for (let index = 0; index < metadata.chunks; index++) b64 += await storedChunk(tx, id, metadata, index)
+  const binary = atob(b64)
+  if (binary.length !== metadata.bytes) fail('MIRROR_WAKE_FILE_INVALID', 503)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index)
+  let screen
+  try { screen = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { fail('MIRROR_WAKE_FILE_INVALID', 503) }
+  // The first line start at or after the newest `limit` bytes begin (the byte before it is a newline).
+  const newline = bytes.indexOf(0x0a, bytes.length - limit - 1)
+  if (newline === -1 || newline === bytes.length - 1) fail('MIRROR_WAKE_FILE_LIMIT', 413)
+  const cut = newline + 1
+  return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(cut)), truncated: true, totalBytes: metadata.bytes, fromByte: cut, screen }
+}
+// ---- WAKE block end ----
+
 async function wakeFence(tx, seedId) {
   const bootstrap = await tx.get(BOOTSTRAP), fence = await tx.get(FENCE)
   if (bootstrap?.phase !== 'ready' || bootstrap.seedId !== seedId || !auraHash(seedId)) fail('BOOTSTRAP_REQUIRED', 503)
@@ -434,17 +503,23 @@ async function wakeFence(tx, seedId) {
   return fence
 }
 
-/** Read only finite continuity paths. Oversized, malformed, or credential-shaped files fail closed. */
+/** Read only finite continuity paths. Malformed or credential-shaped files fail closed.
+ * A file over CLOUD_WAKE_LIMITS.textBytes answers its newest whole lines (wakeFileTail) with
+ * `truncated: true, totalBytes, fromByte`; one within the bound answers as before. */
 export async function readMirrorWakeText(storage, { path, seedId, signal, env = {} } = {}) {
   if (!CLOUD_WAKE_PATHS.includes(path)) fail('MIRROR_WAKE_PATH_REFUSED', 403)
   return storage.transaction(async tx => {
     signal?.throwIfAborted()
     const fence = await wakeFence(tx, seedId)
-    const text = await wakeFileText(tx, path, CLOUD_WAKE_LIMITS.textBytes)
+    const file = await wakeFileTail(tx, path, CLOUD_WAKE_LIMITS.textBytes)
     signal?.throwIfAborted()
-    if (text === null) return { ok: false, code: 'MIRROR_WAKE_FILE_ABSENT' }
-    if (!cloudWakeTextSafe(text, env)) fail('MIRROR_WAKE_TEXT_REFUSED', 403)
-    return { ok: true, path, text, revision: fence.revision }
+    if (file === null) return { ok: false, code: 'MIRROR_WAKE_FILE_ABSENT' }
+    // The whole file is screened (a credential anywhere is refused, never half-returned); second review:
+    // the refusal names the byte offset of that line (`atByte`), never its text.
+    const whole = file.truncated ? file.screen : file.text
+    if (!cloudWakeTextSafe(file.text, env) || wakeTextRefused(whole, env)) wakeTextRefusal(wakeRefusedLineOffset(whole, env) ?? 0)
+    if (!file.truncated) return { ok: true, path, text: file.text, revision: fence.revision }
+    return { ok: true, path, text: file.text, revision: fence.revision, truncated: true, totalBytes: file.totalBytes, fromByte: file.fromByte }
   })
 }
 
@@ -1434,7 +1509,12 @@ export class MirrorDO {
           const input = await readBoundedBootstrapJson(request, 4096)
           if (path === '/_mirror/wake-read') {
             if (!auraObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'path')) return reply({ ok: false, code: 'MIRROR_WAKE_REQUEST_INVALID' }, 400)
-            return reply(await readMirrorWakeText(this.storage, { path: input.path, seedId, signal: request.signal, env: this.env }))
+            // A credential refusal answers its line's byte offset (a number) beside the code.
+            try { return reply(await readMirrorWakeText(this.storage, { path: input.path, seedId, signal: request.signal, env: this.env })) }
+            catch (error) {
+              if (error?.code === 'MIRROR_WAKE_TEXT_REFUSED' && Number.isSafeInteger(error.atByte)) return reply({ ok: false, code: error.code, atByte: error.atByte }, 403)
+              throw error
+            }
           }
           return reply(await appendMirrorWakeCheckpoint(this.storage, input, { seedId, signal: request.signal, mode: leaseMode(this.env) /* JOIN hook */, slots: slotRetireMode(this.env) /* JOIN hook */ }))
         }
@@ -1516,7 +1596,7 @@ export class MirrorDO {
               // JOIN hook: the index answers what full status no longer carries: the lease, her pending home, and the counts.
               if (body.op === 'index' && result.status === 200) { // JOIN hook
                 const world = await worldStatus(tx, { lease: await leaseSummary(tx, now), freeze: homeFreezeMode(this.env) }) // JOIN hook
-                return { status: 200, body: { ...result.body, home: world.home, lease: world.lease, world: { threads: world.threads, tailBytes: world.tailBytes, retired: world.retired } } } // JOIN hook
+                return { status: 200, body: { ...result.body, home: world.home, lease: world.lease, world: { threads: world.threads, tailBytes: world.tailBytes, retired: world.retired }, sync: threadSyncMode(this.env) } } // JOIN hook; THREAD-SYNC hook: `sync` from env, never from storage
               } // JOIN hook
               // JOIN hook (MUST 2b; job 5, M1): the last word before a write returns success, inside its transaction. Its
               // JOIN hook: LAST await reads the lease row (still this lease?). After it nothing awaits: the clock is read once

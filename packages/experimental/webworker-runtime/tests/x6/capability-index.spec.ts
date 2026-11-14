@@ -5,7 +5,10 @@
  */
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { buildCapabilityIndex, canonicalJson, createCapabilityIndex, lookupCapability, type CapabilitySource } from '../../src/x6/capability-index.ts'
+import {
+  buildCapabilityIndex, canonicalJson, createCapabilityIndex, lookupCapability, type CapabilitySource,
+} from '../../src/x6/capability-index.ts'
+import { THREAD_ACTIONS } from '../../src/x6/thread-reader.ts'
 import { FakeSocket, ORGAN_A2, headManifestIdCanon, mountE4, sha256 } from './e4-fixture.ts'
 
 afterEach(() => { FakeSocket.instances.length = 0; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -41,6 +44,49 @@ describe('capability index (unit)', () => {
     expect(Object.isFrozen(index.organs[0])).toBe(true)
     expect(() => { (index as { epoch: number }).epoch = 1 }).toThrow()
     expect(() => { (index.registeredTools as unknown as unknown[]).push({}) }).toThrow()
+  })
+
+  it('lists read and write actions and counts mixed tools without guessing from near-matching verbs', () => {
+    const index = buildCapabilityIndex({ ...source(169), tools: [
+      { name: 'x6_threads', parameters: { action: { type: 'string', enum: [...THREAD_ACTIONS] } } },
+      { name: 'mixed_tool', parameters: { action: { type: 'string', enum: ['status', 'delete'] } } },
+      { name: 'declared_reader', readOnly: true, mutating: false },
+      { name: 'declared_writer', readOnly: true, mutating: true },
+      { name: 'near_match', parameters: { action: { type: 'string', enum: ['tailor'] } } },
+    ] }, 1)
+    const byName = Object.fromEntries(index.registeredTools.map(tool => [tool.name, tool]))
+    expect(byName.x6_threads).toMatchObject({ readOnly: true, mutating: false,
+      actions: { read: ['list', 'search', 'tail'], write: [] } })
+    expect(byName.mixed_tool).toMatchObject({ readOnly: false, mutating: true,
+      actions: { read: ['status'], write: ['delete'] } })
+    expect(byName.declared_reader).toMatchObject({ readOnly: true, mutating: false })
+    expect(byName.declared_writer).toMatchObject({ readOnly: false, mutating: true })
+    expect(byName.declared_reader).not.toHaveProperty('actions')
+    expect(byName.near_match).toMatchObject({ readOnly: false, mutating: true, actions: { read: [], write: ['tailor'] } })
+    expect(index.counts).toEqual({ tools: 5, readOnlyTools: 2, mutatingTools: 3, organs: 2,
+      mixedTools: 1, readActions: 4, writeActions: 2 })
+    expect(Object.isFrozen(byName.x6_threads!.actions!.read)).toBe(true)
+    expect(Object.isFrozen(byName.mixed_tool!.actions!.write)).toBe(true)
+  })
+
+  it('uses reviewed tool rows, complete action enums and subAction enums as read evidence', () => {
+    const index = buildCapabilityIndex({ ...source(169), tools: [
+      { name: 'head_adopt' },
+      { name: 'x6_repo', parameters: { action: { type: 'string', enum: ['promotion_status', 'promote_staged'] } } },
+      { name: 'sub_tool', parameters: { type: 'object', properties: {
+        subAction: { type: 'string', enum: ['tail', 'write'] },
+      } } },
+      { name: 'long_read', readOnly: true, parameters: { action: {
+        type: 'string', enum: [...Array.from({ length: 24 }, () => 'status'), 'delete'],
+      } } },
+    ] }, 1)
+    const byName = Object.fromEntries(index.registeredTools.map(tool => [tool.name, tool]))
+    expect(byName.head_adopt).toMatchObject({ readOnly: true, mutating: false })
+    expect(byName.x6_repo).toMatchObject({ readOnly: false, mutating: true,
+      actions: { read: ['promotion_status'], write: ['promote_staged'] } })
+    expect(byName.sub_tool).toMatchObject({ readOnly: false, mutating: true, actions: { read: ['tail'], write: ['write'] } })
+    expect(byName.long_read).toMatchObject({ readOnly: false, mutating: true, actions: { read: ['status'], write: ['delete'] } })
+    expect(byName.long_read!.parameters[0]!.enum).toHaveLength(25)
   })
 
   it('digest is a stable SHA-256 over the canonical body: same state, same digest; any change, a new one', () => {
@@ -108,6 +154,8 @@ describe('capability index on the mounted runtime', () => {
     const names = before.registeredTools.map(item => item.name)
     expect(names).toContain('x6_capability_index')
     expect(names).toContain('x6_consult')
+    expect(before.registeredTools.find(item => item.name === 'x6_threads')).toMatchObject({ readOnly: true, mutating: false,
+      actions: { read: ['list', 'search', 'tail'], write: [] } })
     expect(before.registeredTools.find(item => item.name === 'x6_capability_index')).toMatchObject({ readOnly: true, mutating: false })
     expect(before.organs.map(organ => organ.id)).toEqual(Object.keys(m.head.ball.entries).sort())
     expect(before.organs.every(organ => /^[a-f0-9]{64}$/.test(organ.sha256 ?? '') && typeof organ.bytes === 'number')).toBe(true)

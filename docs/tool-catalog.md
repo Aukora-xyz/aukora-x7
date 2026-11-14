@@ -2039,7 +2039,7 @@ The subagent_oar tool selects among configured aliases for external providers. T
 
 ### `list_subagent_models`
 
-Inspect subagent models without changing the current Agent. No arguments: providers; `provider`: allowed models; `provider` + `model`: that model and its reasoning efforts. Inspect options here before selecting a child provider and model; use returned ids for delegation.
+Inspect subagent models without changing the current Agent. No arguments: providers; `provider`: allowed models; `provider` + `model`: that model and its reasoning efforts. Inspect options here before selecting a child provider and model; use returned ids for delegation. A row marked "unavailable" is switched on but cannot answer yet (its edge door has no key): pick another. Your own model is always listed and allowed, marked "your own model". Subagent model choices are fixed when a session starts: a Settings change applies to new sessions only.
 
 ```json
 {

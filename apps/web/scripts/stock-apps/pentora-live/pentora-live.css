@@ -1,0 +1,22 @@
+/* The living Pentora behind Auma Live's voice field (pentora-live/renderer.mjs); built into /app/aura-trace.css. */
+.alv-pentora-live {
+  pointer-events: none;
+}
+/* The canvas holds only the figure and its glow (renderer.mjs CANVAS): the renderer sets its size and its left/top so
+   it is centred exactly where the figure sat when the canvas filled the layer. Until the first measure it is empty. */
+.alv-pentora-live > canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  display: block;
+  pointer-events: none;
+}
+/* aumalive.js gives `.alv-aura-trace` `filter: blur(.2px) drop-shadow(...)` (and a grey one in canvas mode). On this
+   canvas the blur softens every crisp core, and the drop-shadow is a second full-field filter pass on a layer that
+   changes every frame, where the renderer already draws its own glow. Only the filter is lifted: the screen blend,
+   the opacity and the radial mask stay as the page sets them. */
+.alv-app .alv-aura-trace.alv-pentora-live {
+  filter: none;
+}

@@ -37,7 +37,7 @@ test('the picker chooses only among the providers it is handed, and reports pres
   assert.deepEqual(pickCloudModelProvider(env, ['anthropic']), { ok: false, code: 'PROVIDER_SECRET_NOT_CONFIGURED', tried: ['anthropic'] })
   assert.deepEqual(pickCloudModelProvider(env, ['nope']), { ok: false, code: 'PROVIDER_UNAVAILABLE' })
   const status = cloudModelDoorStatus(env)
-  assert.deepEqual(status, { anthropic: false, openrouter: true, deepseek: true, openai: false })
+  assert.deepEqual(status, { anthropic: false, openrouter: true, deepseek: true, openai: false, prime: false }) // The one new name
   assert.equal(leaks(status, OR_KEY), false)
 })
 
@@ -156,4 +156,41 @@ test('a request over the byte cap is refused before dispatch, and an aborted cal
   const cancelled = await callCloudModel({ env, provider: 'anthropic', messages: [{ role: 'user', content: 'x' }], signal: controller.signal, fetchImpl: t.fetchImpl })
   assert.equal(cancelled.code, 'PROVIDER_CALL_CANCELLED')
   assert.equal(t.calls.length, 0)
+})
+
+test('the door allows 32,000 output (was 8,192), 120 s (was 30 s) and a 256 KiB answer (was 64 KiB)', async context => {
+  assert.deepEqual([CLOUD_MODEL_DOOR_LIMITS.maxOutputTokens, CLOUD_MODEL_DOOR_LIMITS.timeoutMs, CLOUD_MODEL_DOOR_LIMITS.responseBytes], [32000, 120000, 256 * 1024])
+  const env = { ANTHROPIC_API_KEY: KEY }, msg = [{ role: 'user', content: 'x' }]
+  const reply = text => json({ content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: { output_tokens: 1 } })
+  // 32,000 is sent as asked; one more is held at 32,000.
+  for (const [asked, sent] of [[32000, 32000], [32001, 32000]]) {
+    const t = stub(reply('ok'))
+    assert.equal((await callCloudModel({ env, provider: 'anthropic', messages: msg, maxTokens: asked, fetchImpl: t.fetchImpl })).ok, true)
+    assert.equal(t.calls[0].body.max_tokens, sent)
+  }
+  // An answer of about 200 KiB (past the old 64 KiB) is read whole.
+  const long = 'y'.repeat(200 * 1024)
+  const answered = await callCloudModel({ env, provider: 'anthropic', messages: msg, fetchImpl: stub(reply(long)).fetchImpl })
+  assert.equal(answered.ok, true); assert.equal(answered.message.content, long)
+  // A provider still silent at 60 s (past the old 30 s) is waited for; at 120 s the call is cut (outcome unknown: it was sent).
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    for (const [wait, ok] of [[60000, true], [120001, false]]) {
+      const entered = Promise.withResolvers()
+      const slow = async (_url, init) => {
+        entered.resolve()
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, wait)
+          init.signal.addEventListener('abort', () => { clearTimeout(timer); reject(init.signal.reason) }, { once: true })
+        })
+        return reply('late')
+      }
+      const pending = callCloudModel({ env, provider: 'anthropic', messages: msg, fetchImpl: slow })
+      await entered.promise
+      context.mock.timers.tick(wait)
+      const out = await pending
+      if (ok) assert.equal(out.ok, true, JSON.stringify(out))
+      else assert.deepEqual(out, { ok: false, code: 'PROVIDER_OUTCOME_UNKNOWN', provider: 'anthropic' })
+    }
+  } finally { context.mock.timers.reset() }
 })

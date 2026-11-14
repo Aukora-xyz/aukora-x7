@@ -28,6 +28,7 @@ import {
   requestedAgentOptions,
 } from './model-selection.ts'
 import type { DelegationModelRequest } from './model-selection.ts'
+import { NEW_SESSIONS_ONLY } from './model-selection.ts'
 import { registerListSubagentModels } from './list-models.ts'
 import { SubagentPresetSelection, type PresetSelectionConfig, type PresetSelectionRequest } from './preset-selection.ts'
 import {
@@ -212,7 +213,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         + (subagentProvider.prepareContinuable !== undefined
           ? ' The child reports results with `send_message`; use `send_message` to steer it while running or continue its conversation after it finishes.'
           : ' The completion notice includes its final answer. This backend does not accept follow-up messages.')
-        + (modelSelectionEnabled ? selectionDescription : '')
+        + (modelSelectionEnabled ? `${selectionDescription} ${NEW_SESSIONS_ONLY}` : '')
         + (modelSelectionEnabled && subagentProvider.inheritsParentContext
           ? ' Changing the route can prevent provider-side reuse of the inherited conversation prefix.'
           : ''),

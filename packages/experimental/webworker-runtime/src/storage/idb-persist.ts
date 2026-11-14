@@ -448,9 +448,39 @@ export type WireEntry =
   | { readonly kind: 'dir'; readonly mode: number }
   | { readonly kind: 'gone' }
 
+/**
+ * What `attachIdbPersistence` learned while hydrating, kept so thread sync
+ * decides this page's role without opening a new IndexedDB transaction before her tree boots. Pure facts copied from
+ * values attach already read; nothing ever reads them back into a save, a queue or a mirror call.
+ */
+export interface HydrationFacts {
+  /** `local` on the Mac host's loopback transport; `cloud` everywhere else. */
+  readonly transport: 'local' | 'cloud'
+  /** Any stored row before this boot (the content revision alone counts only when it moved past 0). */
+  readonly storedRows: boolean
+  /** The stored mirror meta's `seq` at hydration; null when no meta row was stored. */
+  readonly seq: number | null
+  /** The stored mirror meta's client id (the id her cloud knows this browser by); null when none. */
+  readonly clientId: string | null
+  /** The stored meta's cloud base revision at hydration; null when none. */
+  readonly storedRevision: number | null
+  readonly queuedBatches: number
+  /** A cloud-reconciliation marker was stored (a save held back by a cloud hold). */
+  readonly reconciliation: boolean
+  /** Paths held back from her cloud at hydration: queued-batch paths, waiting journals and local removals. */
+  readonly heldPaths: number
+  /** What her cloud answered at THIS boot: `confirmed` (a fence or snapshot that matches or initializes this store),
+   *  `unreachable` (no answer), `diverged` (an answer this store's fence does not match), or `local` (no cloud). */
+  readonly cloud: 'confirmed' | 'unreachable' | 'diverged' | 'local'
+  /** The revision her cloud answered at this boot; null when it did not answer. */
+  readonly cloudRevision: number | null
+}
+
 export const persistence = {
   readOnly: false,
   durable: false,
+  /** The facts of the last attach (null before any attach, or with no IndexedDB). Read only. */
+  hydration: null as HydrationFacts | null,
   conflict: null as string | null,
   flush: async (): Promise<void> => { throw new Error('Persistence is not initialized') },
   upload: async (): Promise<void> => { throw new Error('Persistence is not initialized') },
@@ -775,6 +805,10 @@ export function deliveryRefusal(status: number, text: string): DeliveryRefusal {
   try { body = JSON.parse(text) } catch { /* the status decides */ }
   const field = (key: string): string | null => (isRecord(body) && typeof body[key] === 'string' && /^[A-Z0-9_]{1,64}$/.test(body[key]) ? body[key] : null)
   const code = field('code') ?? `HTTP_${String(status)}`
+  // The edge's reader-mark wall (deploy/cloudflare/src/reader-window.mjs) refuses a tab
+  // whose browser holds the mark, not this batch: an old-document tab under an edge that is on, while another tab's mark
+  // (or one left from an earlier on-period) is set. Retrying is right; it never becomes a sticky refusal.
+  if (code === 'READER_WINDOW') return { kind: 'transient', code }
   if (status === 409 || field('conflictCode') !== null) return { kind: 'fence', code: field('conflictCode') ?? code }
   if (status === 401) return { kind: 'signed-out', code }
   if (status === 408) return { kind: 'too-slow', code }
@@ -846,6 +880,7 @@ export interface AttachOptions {
 export async function attachIdbPersistence(
   vfs: MemoryVfs, roots: readonly string[], options: AttachOptions = {},
 ): Promise<() => Promise<void>> {
+  persistence.hydration = null
   if (typeof indexedDB === 'undefined') {
     persistence.durable = false
     return async () => {}
@@ -1009,9 +1044,11 @@ export async function attachIdbPersistence(
     if (fence.kind === 'fence') cloudSnapshot = fence.base
     else bootFailure = fence.reason
   }
+  let fenceKind: CloudFenceVerdict['kind'] | 'local' = 'local'
   if (!localTransport) {
     persistence.mirror.maxBatchEntries = CLOUD_MAX_ENTRIES
     const verdict = classifyCloudFence(hasDurableHistory, hydratedMeta, hydratedQueue, cloudSnapshot)
+    fenceKind = verdict.kind
     if (verdict.kind === 'unreachable') {
       if (hasDurableHistory) persistence.mirror.transient = unreachable(bootFailure ?? 'no answer')
       else {
@@ -1043,6 +1080,20 @@ export async function attachIdbPersistence(
     persistence.mirror.maxBatchEntries = MAX_BATCH_ENTRIES
     if (hydratedMeta?.cloudBase !== undefined) persistence.mirror.conflict = 'MIRROR_GLOBAL_FENCE_CONFLICT: cloud storage cannot publish through the local protocol'
   }
+  // Copies of values read above, for thread sync's role (no new transaction, no write, nothing read back).
+  persistence.hydration = Object.freeze({
+    transport: localTransport ? 'local' : 'cloud',
+    storedRows: hasDurableHistory,
+    seq: hydratedMeta !== undefined && Number.isSafeInteger(hydratedMeta.seq) ? hydratedMeta.seq : null,
+    clientId: hydratedMeta !== undefined && typeof hydratedMeta.clientId === 'string' ? hydratedMeta.clientId : null,
+    storedRevision: hydratedMeta?.cloudBase !== undefined && Number.isSafeInteger(hydratedMeta.cloudBase.revision)
+      ? hydratedMeta.cloudBase.revision : null,
+    queuedBatches: hydratedQueue.length,
+    reconciliation: hydratedReconciliation !== undefined,
+    heldPaths: pendingPaths.size + tombstoneRoots.size,
+    cloud: fenceKind === 'local' ? 'local' : fenceKind === 'unreachable' ? 'unreachable' : fenceKind === 'diverged' ? 'diverged' : 'confirmed',
+    cloudRevision: cloudSnapshot === null ? null : cloudSnapshot.revision,
+  } satisfies HydrationFacts)
   let initializeCloud = !localTransport && cloudSnapshot !== null && !hasDurableHistory
   if (mirrorEntries !== null && (mirrorEntries.length || mirrorResets.length || initializeCloud)) {
     const imported: Array<[string, Entry]> = []

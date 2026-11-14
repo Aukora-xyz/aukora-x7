@@ -58,6 +58,16 @@ export interface TunnelInitFrame {
    * announced it, so a newer worker never breaks an older page.
    */
   readonly features?: readonly string[]
+  /**
+   * A random id this page gives its worker (16 to 64 lowercase hex). Her worker puts it on every thread-sync
+   * message it broadcasts, so a page shows only its own worker's line (two tabs never show each other's).
+   */
+  readonly page?: string
+  /**
+   * `on` only when this page's boot document carried the switch as exactly `on` (client/reader-window.ts
+   * `servedThreadSync`). Absent (the switch unset, or an old document): the worker runs nothing of thread sync.
+   */
+  readonly threadSync?: 'on'
 }
 
 /** The page understands boot-phase frames (TunnelBootPhaseFrame). */
@@ -143,8 +153,9 @@ export interface TunnelStreamErrorFrame {
 
 /** Worker request to show one VFS text file in the page's read-only viewer; no reply follows. */
 /** The worker's boot steps, in order, as the page names them. */
-export type BootPhase = 'image' | 'storage' | 'plugins' | 'head' | 'serving'
-export const BOOT_PHASES: readonly BootPhase[] = Object.freeze(['image', 'storage', 'plugins', 'head', 'serving'])
+/** `threads`: a browser that only reads her pulls her threads from her cloud, between storage and plugins. */
+export type BootPhase = 'image' | 'storage' | 'threads' | 'plugins' | 'head' | 'serving'
+export const BOOT_PHASES: readonly BootPhase[] = Object.freeze(['image', 'storage', 'threads', 'plugins', 'head', 'serving'])
 
 /** The worker reached a boot step (or, for `image`, received more bytes of it): the page shows which step it is on. */
 export interface TunnelBootPhaseFrame {
@@ -152,6 +163,8 @@ export interface TunnelBootPhaseFrame {
   readonly phase: BootPhase
   /** Bytes received so far, while the seed image arrives. */
   readonly bytes?: number
+  /** For `threads`, how many of her threads are read so far, of how many (the boot page's "N of M"). */
+  readonly of?: readonly [done: number, total: number]
 }
 
 export interface TunnelViewTextFrame {

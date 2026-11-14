@@ -5,6 +5,12 @@ import type { LlmRuntime } from '@deepseek-ai/dsh-llm'
 import type { AgentOptions } from '@deepseek-ai/dsh-agent'
 import z from '@deepseek-ai/schemastery'
 
+/**
+ * The Host samples the model-selection setting when an Agent is created, so a Settings change reaches new sessions
+ * only. Said wherever a model meets the list, so an old thread is not read as broken.
+ */
+export const NEW_SESSIONS_ONLY = 'Subagent model choices are fixed when a session starts: a Settings change applies to new sessions only.'
+
 /** One exact child LLM route authorized by a user setting. */
 export interface AllowedModelRoute {
   /** Registered LLM provider id. */
@@ -130,8 +136,9 @@ export function requestedAgentOptions(
 /**
  * Enforce a settings-owned route list at the operation that creates the child.
  * Pure inheritance remains outside this policy because no model-facing choice
- * occurred; any explicit route or effort field must resolve to an allowed route.
- * @param policy - Session allowlist; omission permits only the current parent route.
+ * occurred; any explicit route or effort field must resolve to an allowed route:
+ * the current parent route, or one the Session policy lists.
+ * @param policy - Session allowlist added to the parent route; omission permits only the current parent route.
  * @param parentOptions - Current parent values that supply missing child values.
  * @param requested - Effective child options after request/config merging.
  * @param request - Model-facing selection fields from the tool call.
@@ -148,14 +155,16 @@ export function assertAllowedModelSelection(
   if (provider === undefined || model === undefined) {
     throw new Error('cannot select child LLM values without an effective provider and model')
   }
-  const allowed = policy === undefined
-    ? provider === parentOptions.provider && model === parentOptions.model
-    : policy.routes.some(route => route.provider === provider && route.model === model)
+  // The parent's own route is always selectable; a recorded policy adds routes to it and never takes it away (a main
+  // mind on a route outside the list keeps effort-only selection and naming its own route).
+  const allowed = (provider === parentOptions.provider && model === parentOptions.model)
+    || (policy?.routes.some(route => route.provider === provider && route.model === model) ?? false)
   if (allowed) return
   throw new Error(`child LLM route "${provider}/${model}" is not allowed for this Session`
     + (policy === undefined
       ? '; without a recorded model-selection policy, explicit selection (including reasoning_effort) is limited to the parent route'
-      : ''))
+      : '')
+    + `. Pick one of the routes this session allows (list_subagent_models lists them). ${NEW_SESSIONS_ONLY}`)
 }
 
 /**

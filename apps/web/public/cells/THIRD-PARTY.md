@@ -1,7 +1,7 @@
 # Third-party code inside the Wasm cells
 
 The `.wasm` files in this folder (and `../seed-library/pentora/pentora36.wasm`) are prebuilt. Their own sources are
-not in this repository, except `aura-focus.wat`. They contain object code of the third-party Rust crates below.
+not in this repository, except the hand-written `aura-focus.wat`, `cord-echo.wat`, `kyber-cpu.wat`, `menger-hive.wat`, `nucleus.wat`, `pentora-codec.wat`. They contain object code of the third-party Rust crates below.
 This list is generated from two things the compiler left inside each compiled file: crate paths (which carry a
 version) and the function names of the Wasm `name` section (which do not). The license column is the SPDX
 expression each crate declares on crates.io. The shared license texts are in
@@ -47,4 +47,4 @@ crate (it is not on crates.io) and is covered like the cells themselves: see `LI
 | `zeroize` | not visible | Apache-2.0 OR MIT | nostr-core |
 | Rust standard library (`alloc`, `core`, `std`) | not visible | MIT OR Apache-2.0 | 24 cells: aukora-kernel, aumlok-identity, aumlok-keys, aura-relay, gate-judge, goal-receipts, grant-ledger, kira-core, kira-membrane, kira-nostr, kira-resume, kira-store-policy, lane-contract, lane-judge, lane-profile, laya, nostr-core, organism-tools, pair-judge, prompt-assembly, risk-signature, seed-judge, skillsmith, spatial-layout |
 
-No crate path is visible in: `aura-focus.wasm` (built from the `.wat` source beside it), `pentora36.wasm`. For a file without visible paths and without source here, the toolchain and any embedded third-party code are unknown.
+No crate path is visible in: `aura-focus.wasm` (built from the `.wat` source beside it), `cord-echo.wasm` (built from the `.wat` source beside it), `kyber-cpu.wasm` (built from the `.wat` source beside it), `menger-hive.wasm` (built from the `.wat` source beside it), `nucleus.wasm` (built from the `.wat` source beside it), `pentora-codec.wasm` (built from the `.wat` source beside it), `pentora36.wasm`. For a file without visible paths and without source here, the toolchain and any embedded third-party code are unknown.

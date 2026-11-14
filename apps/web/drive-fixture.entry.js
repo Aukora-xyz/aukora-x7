@@ -8,7 +8,7 @@ import { createElement, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { DriveFixture, prepareFixture } from '../../packages/client/ui-layout/tests/drive-fixture/fixture.tsx'
 
-const { world, chat } = prepareFixture(window.location.search)
+const { world, chat, outward } = prepareFixture(window.location.search)
 const root = document.getElementById('drive-fixture-root')
 if (root === null) throw new Error('drive fixture: #drive-fixture-root is missing')
-createRoot(root).render(createElement(StrictMode, null, createElement(DriveFixture, { chat, world })))
+createRoot(root).render(createElement(StrictMode, null, createElement(DriveFixture, { chat, world, outward })))

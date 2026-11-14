@@ -587,7 +587,7 @@ test('slots: the longest-idle of three is retired with every row, and the real r
   assert.equal(after.clients.size, 255)
   assert.equal(after.clients.has(clientId(7)), false)
   assert.equal(planClientSlotRetire(after, { incomingClientId: NEW, now: NOW }), null, 'the table has room again')
-  // Rows deleted with NO tombstone (the c7c13d91 behaviour): the edge no longer knows this browser; 410 is all it can say.
+  // Rows deleted with NO tombstone (an earlier commit's behaviour): the edge no longer knows this browser; 410 is all it can say.
   // That 410 is said only under WRITER_LEASE=enforce and for a base of this lineage; the default mode leaves the
   // batch to publishMirror's own fence and sequence checks (main's retained 409), never a 410 today's browser would loop on.
   const queued = { clientId: clientId(7), seq: 4, cloudBase: { lineageId: fence.lineageId, revision: fence.revision } }

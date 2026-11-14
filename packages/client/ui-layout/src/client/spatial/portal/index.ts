@@ -30,7 +30,6 @@ import {
 } from './SovereigntySurface.tsx'
 import { createScheduleDoor, type ScheduleActiveEdit } from './sovereignty-panels.ts'
 import { StockAppFrames } from './StockAppFrames.tsx'
-import { ApprovalWaiting, type ApprovalWaitingInjected } from './ApprovalWaiting.tsx'
 import { NoticesMenu, NoticesSurface } from './NoticesSurface.tsx'
 import { NOTICES_SURFACE } from './notices.ts'
 import './spatial-layer.css'
@@ -65,7 +64,7 @@ const aumlokInjected = (): AumlokSurfaceInjected => ({
  * Register the predecessor's menus and surfaces into the Spatial root.
  * @param ctx - client root context.
  */
-export function installPortal(ctx: ClientContext, openSurface?: (id: string) => void): void {
+export function installPortal(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(AUMLOK_NS, { zh: aumlokZh, en: aumlokEn }), 'ui-layout: spatial aumlok dictionaries')
 
   ctx.slots.inject('shell.menu.apps', () => ctx.slots.register({ name: 'shell.menu.apps', id: 'aukora-apps' }, AukoraAppsMenu))
@@ -78,13 +77,8 @@ export function installPortal(ctx: ClientContext, openSurface?: (id: string) => 
 
   ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: 'aukora-stock-apps' }, StockAppFrames))
   ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: NOTICES_SURFACE }, NoticesSurface))
-  // Wave 4 (AC1): "Approval waiting" on the outer chrome, above every surface, while HEAD holds something for the passkey.
-  if (openSurface !== undefined) {
-    ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-      name: 'shell.overlay', id: 'aukora-approval-waiting',
-      inject: (): ApprovalWaitingInjected => ({ openSovereignty: () => { openSurface(SOVEREIGNTY_SURFACE) } }),
-    }, ApprovalWaiting))
-  }
+  // NOTHING FLOATS, PART TWO: what waits for the owner's fingerprint is a row in Notices, read by the frame
+  // (`useApprovalNoticeFeed`, AppFrame.tsx); nothing is registered over the surfaces for it ("Approval waiting" was, Wave 4).
   // The predecessor's real centre-Stage surfaces (Round 10): settings sections, Nostr Messages, Media, Identity. No popups.
   ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: 'aukora-settings-surfaces' }, SettingsSurfaces))
   ctx.slots.inject('shell.surface', () => ctx.slots.register({ name: 'shell.surface', id: 'aukora-messages' }, NostrMessagesSurface))

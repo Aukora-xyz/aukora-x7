@@ -18,6 +18,8 @@
  * LIVE ACTIVITY (SOURCE, activity.ts): the figure reacts to the real Session stores (turn running, a tool asking
  * approval, a question waiting, model steps and tool time closing, durable activity time). While any of that is
  * happening, or happened in the last 45 s, the header says WORKING · LIVE and the figure turns faster.
+ * FLOW: the shown Session's owner prompts, open turn and output feed the
+ * cores' three colours; the rings stay health. With no Session shown every core rests.
  * PENTORA36 (SOURCE, pentora-wasm.ts): the pinned Wasm module is fetched and run in this page the first time "How it
  * works" opens; its line there says verified, failed or not run, with the reason. It checks the module, not Auma.
  */
@@ -31,12 +33,14 @@ import { AURA_COPY, AURA_SURFACE, ORGAN_FACTS, absentHealth, type AuraHealthView
 import { PentoraFigure } from './PentoraFigure.tsx'
 import { EMPTY_LIVE, WORKING_WINDOW_MS, absorbSessions, type LivePulse, type LiveState, type SessionFacts } from './activity.ts'
 import { pentora36Once, type Pentora36Result, type Pentora36State } from './pentora-wasm.ts'
+import { EMPTY_FEED, absorbShown, type FlowFeed, type ShownFacts } from './flow.ts'
 import { asNumber, asRecord, asString } from '../x5/rpc.ts'
 import { isEditableTarget } from './escape.ts'
 import { LiveHead } from './LiveHead.tsx'
-import { NewBuildButton, sessionOf, type WorkReader } from '../work/WorkSurface.tsx'
+import { sessionOf, type WorkReader } from '../work/WorkSurface.tsx'
 import { useNewBuild } from '../work/autonomy.ts'
-import { useReloadNoticeFeed } from '../portal/notices.ts'
+import { HOST_RELEASE_WHAT, useReloadNoticeFeed } from '../portal/notices.ts'
+import { NewBuildLine } from '../portal/NoticesSurface.tsx'
 import { AuraStrip, useAura, usePentoraAxesRef, useReadoutAura } from '../../spatial-components.tsx'
 
 /** What the registration injects: the shared worker-file reader. */
@@ -114,6 +118,16 @@ function HowItWorks({ pentora36 }: { readonly pentora36: Pentora36Result | null 
         shakes loose when Auma does something that organ handles, then fades in seconds. The figure turns faster while she
         works: a turn is open, a request waits on you, or a Session changed in the last 45 seconds.
       </Lead>
+      <Lead>
+        <span data-aura-how="rings-and-cores">
+          Every dot has a ring and a core, and they never stand in for each other. The ring is evidence: grey is
+          undetermined, and every ring stays undetermined until a host serves a health snapshot. The core and the lines
+          that light up are the conversation&apos;s flow in the Session you have open: mint when your message opens a turn
+          (from the outside in), blue while she holds the turn, violet each time a step of her answer lands (from the
+          centre outward), and a faint blue when nothing is happening. Flow is never health: a coloured core says nothing
+          about whether a check passed.
+        </span>
+      </Lead>
       <Lead>Below, the pinned Pentora36 Wasm module runs in this page against its own fixtures: it checks the module, not Auma.</Lead>
       <Pentora36Line result={pentora36} />
       {/* NORTH-STAR §18.2 Binding UI Law: the self-check is said apart from health, which no host serves yet. */}
@@ -122,9 +136,34 @@ function HowItWorks({ pentora36 }: { readonly pentora36: Pentora36Result | null 
   )
 }
 
-type SessionsShape = Parameters<typeof sessionOf>[0] & {
+export type SessionsShape = Parameters<typeof sessionOf>[0] & {
   readonly byId: Readonly<Record<string, { readonly displayTitle?: string; readonly running?: boolean; readonly updatedAt?: number }>>
   readonly projectionsBySession?: unknown
+}
+
+/**
+ * THE FLOW'S THREE SIGNALS (flow.ts), read for the shown Session only, from what a root surface really holds:
+ *   running  its UI status `running` (or the list row's), the same fact `live.working` is built from;
+ *   prompts  its held `turnOutline` projection: the turns whose opening human prompt has landed (the outline tells the
+ *            owner's prompt from her answer; a steering message later in the same turn is not in it);
+ *   output   its held `sessionStats` projection: `decodeTokens` (her output units) and `llmMs`. Both grow when a model
+ *            step closes, not per streamed character: a root surface holds no streamed text.
+ * @returns the facts, or null when no Session is shown.
+ */
+export function shownFactsOf(id: string | undefined, sessions: SessionsShape, status: unknown): ShownFacts | null {
+  if (id === undefined) return null
+  const values = asRecord(asRecord(asRecord(sessions.projectionsBySession)[id]).values)
+  const stats = asRecord(values.sessionStats)
+  const outline = Array.isArray(values.turnOutline) ? values.turnOutline : null
+  const live = asRecord(status)
+  const row = sessions.byId[id]
+  return {
+    id,
+    running: typeof live.running === 'boolean' ? live.running : row?.running === true,
+    prompts: outline === null ? null : outline.filter(entry => (asString(asRecord(entry).prompt) ?? '') !== '').length,
+    output: asNumber(stats.decodeTokens),
+    modelMs: asNumber(stats.llmMs),
+  }
 }
 
 /** Read one Session's live facts from the list row, its held projections and its UI status. */
@@ -215,11 +254,13 @@ export function AuraPentoraSurface({
 }: AuraPentoraSurfaceProps) {
   const active = activeSurface === AURA_SURFACE
   const [howOpen, setHowOpen] = useState(false)
-  /** A newer runtime release the host selected (Round 13): one inline Reload button, never a popup. */
+  /** A newer runtime release the host selected (Round 13). */
   const newBuild = useNewBuild(active)
-  /** The edge's own build and her published head: the same Reload button, when the host selects nothing.
-   *  The same read also feeds the Notices launcher (portal/notices.ts): gold on the boot screen too. */
-  const reloadNotice = useReloadNoticeFeed(active)
+  /** The edge's own build and her published head, with the host's selection: each read once and published
+   *  into Notices (portal/notices.ts), gold on the boot screen too, whose row carries Reload. Notices:
+   *  The owner pointed at the gold "New build · Reload" beside the figure as a pop-up, so Aura draws no button: one quiet line
+   *  in its own flow while a newer build exists. */
+  const reloadNotice = useReloadNoticeFeed(active, {}, newBuild === null ? null : { release: newBuild, what: HOST_RELEASE_WHAT })
   const sessionId: SessionId | undefined = useSessions(sessionOf)
   // THE PERIPHERY (Round 14): the readout's recomputed aura.v1 (when it carries one) with her own files; only a
   // recomputed vector moves the figure.
@@ -251,6 +292,13 @@ export function AuraPentoraSurface({
     const timer = setInterval(() => { setClock(n => n + 1) }, Math.round(WORKING_WINDOW_MS / 9))
     return () => { clearInterval(timer) }
   }, [active, live.working])
+  // FLOW (flow.ts): the shown Session's facts, folded into the feed the figure reads every step.
+  const shownFacts = useMemo(
+    () => (sessionId === undefined ? null : shownFactsOf(String(sessionId), sessions, statuses.get(sessionId))),
+    [sessionId, sessions, statuses],
+  )
+  const flowRef = useRef<FlowFeed>(EMPTY_FEED)
+  useEffect(() => { flowRef.current = absorbShown(flowRef.current, shownFacts, Date.now()) }, [shownFacts])
   const pentora36 = usePentora36(active)
 
   useEffect(() => {
@@ -276,8 +324,8 @@ export function AuraPentoraSurface({
             : { text: AURA_COPY.readOnly, icon: 'lock', title: AURA_COPY.readOnlyTitle },
         ]}
       />
-      <NewBuildButton release={newBuild} notice={reloadNotice} />
-      <PentoraFigure view={FIGURE_HEALTH} active={active} focus={null} live={liveRef} aura={auraAxes} />
+      <NewBuildLine shown={newBuild !== null || reloadNotice !== null} />
+      <PentoraFigure view={FIGURE_HEALTH} active={active} focus={null} live={liveRef} aura={auraAxes} flow={flowRef} />
       {pentora36?.state === 'failed' ? <div data-pentora36-failed=""><Pentora36Line result={pentora36} /></div> : null}
       <AuraStrip read={aura} />
       <PortalGrid open={false}>

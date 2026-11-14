@@ -79,10 +79,18 @@ describe('dsh-tool-subagent model selection', () => {
       assertAllowedModelSelection(
         policy,
         parent,
-        { reasoningEffort: ReasoningEffortId('low') },
+        { provider: 'beta', model: 'parent-model' },
+        { provider: 'beta', model: 'parent-model' },
+      )
+    }).toThrow('beta/parent-model')
+    expect(() => {
+      assertAllowedModelSelection(
+        policy,
+        parent,
+        { provider: 'alpha', model: 'configured-model', reasoningEffort: ReasoningEffortId('low') },
         { reasoning_effort: 'low' },
       )
-    }).toThrow('alpha/parent-model')
+    }).toThrow('alpha/configured-model')
     expect(() => {
       assertAllowedModelSelection(
         policy,
@@ -91,6 +99,30 @@ describe('dsh-tool-subagent model selection', () => {
         { reasoning_effort: 'low' },
       )
     }).toThrow('without an effective provider and model')
+  })
+
+  // the subagent selection-11-13: a recorded policy adds routes to the parent's own; it never takes the parent route away.
+  // Without a policy the parent route was always selectable (effort alone, or naming it), so a session whose main mind
+  // runs on a route outside the list keeps that.
+  it('keeps the parent route selectable when a Session allowlist omits it', () => {
+    const policy = { routes: [{ provider: 'alpha', model: 'allowed-model' }] }
+    const parent = { provider: 'alpha', model: 'parent-model' }
+    expect(() => {
+      assertAllowedModelSelection(
+        policy,
+        parent,
+        { reasoningEffort: ReasoningEffortId('low') },
+        { reasoning_effort: 'low' },
+      )
+    }).not.toThrow()
+    expect(() => {
+      assertAllowedModelSelection(
+        policy,
+        parent,
+        { provider: 'alpha', model: 'parent-model', reasoningEffort: ReasoningEffortId('high') },
+        { provider: 'alpha', model: 'parent-model', reasoning_effort: 'high' },
+      )
+    }).not.toThrow()
   })
 
   it('leaves deployment or parent defaults outside the allowlist usable when the call selects nothing', async () => {

@@ -24,6 +24,41 @@ const BUNDLE_EXPECTED = join(SNAPSHOT_DIR, 'bundle.expected.md')
 const FIXTURE_PLUGINS = fileURLToPath(new URL('./fixtures/plugins', import.meta.url))
 const MODE = webSnapshotMode()
 
+/**
+ * The `subagent-model-selection-settings` row of a written settings document (a top-level YAML sequence the config
+ * editor writes in block style), or '' when the document has none.
+ * @param document - The profile settings document.
+ * @returns That row's text.
+ */
+function modelSelectionRow(document: string): string {
+  return document.split(/^(?=- )/m).find(row => row.startsWith('- id: subagent-model-selection-settings\n')) ?? ''
+}
+
+/**
+ * The row's `enabled` value.
+ * @param row - One settings row.
+ * @returns 'true', 'false', or undefined when the row stores none.
+ */
+function rowEnabled(row: string): string | undefined {
+  return /^ +enabled: (true|false)$/m.exec(row)?.[1]
+}
+
+/**
+ * The exact routes in the row's `allowedModels`, in order, as `provider/model` (other keys such as `edgeDoors` that
+ * also hold `provider:` lines are not read).
+ * @param row - One settings row.
+ * @returns The stored routes.
+ */
+function allowedRoutes(row: string): string[] {
+  const lines = row.split('\n')
+  const start = lines.findIndex(line => /^ +allowedModels:$/.test(line))
+  if (start < 0) return []
+  const indent = lines[start]!.search(/\S/)
+  const end = lines.findIndex((line, index) => index > start && line.trim() !== '' && line.search(/\S/) <= indent)
+  const block = lines.slice(start + 1, end < 0 ? undefined : end).join('\n')
+  return [...block.matchAll(/- provider: (\S+)\s+model: (\S+)/g)].map(match => `${match[1]}/${match[2]}`)
+}
+
 describe('web e2e: plugin configuration pages', () => {
   let scaffold: WebScaffold
   let browser: Browser
@@ -266,32 +301,58 @@ describe('web e2e: plugin configuration pages', () => {
     const panel = await openPlugins()
     await openPage(panel, '子智能体')
     const toggle = panel.getByRole('switch', { name: '允许 Agent 为子智能体选择模型' })
+    const save = panel.getByRole('button', { name: '保存', exact: true })
+    // The web bundle ships selection ON for new sessions (the subagent selection026-11-13), so the card starts switched on; the two
+    // halves run in the other order: switch it off and save, then on with one route changed and save. Each half
+    // proves its own save from the document it starts with: the first from a document without the row, the second
+    // by one exact route flipping.
+    await expect.poll(() => toggle.getAttribute('aria-checked'), { timeout: 5_000 }).toBe('true')
+    expect(modelSelectionRow(await settingsDocument())).toBe('')
+    const entry = [...scaffold.ctx.loader.entries()]
+      .find(row => row.options.id === 'subagent-model-selection-settings')!
+    const shipped = (entry.options.config as { allowedModels: { provider: string; model: string }[] }).allowedModels
+      .map(route => `${route.provider}/${route.model}`)
+    expect(shipped.length).toBeGreaterThan(1)
 
     await panel.getByLabel('最大递归深度', { exact: true }).fill('2')
     await toggle.click()
+    await save.click()
+    await expect.poll(async () => rowEnabled(modelSelectionRow(await settingsDocument())), { timeout: 10_000 })
+      .toBe('false')
+    // The Save label returns only after both namespace controllers settle.
+    await expect.poll(() => save.isDisabled(), { timeout: 10_000 }).toBe(true)
+    const off = await settingsDocument()
+    expect(off).toContain('id: subagent-model-selection-settings')
+    expect(off).toContain('maxDepth: 2')
+    expect(allowedRoutes(modelSelectionRow(off))).toEqual(shipped)
+    await expect.poll(() => toggle.getAttribute('aria-checked'), { timeout: 5_000 }).toBe('false')
+
+    await toggle.click()
     const models = panel.getByRole('group', { name: 'Agent 可选择的模型' })
     await models.waitFor({ timeout: 10_000 })
-    const firstModel = models.getByRole('checkbox').first()
-    await firstModel.check()
-    const save = panel.getByRole('button', { name: '保存', exact: true })
+    // Uncheck one selected route: a change only this save can write, since the first save stored every route.
+    // Pinned by index: a `checked: true` locator would move to the next selected box once this one is unchecked.
+    const boxes = models.getByRole('checkbox')
+    const index = (await boxes.evaluateAll(inputs => inputs.map(input => (input as HTMLInputElement).checked)))
+      .indexOf(true)
+    expect(index).toBeGreaterThanOrEqual(0)
+    const dropped = boxes.nth(index)
+    const droppedRoute = (await dropped.locator('xpath=ancestor::label[1]').locator('[class*="route"]').textContent())
+      ?.split(' · ').at(-1) ?? ''
+    expect(shipped).toContain(droppedRoute)
+    await dropped.uncheck()
+    expect(await dropped.isChecked()).toBe(false)
+    expect(allowedRoutes(modelSelectionRow(await settingsDocument()))).toContain(droppedRoute)
     await save.click()
 
-    // The Save label returns only after both namespace controllers settle.
+    await expect.poll(async () => rowEnabled(modelSelectionRow(await settingsDocument())), { timeout: 10_000 })
+      .toBe('true')
     await expect.poll(() => save.isDisabled(), { timeout: 10_000 }).toBe(true)
     const saved = await settingsDocument()
     expect(saved).toContain('id: subagent-model-selection-settings')
     expect(saved).toContain('maxDepth: 2')
-    expect(saved).toContain('enabled: true')
-    expect(saved).toContain('allowedModels:')
-    expect(saved).toContain('provider:')
-    expect(saved).toContain('model:')
+    expect(allowedRoutes(modelSelectionRow(saved))).toEqual(shipped.filter(route => route !== droppedRoute))
     await expect.poll(() => toggle.getAttribute('aria-checked'), { timeout: 5_000 }).toBe('true')
-
-    await toggle.click()
-    await save.click()
-    await expect.poll(async () => (await settingsDocument()).includes('enabled: false'), { timeout: 10_000 })
-      .toBe(true)
-    await expect.poll(() => toggle.getAttribute('aria-checked'), { timeout: 5_000 }).toBe('false')
     expect(tripwire.pageErrors).toEqual([])
   }, 60_000)
 

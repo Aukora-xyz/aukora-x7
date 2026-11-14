@@ -10,10 +10,21 @@
  */
 'use strict';
 
+function resolveHostOrigin(g) {
+  const loc = (g && typeof g === 'object') ? g.location : null;
+  if (!loc || typeof loc !== 'object') return null;
+  const origin = loc.origin;
+  if (typeof origin !== 'string' || origin.length === 0 || origin === 'null') return null;
+  return origin;
+}
+
 async function callHostEyes(payload) {
-  const origin = (typeof globalThis.location === 'object' && globalThis.location && globalThis.location.origin && globalThis.location.origin !== 'null')
-    ? globalThis.location.origin
-    : 'http://127.0.0.1:4610';
+  const origin = resolveHostOrigin(globalThis);
+  if (!origin) {
+    const err = new Error('EYES_ORIGIN_UNAVAILABLE: this context has no page origin (globalThis.location is absent or opaque). Refusing to dial a local mirror.');
+    err.code = 'EYES_ORIGIN_UNAVAILABLE';
+    throw err;
+  }
   const res = await fetch(`${origin}/_host/eyes`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -42,7 +53,7 @@ module.exports = {
       },
       url: {
         type: 'string',
-        description: 'Optional local page URL to inspect (defaults to http://127.0.0.1:4610/).',
+        description: "Optional page URL to inspect (defaults to this page's own origin).",
       },
       selector: {
         type: 'string',

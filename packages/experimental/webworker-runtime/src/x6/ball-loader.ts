@@ -6,10 +6,28 @@
  * plugin lifecycle over `hostCtx` and `WorkerModuleLoader`.
  */
 import { migrateRetentionSuiteAtBoot } from './retention-suite-boot.ts'
+import { reserveIdPromotionBudget } from './id-promotion-budget.ts'
 import { createHeadSocketTracker } from './head-socket-telemetry.ts'
 import type { MemoryVfs } from '../storage/memory.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
-import { workerCellHost } from './wasm-cells.ts'
+import {
+  CELL_PINS, cellCanonicalJson, FORGED_CELL_MAX_WASM_BYTES, FORGED_CELL_MAX_WAT_BYTES, FORGED_CELL_NAME, organCellHost, workerCellHost,
+  type CellHost,
+} from './wasm-cells.ts'
+import { cellHandoff } from './cell-handoff.ts' // x6_cell `handoff`, one run on two hosts
+// ---- CORDECHO block begin ----
+import { createCordShelf } from './cord-run.ts' // x6_cell `cord`: one ongoing Cord skill, here or at the edge (docs/auma/cord-echo.md)
+// ---- CORDECHO block end ----
+// ---- MENGERHIVE block begin ----
+import { mengerRun } from './menger-run.ts' // x6_cell `hive`: 80-site Menger & plain split-body co-simulation (docs/auma/menger-hive.md)
+// ---- MENGERHIVE block end ----
+// ---- KYBERSKILL block begin ----
+import {
+  artifactDigest, canonicalBytes, encodeSkill, KYBER_CELL, parseCanonical, readSkillProgram, sameCanonical, SKILL_MAX_CASES,
+  SKILL_MAX_PROGRAM_BYTES, SKILL_MAX_RECORD_BYTES, SKILL_NAME, SKILL_SCHEMA, skillCallInput, skillId, skillShapeProblem, verifySkill,
+  type SkillCase, type SkillRecord,
+} from './skill-record.ts'
+// ---- KYBERSKILL block end ----
 import { persistence } from '../storage/idb-persist.ts'
 import { createScionCompiler, type ScionInput } from './scion.ts'
 import {
@@ -28,12 +46,37 @@ import { createWakeLoop } from './wake-loop.ts'
 import { liveWriteSet } from './write-set-inventory.ts'
 import { createCapabilityIndex, type CapabilityIndex } from './capability-index.ts'
 import { hostFactsToolSpec } from './host-facts.ts'
+import { cellFactsOf, cloudflareDoorStatusOf, selfStateToolSpec, type SelfStateLoaded, type SelfStateRegistry } from './self-state.ts'
+import { selfCheckToolSpec } from './self-check.ts'
+import { createExecTool, execPost, EXEC_TOOL_DESCRIPTION, EXEC_TOOL_PARAMETERS, EXEC_TOOL_READS } from './exec-tool.ts'
+// ---- TOOLS block begin ----
+// x6_tools: her own read-only tools, proposed, qualified in a sealed cell and mounted under the owner's session (tool-registry.ts).
+import {
+  createToolRegistry, manifestReadOnly, mountedToolDescription, mountedToolParameters, TOOL_PREFIX, TOOL_READ_ACTIONS,
+  TOOLS_TOOL_DESCRIPTION, TOOLS_TOOL_PARAMETERS, type ToolManifest,
+} from './tool-registry.ts'
+// ---- TOOLS block end ----
+// The shadow consult before a promotion leaves; it decides nothing (nucleus-shadow.ts).
+import { createNucleusShadow, TOUCH_ID_TIER_REFLEX_MAX_BYTES, TOUCH_ID_TIER_REFLEX_PATH, type EdgeTierOutcome,
+  type NucleusConsultAnswer } from './nucleus-shadow.ts'
 import { idleFetch } from '../idle-fetch.ts'
+import { pentoraCarry } from './pentora-carry.ts' // x6_cell `carry` (a compute through the pinned pentora-codec cell)
+import { pentoraEpistemicTool } from './pentora-epistemic-tool.ts'
 import { inspectBrowserEstate, type EstateCordisView } from './browser-estate.ts'
-import { registerThreadTools } from './thread-reader.ts'
+import { readThreads, registerThreadTools, threadStoreView } from './thread-reader.ts'
+// ---- VOICEAWARE block begin ----
+import { renderVoiceMap, screenText, seenOf, sinceLines, VOICE_MAP_HANDOFF_CHARS, type VoiceMapFacts, type VoiceMapSeen, type VoiceMapTool } from './voice-map.ts'
+/** Gather budget for the voice map at mark time (no network on this path). */
+const VOICE_MAP_GATHER_MS = 300
+/** Her awareness file, beside HANDOFF.md in her home (read only if present). */
+const VOICE_AWARENESS_PATH = '/dsh/home/auma/AWARENESS.v1.json'
+// ---- VOICEAWARE block end ----
 // Voice hook: look-only voice (the guard every tool call passes, the voice-home mark, the session-only model route).
-import { createVoiceLookOnly, indexedDbVoiceMarkStore, VOICE_PROBE_REFUSAL, VOICE_PROBE_SESSION, type VoiceMarkStore } from './voice-marks.ts'
+import {
+  createVoiceLookOnly, indexedDbVoiceMarkStore, VOICE_PROBE_REFUSAL, VOICE_PROBE_SESSION, type VoiceLevel, type VoiceMarkStore,
+} from './voice-marks.ts'
 import { isSpokenUserMessage, VOICE_SPOKEN_ELSEWHERE_REFUSAL, type VoiceHomeRecord, type VoiceToolOrigin } from './voice-read-only.ts'
+import { threadSyncSelfStateField } from '../storage/thread-sync.ts'
 import {
   createTransitionContext,
   isTransitionKind,
@@ -76,14 +119,23 @@ export function repoBranchFormRefusal(args: unknown): string | null {
   if (['write', 'edit', 'commit'].includes(action) && pinned) {
     return `REPO_BRANCH_FORM_REFUSED: ${action} with expectedHeadSha is accepted only on ${AUMA_REPO_BRANCH_FORMS}; got ${named}`
   }
+  // ---- PATCH block begin ----
+  if (action === 'apply_patch') return `REPO_BRANCH_FORM_REFUSED: apply_patch is accepted only on ${AUMA_REPO_BRANCH_FORMS}; got ${named}`
+  // ---- PATCH block end ----
   return null
 }
 /** Tool executions in flight in this worker; a running turn is never interrupted by an autonomous wake step. */
 let toolsInFlight = 0
+/** Mirrors the edge (cloud-brokers.mjs CLOUD_REPO_BRANCH_LIMITS, CLOUD_REPO_READ_LIMITS). the raised limits:
+ * a private commit or draft holds 64 files and 4 MiB (were 16 and 1 MiB); the request bound moved in step to 3x plus
+ * 32 KiB (was 6x of 1 MiB), under the edge's 16 MiB; a ranged read's length goes to 2 MiB (was 512 KiB). One file stays
+ * 512 KiB: the edge reads files back through GitHub's contents API, which carries content only up to 1 MB. */
 const REPO_SOURCE_FILE_BYTES = 512 * 1024
-const REPO_PRIVATE_COMMIT_BYTES = 1024 * 1024
-const REPO_REQUEST_BYTES = 6 * REPO_PRIVATE_COMMIT_BYTES + 32 * 1024
+const REPO_PRIVATE_COMMIT_BYTES = 4 * 1024 * 1024
+const REPO_PRIVATE_COMMIT_FILES = 64
+const REPO_REQUEST_BYTES = 3 * REPO_PRIVATE_COMMIT_BYTES + 32 * 1024
 const REPO_RESPONSE_BYTES = 8 * 1024 * 1024
+const REPO_RANGE_LENGTH = 2 * 1024 * 1024
 
 /** Model arguments cannot carry the owner's authentication or approval material. */
 function refuseBrokerAuthorityInputs(args: Record<string, unknown>): void {
@@ -495,10 +547,47 @@ export function classifyActionIrreversibility(action: string | Record<string, un
   if (name === 'x6-repo' && operation === 'compare-files') return 0
   // x6_threads (thread-reader.ts) only reads; its action is required, so the name list below never sees its name.
   if (name === 'x6-threads' && ['list', 'tail', 'search'].includes(operation)) return 0
+  // x6_cell `journal` only reads this session's in-memory cell-call journal.
+  if (name === 'x6-cell' && operation === 'journal') return 0
+  // `forged` lists her kept cells and `run-forged` computes like `compute`; `forge` and `forget` write her
+  // home and fall through to the reversible class (1) below, like any other write.
+  if (name === 'x6-cell' && (operation === 'forged' || operation === 'run-forged')) return 0
+  // `handoff` computes like `compute` (two local cell calls and one owner-only edge computation that
+  // reads and writes no storage); it writes nothing anywhere.
+  if (name === 'x6-cell' && operation === 'handoff') return 0
+  // ---- CORDECHO block begin ----
+  // x6_cell `cord`: `status` only reads; `start` and `feed` write her own store (/dsh/home/cord/, like x6_skill keep): reversible class.
+  if (name === 'x6-cell' && operation === 'cord') return input.step === 'status' && input.promote !== true ? 0 : 1
+  // ---- CORDECHO block end ----
+  // ---- KYBERSKILL block begin ----
+  // x6_skill `check` runs a skill's cases again through its cell (a compute, like x6_cell compute); `list` and `run` are
+  // reads by the verb list below; `keep` and `forget` write only her home and fall through to the reversible class (1).
+  if (name === 'x6-skill' && operation === 'check') return 0
+  // ---- KYBERSKILL block end ----
+  // `carry` reads two public same-origin files and runs one pinned cell twice; it writes nothing (compute).
+  if (name === 'x6-cell' && operation === 'carry') return 0
+  // PENTOBS: bounded evidence computation on the caller's readings; no cell host or authority effects.
+  if (name === 'x6-cell' && operation === 'observe') return 0
+  // ---- MENGERHIVE block begin ----
+  // x6_cell `hive` runs local menger-hive calls and stateless owner-only edge computations; it writes nothing anywhere.
+  if (name === 'x6-cell' && operation === 'hive') return 0
+  // ---- MENGERHIVE block end ----
   if (name === 'x6-repo' && operation === 'draft-discard') return 1
   if (['x6-facts', 'ball-status', 'self-facts', 'ball-put', 'pearl-put', 'compile-organ', 'trial-candidate', 'trial-retention-candidate', 'stage-head-promotion',
-    'stage-organ-promotion', 'x6-browser-estate'].includes(operation || name)
+    'stage-organ-promotion', 'x6-browser-estate', 'x6-voice-status'].includes(operation || name)
     && input.promote !== true) return 0
+  // x6_self_check only reads (its probes are reads; it writes, stages and approves nothing).
+  if (name === 'x6-self-check' && !operation && input.promote !== true) return 0
+  // x6_exec `status`, `logs`, `list`, `artifacts` read; `run` spends runner minutes and runs code and `cancel`
+  // stops a run, so neither is a read (the generic list below would call `run` one); it writes nothing in her home.
+  if (name === 'x6-exec') return EXEC_TOOL_READS.includes(operation) && input.promote !== true ? 0 : 1
+  // ---- TOOLS block begin ----
+  // x6_tools `list` reads her tool store and `qualify` runs cases through a sealed cell (a compute); `propose`, `mount` and
+  // `unmount` write only /dsh/home/tools/ (reversible class 1). A mounted `x6t_<name>` tool is T1: every action a read
+  // through a zero-import cell (tool-registry.ts refuses any other manifest), so every call of it is a read.
+  if (name === 'x6-tools') return TOOL_READ_ACTIONS.includes(operation) && input.promote !== true ? 0 : 1
+  if (name.startsWith(TOOL_PREFIX.replace(/_/g, '-')) && input.promote !== true) return 0
+  // ---- TOOLS block end ----
   if (['status', 'read', 'list', 'inspect', 'diff', 'log', 'verify', 'challenge', 'trial', 'draft', 'compute', 'attest', 'run', 'compile-and-run', 'fetch', 'search', 'prompt-list', 'config-list',
     'selftest', 'tree', 'diagnostics', 'bytes', 'state-diff', 'versions', 'promotion-status', 'dag-verify', 'dag-lineage', 'recall', 'stats', 'observe'].includes(operation)) return 0
   if ((name === 'seed-receipts' && ['append', 'checkpoint'].includes(operation))
@@ -513,9 +602,20 @@ export function classifyActionIrreversibility(action: string | Record<string, un
   // GitHub through the host broker (Round 35): reads are reads; of writes, only an issue or an issue comment on this one
   // repository is reversible-class (the broker checks its text for secrets). Anything else, and the raw gh CLI, stays owner-only.
   if (name === 'x6-github' && operation === 'api') return githubApiClass(input)
+  // Her Cloudflare door. A read (GET, or POST /graphql) is 0; every other `api` call is 1 here, and the edge
+  // decides what needs the owner's passkey (deploy/cloudflare/src/cloudflare-door.mjs): it answers CLASS3_WEBAUTHN_REQUIRED,
+  // which this tool stages for his card. `wrangler` and any other x6_cloudflare action stay 3 (owner-only) below.
+  if (name === 'x6-cloudflare' && operation === 'api') return cloudflareApiClass(input)
+  // Her Linear door. A read is 0; every other action is 1 here, and the edge decides what needs the owner's
+  // passkey (deploy/cloudflare/src/linear-door.mjs: the core asks at every level, every write asks at `guarded`).
+  if (name === 'x6-linear') return LINEAR_READ_ACTIONS.includes(operation.replace(/-/g, '_')) ? 0 : 1
+  // ---- PATCH block begin ----
+  // apply_patch on her own branch is her `commit` (one commit through the same fence): the reversible class.
+  if (name === 'x6-repo' && repoSandboxBranch(input.branch) && operation === 'apply-patch') return 1
+  // ---- PATCH block end ----
   // Private source revisions are reversible even when a filename describes receipt/history code.
   if (name === 'x6-repo' && repoSandboxBranch(input.branch)
-    && ['branch-create', 'branch-delete', 'write', 'edit', 'commit', 'stage-proposal'].includes(operation)) return 1
+    && ['branch-create', 'branch-delete', 'write', 'edit', 'commit', 'stage-proposal', 'withdraw-proposal'].includes(operation)) return 1
   if (/(?:^|:|[-_])(?:send|publish|spend|pay|purchase|confirm|grant|mint|outbox-flush|push)(?:$|:|[-_])/.test(label)
     || name === 'x6-github' || name === 'x6-cloudflare' || (name === 'x6-repo' && operation === 'exec')) return 3
   const repoPath = actionText(input.path)
@@ -567,6 +667,706 @@ function githubApiClass(input: Record<string, unknown>): 0 | 1 | 3 {
     && (body.body === undefined || githubTextSafe(body.body, 65_536)) ? 1 : 3
 }
 
+/** What she is told when the edge holds a Cloudflare write without saying why (nothing is staged then: his
+ * card shows a Cloudflare request only with the reason it needs his fingerprint). */
+const CLOUDFLARE_UNSTAGED_NEXT = 'Nothing was sent and nothing was staged: this write needs the owner\'s fingerprint on the exact request, '
+  + 'and the edge did not say why, so his card cannot show it. Tell the owner in words what you want to change on Cloudflare and why.'
+
+/** The edge's `protection` on a held Cloudflare write, kept only in the shapes cloudflare-door.mjs gives
+ *: `apiFamily` only with `account-wide-unclassified`; `also` (when present) 1 to 8 pairs of exactly a
+ * family and a reason, sorted by family then reason, without duplicates and without the primary pair. Any other `also`
+ * refuses the whole protection (nothing is staged). */
+function cloudflareProtection(value: unknown): Record<string, unknown> | null {
+  const families = ['P1', 'P2', 'P3', 'P4', 'account-wide-unclassified'], reason = /^[a-z-]{1,40}$/
+  if (!record(value) || typeof value.family !== 'string' || typeof value.reason !== 'string') return null
+  if (!families.includes(value.family) || !reason.test(value.reason)) return null
+  const apiFamily = value.family === 'account-wide-unclassified' && typeof value.apiFamily === 'string'
+    && /^[a-z0-9._~@:-]{1,64}(?:\/[a-z0-9._~@:-]{1,64})?$/.test(value.apiFamily) ? value.apiFamily : null
+  let also: Array<{ family: string; reason: string }> | null = null
+  if (value.also !== undefined) {
+    if (!Array.isArray(value.also) || value.also.length < 1 || value.also.length > 8) return null
+    also = []
+    for (const item of value.also as unknown[]) {
+      if (!record(item) || Object.keys(item).length !== 2 || typeof item.family !== 'string' || typeof item.reason !== 'string') return null
+      if (!families.includes(item.family) || !reason.test(item.reason)) return null
+      if (item.family === value.family && item.reason === value.reason) return null
+      const last = also.at(-1)
+      const unsorted = last !== undefined
+        && (last.family > item.family || (last.family === item.family && last.reason >= item.reason))
+      if (unsorted) return null
+      also.push({ family: item.family, reason: item.reason })
+    }
+  }
+  return { family: value.family, reason: value.reason,
+    ...(apiFamily !== null ? { apiFamily } : {}), ...(also !== null ? { also } : {}) }
+}
+
+/** Her Linear door's reads (linear-door.mjs LINEAR_READS; linear-door.spec.ts keeps the two equal). */
+export const LINEAR_READ_ACTIONS: readonly string[] = Object.freeze(['status', 'teams', 'projects', 'issue', 'issues', 'search', 'comments', 'documents',
+  'document', 'labels', 'states', 'users'])
+/** Her Linear door's core, the writes the owner's card reads (linear-door.mjs LINEAR_CORE, plus `issue_update` as
+ * a move to another team; linear-door.spec.ts keeps the two equal, outward-linear.client.spec.ts the card's). */
+export const LINEAR_CORE_ACTIONS: readonly string[] = Object.freeze(['issue_archive', 'issue_delete', 'document_delete', 'project_archive',
+  'project_delete', 'team_delete', 'project_settings', 'team_settings', 'team_member_add', 'team_member_remove'])
+/** Whether a held Linear write is one his card shows: the core, or `issue_update` moving an issue to another team. */
+function linearCoreWrite(args: Record<string, unknown>): boolean {
+  return LINEAR_CORE_ACTIONS.includes(actionText(args.action)) || (args.action === 'issue_update' && args.teamId !== undefined)
+}
+/** What she is told when the edge holds an ordinary Linear write (only at level `guarded`). Nothing is staged:
+ * The owner's card (outward-class3.ts parseStagedOutward) shows only the core, and a slot it cannot read would only sit in
+ * Sovereignty as "a staged request this page cannot read" and block his Cloudflare card behind it. */
+export const LINEAR_UNSTAGED_NEXT = 'Nothing was sent and nothing was staged: at this level every Linear write needs the owner\'s fingerprint, '
+  + 'and his card shows only the ones that always do (archive, delete, settings, members, a move to another team). Tell the owner in '
+  + 'words what you want to change in Linear and why, and stop.'
+/** What any staged request already waiting in the one slot is, in words, or null (a Linear write
+ * never takes the slot from a request waiting for the owner). */
+function waitingForLinear(text: string): string | null {
+  let value: unknown
+  try { value = JSON.parse(text) } catch { return null }
+  if (!record(value) || !record(value.body) || typeof value.tool !== 'string') return null
+  if (value.tool === 'x6_cloudflare') return 'a Cloudflare request'
+  return waitingOutward(text)
+}
+
+/** The GitHub, repo or Linear request already waiting in the one staged slot, in words, or null. */
+function waitingOutward(text: string): string | null {
+  let value: unknown
+  try { value = JSON.parse(text) } catch { return null }
+  if (!record(value) || !record(value.body)) return null
+  const short = (item: unknown): string => (typeof item === 'string' ? item.slice(0, 120) : '')
+  if (value.tool === 'x6_github') return `a GitHub request (POST ${short(value.body.endpoint)})`
+  if (value.tool === 'x6_repo') return `a repository change (${short(value.body.action)} ${short(value.body.path) || 'several files'})`
+  if (value.tool === 'x6_linear') return `a Linear request (${short(value.body.action)})`
+  return null
+}
+
+/** Class of one `x6_cloudflare` `api` call: 0 for a read (GET, or POST /graphql), 1 for anything else (the
+ * edge classifies it and asks for the owner's passkey where it must). */
+function cloudflareApiClass(input: Record<string, unknown>): 0 | 1 {
+  const method = actionText(input.method).trim().toUpperCase()
+  return method === 'GET' || (method === 'POST' && actionText(input.path).trim().toLowerCase() === '/graphql') ? 0 : 1
+}
+
+// ---- FORGE block begin ----
+/**
+ * The cells she forges and keeps. Content-addressed by the SHA-256 of the metered Wasm bytes the cell host
+ * admitted: `<sha256>.wasm` (those bytes), `<sha256>.wat` (her source text as she gave it) and `<sha256>.json` (the
+ * manifest, the cell ABI's canonical JSON, written last: a cell is kept once its manifest is there). In her home beside
+ * the organ store (`/dsh/home/organs/<sha256>.js`), listed in RUNTIME_WRITE_SET as `forged-cell-store`. Never pinned,
+ * not in her head, not in her capsule record. forge: every run reads the kept WAT and builds it again through the
+ * pinned compiler; only those fresh bytes run, and only when they hash to the kept address (wasm-cells.ts runForged).
+ */
+export const FORGED_CELLS_DIR = '/dsh/home/cells/forged'
+export const FORGED_CELL_SCHEMA = 'aukora.forged-cell.v0'
+/** Cells she may keep at once; one more is FORGE_FULL until she forgets one (was 32). */
+export const FORGED_CELLS_MAX = 128
+export interface ForgedCellManifest {
+  readonly schema: typeof FORGED_CELL_SCHEMA
+  readonly name: string
+  readonly sha256: string
+  readonly bytes: number
+  readonly watSha256: string
+  readonly memoryPages: number
+  readonly forgedAt: number
+  readonly skillsmith: string
+}
+const FORGED_SHA = /^[a-f0-9]{64}$/
+const FORGED_FILE = /^([a-f0-9]{64})\.(wasm|wat|json)$/
+const forgedPathOf = (sha: string, ext: 'wasm' | 'wat' | 'json'): string => `${FORGED_CELLS_DIR}/${sha}.${ext}`
+const forgedCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0
+
+/** One kept manifest, or null when it is absent, not canonical, or not the cell its file name says. */
+function readForgedManifest(vfs: MemoryVfs, sha: string): ForgedCellManifest | null {
+  try {
+    const text = vfs.readFileSync(forgedPathOf(sha, 'json'), 'utf8')
+    if (typeof text !== 'string' || text.length > 4096) return null
+    const value: unknown = JSON.parse(text)
+    if (!record(value) || value.schema !== FORGED_CELL_SCHEMA || typeof value.name !== 'string' || !FORGED_CELL_NAME.test(value.name)
+      || value.sha256 !== sha || !forgedCount(value.bytes) || typeof value.watSha256 !== 'string' || !FORGED_SHA.test(value.watSha256)
+      || !forgedCount(value.memoryPages) || !forgedCount(value.forgedAt) || typeof value.skillsmith !== 'string' || !FORGED_SHA.test(value.skillsmith)
+      || Object.keys(value).length !== 8 || cellCanonicalJson(value) !== text) return null
+    return value as unknown as ForgedCellManifest
+  } catch { return null }
+}
+
+/**
+ * What her forged-cell store holds: every readable manifest (newest first), the SHA-256 of any entry whose manifest
+ * cannot be read (it still holds a slot; `forget` it by its SHA-256), and the slots taken. Reads only.
+ */
+export function listForgedCells(vfs: MemoryVfs): { cells: ForgedCellManifest[]; unreadable: string[]; occupied: Set<string> } {
+  const occupied = new Set<string>()
+  try {
+    if (vfs.existsSync(FORGED_CELLS_DIR)) {
+      for (const entry of vfs.readdirSync(FORGED_CELLS_DIR)) {
+        const match = FORGED_FILE.exec(String(entry))
+        if (match?.[1]) occupied.add(match[1])
+      }
+    }
+  } catch { /* An unreadable directory holds nothing she can run. */ }
+  const cells: ForgedCellManifest[] = [], unreadable: string[] = []
+  for (const sha of [...occupied].sort()) {
+    const manifest = readForgedManifest(vfs, sha)
+    if (manifest) cells.push(manifest)
+    else unreadable.push(sha)
+  }
+  cells.sort((a, b) => b.forgedAt - a.forgedAt || (a.sha256 < b.sha256 ? -1 : a.sha256 > b.sha256 ? 1 : 0))
+  return { cells, unreadable, occupied }
+}
+
+/** The kept cell a reference names: its name, or its SHA-256. */
+function resolveForgedCell(vfs: MemoryVfs, ref: unknown): ForgedCellManifest | null {
+  if (typeof ref !== 'string') return null
+  const { cells } = listForgedCells(vfs)
+  return cells.find(cell => FORGED_SHA.test(ref) ? cell.sha256 === ref : cell.name === ref) ?? null
+}
+
+/**
+ * The SHA-256 of the kept entry a reference names when it names no readable cell but an entry whose manifest
+ * is invalid (not the canonical bytes of the closed shape, or not the cell its file name says): by its SHA-256, or by the
+ * `name` its JSON claims. Null otherwise. Reads only.
+ */
+function invalidForgedManifestNamed(vfs: MemoryVfs, ref: unknown): string | null {
+  if (typeof ref !== 'string') return null
+  const { unreadable } = listForgedCells(vfs)
+  if (FORGED_SHA.test(ref)) return unreadable.includes(ref) ? ref : null
+  return unreadable.find((sha) => {
+    try {
+      const text = vfs.readFileSync(forgedPathOf(sha, 'json'), 'utf8')
+      if (typeof text !== 'string' || text.length > 4096) return false
+      const value: unknown = JSON.parse(text)
+      return record(value) && value.name === ref
+    } catch { return false }
+  }) ?? null
+}
+
+/** The kept WAT text, or null when it is missing, unreadable, not text, or over the byte cap (checked before reading). */
+function readForgedSource(vfs: MemoryVfs, sha: string): string | null {
+  try {
+    const path = forgedPathOf(sha, 'wat')
+    if (vfs.statSync(path).size > FORGED_CELL_MAX_WAT_BYTES) return null
+    const text = vfs.readFileSync(path, 'utf8')
+    return typeof text === 'string' ? text : null
+  } catch { return null }
+}
+
+/** Whether a kept cell's WAT is the source its manifest names (a hash of the WAT file only; no build). */
+function forgedSourceState(vfs: MemoryVfs, cell: ForgedCellManifest): 'kept' | 'missing' | 'changed' {
+  const text = readForgedSource(vfs, cell.sha256)
+  if (text === null) return vfs.existsSync(forgedPathOf(cell.sha256, 'wat')) ? 'changed' : 'missing'
+  return sha256HexSync(text) === cell.watSha256 ? 'kept' : 'changed'
+}
+
+/** Remove one kept cell's three files (whichever exist). */
+function removeForgedCell(vfs: MemoryVfs, sha: string): void {
+  for (const ext of ['json', 'wasm', 'wat'] as const) {
+    const forgedPath = forgedPathOf(sha, ext)
+    if (vfs.existsSync(forgedPath)) vfs.unlinkSync(forgedPath)
+  }
+}
+
+/**
+ * `x6_cell forge`: compile and admit through the cell host (the same skillsmith path and admission as compile_and_run),
+ * then keep the admitted bytes, her WAT and the manifest. Caps and closed codes: FORGE_NAME_INVALID, FORGE_NAME_PINNED,
+ * FORGE_WAT_LIMIT (128 KiB), FORGE_WASM_LIMIT (64 KiB), FORGE_FULL (128 kept), FORGE_NAME_TAKEN (unless `replace: true`);
+ * the same bytes again answer the kept record with `kept: "already"`.
+ */
+async function forgeAndKeep(vfs: MemoryVfs, cells: CellHost, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const name = typeof args.name === 'string' ? args.name : ''
+  const wat = typeof args.wat === 'string' ? args.wat : ''
+  const built = await cells.forge({ wat, name }, 'x6_cell')
+  if (!built.ok) return { ...built }
+  // Synchronous from here to the last write: no other call can take a slot or a name in between.
+  const { cells: kept, occupied } = listForgedCells(vfs)
+  const watSha256 = sha256HexSync(wat)
+  const same = kept.find(cell => cell.sha256 === built.sha256)
+  // The same bytes are kept "already" only when that entry is runnable now: the same compiler pin and the
+  // same source, still on disk. A cell kept under an older compiler (or with its WAT changed) is a prior entry to replace.
+  if (same && same.skillsmith === built.skillsmith && same.watSha256 === watSha256 && forgedSourceState(vfs, same) === 'kept') {
+    return { ok: true, kept: 'already', cell: same }
+  }
+  const holder = kept.find(cell => cell.name === built.name && cell.sha256 !== built.sha256) ?? same
+  if (holder && args.replace !== true) {
+    return { ok: false, code: 'FORGE_NAME_TAKEN', name: holder.name, sha256: holder.sha256,
+      next: 'forget it first, choose another name, or forge again with replace: true' }
+  }
+  if (!holder && !occupied.has(built.sha256) && occupied.size >= FORGED_CELLS_MAX) {
+    return { ok: false, code: 'FORGE_FULL', count: occupied.size, max: FORGED_CELLS_MAX, next: 'forget one kept cell first' }
+  }
+  const manifest: ForgedCellManifest = { schema: FORGED_CELL_SCHEMA, name: built.name, sha256: built.sha256, bytes: built.wasm.byteLength,
+    watSha256, memoryPages: built.memoryPages, forgedAt: Date.now(), skillsmith: built.skillsmith }
+  try {
+    vfs.mkdirSync(FORGED_CELLS_DIR, { recursive: true })
+    if (holder) removeForgedCell(vfs, holder.sha256)
+    if (same && same !== holder) removeForgedCell(vfs, same.sha256)
+    const forgedWasmPath = forgedPathOf(built.sha256, 'wasm')
+    vfs.writeFileSync(forgedWasmPath, Uint8Array.from(built.wasm))
+    const forgedWatPath = forgedPathOf(built.sha256, 'wat')
+    vfs.writeFileSync(forgedWatPath, wat)
+    const forgedManifestPath = forgedPathOf(built.sha256, 'json')
+    vfs.writeFileSync(forgedManifestPath, cellCanonicalJson(manifest))
+  } catch {
+    try { removeForgedCell(vfs, built.sha256) } catch { /* Nothing more can be undone here. */ }
+    return { ok: false, code: 'FORGE_STORE_FAILED', name: built.name, sha256: built.sha256 }
+  }
+  return { ok: true, kept: holder ? 'replaced' : 'new', cell: manifest, ...(holder ? { replaced: holder.sha256 } : {}) }
+}
+
+/**
+ * `x6_cell run_forged`: read the kept WAT and bytes NOW and hand them, with what the manifest says, to the host, which
+ * builds the WAT again through the pinned compiler and runs only those fresh bytes. A reference to an entry
+ * whose manifest is invalid is FORGED_MANIFEST_INVALID; a cell kept under an older compiler gets its one-call recovery.
+ */
+async function runKeptCell(vfs: MemoryVfs, cells: CellHost, args: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const manifest = resolveForgedCell(vfs, args.cell)
+  const cellRef = typeof args.cell === 'string' ? args.cell.slice(0, 80) : null
+  if (!manifest) {
+    const invalid = invalidForgedManifestNamed(vfs, args.cell)
+    return invalid !== null
+      ? { ok: false, code: 'FORGED_MANIFEST_INVALID', cell: cellRef, sha256: invalid,
+        next: `read ${forgedPathOf(invalid, 'wat')}, then forge it again from that text: `
+          + '{ action: "forge", wat: <that text>, name: <your cell name>, replace: true }' }
+      : { ok: false, code: 'FORGED_UNKNOWN', cell: cellRef }
+  }
+  let bytes = new Uint8Array()
+  try {
+    const value = vfs.readFileSync(forgedPathOf(manifest.sha256, 'wasm'))
+    // Bytes that are missing or not bytes are not the kept bytes: the host refuses them as FORGED_BYTES_CHANGED.
+    if (value instanceof Uint8Array) bytes = Uint8Array.from(value)
+  } catch { /* Same: refused by the hash check, never run. */ }
+  const answer = await cells.runForged({ name: manifest.name, sha256: manifest.sha256, watSha256: manifest.watSha256,
+    skillsmith: manifest.skillsmith, wat: readForgedSource(vfs, manifest.sha256), bytes,
+    ...(args.op !== undefined ? { op: args.op as string } : {}), ...(args.input !== undefined ? { input: args.input } : {}),
+    ...(args.fuel !== undefined ? { fuel: args.fuel as number } : {}) }, 'x6_cell')
+  if (!answer.ok && answer.code === 'FORGED_COMPILER_CHANGED') {
+    return { ...answer, next: `forge it again from its WAT: read ${forgedPathOf(manifest.sha256, 'wat')}, then `
+      + `{ action: "forge", wat: <that text>, name: "${manifest.name}", replace: true }` }
+  }
+  return { ...answer }
+}
+
+/** `x6_cell forget`: remove one kept cell (by name or SHA-256; an unreadable entry by its SHA-256). */
+function forgetKeptCell(vfs: MemoryVfs, args: Record<string, unknown>): Record<string, unknown> {
+  const manifest = resolveForgedCell(vfs, args.cell)
+  const sha = manifest?.sha256 ?? (typeof args.cell === 'string' && FORGED_SHA.test(args.cell) && listForgedCells(vfs).occupied.has(args.cell) ? args.cell : null)
+  if (sha === null) return { ok: false, code: 'FORGED_UNKNOWN', cell: typeof args.cell === 'string' ? args.cell.slice(0, 80) : null }
+  removeForgedCell(vfs, sha)
+  return { ok: true, forgot: { name: manifest?.name ?? null, sha256: sha } }
+}
+
+/** `x6_self_state` `forgedCells`: name, SHA-256 and size of each kept cell, newest first; null when the store cannot be read. */
+function forgedCellRows(vfs: MemoryVfs): Array<{ name: string; sha256: string; bytes: number }> | null {
+  try { return listForgedCells(vfs).cells.map(cell => ({ name: cell.name, sha256: cell.sha256, bytes: cell.bytes })) } catch { return null }
+}
+// ---- FORGE block end ----
+
+// ---- KYBERSKILL block begin ----
+/**
+ * `x6_skill`, the skills she keeps. A skill is an
+ * `aukora.skill.v1` record (skill-record.ts) that names a cell (pinned, or one she forged), the op it calls, a program and
+ * the evidence; its behaviour is the cell's, so it does not depend on the model that chose to call it.
+ *  - Shipped skills are read from her own origin through `/cells/kyber/skills/index.json` (built by
+ *    server/kyber-skills.build.mjs) and verified before they are listed.
+ *  - Kept skills live in her home, content-addressed: `/dsh/home/skills/<id>.json` (the record's canonical bytes, `id` its
+ *    digest), `/dsh/home/skills/programs/<sha256>.json` and `/dsh/home/skills/weights/<sha256>.json` (each named by the
+ *    sha256 of its bytes). Listed in RUNTIME_WRITE_SET as `kept-skill-store`.
+ *  - `keep` never accepts a claimed answer: the cell computes every case, and those answers are the evidence (`oracle: "cell"`).
+ *  - `check` verifies the record against the REAL artifacts (a pinned cell's bytes as this session's cell host admitted
+ *    them; a forged cell's kept bytes and WAT) and runs every case again through the cell, comparing answers byte for byte.
+ *    Nothing is repaired. A forged cell always runs through `run_forged`'s full rebuild-and-admit path.
+ * A skill describes and can be checked again. It is not authority, not a receipt, not part of her head or her capsule record.
+ */
+export const SKILLS_DIR = '/dsh/home/skills'
+/** Skills she may keep at once; one more is SKILL_FULL until she forgets one (was 64). */
+export const SKILLS_MAX = 256
+/** Where the shipped skills are listed, on her own origin. */
+export const SKILL_INDEX_PATH = '/cells/kyber/skills/index.json'
+export const SKILL_INDEX_SCHEMA = 'aukora.skill-index.v1'
+const SKILL_SHIPPED_MAX = 16
+/** Was 256 KiB. */
+const SKILL_WEIGHTS_MAX_BYTES = 1024 * 1024
+/** The whole kept-skill store (records, programs and weights), which her mirrored home carries: 256 skills at their
+ * full record and weights would be about 320 MiB, past MIRROR's snapshot and state bounds. One keep that would pass
+ * this is SKILL_STORE_FULL until she forgets one (the old full shelf was about 20 MiB). */
+export const SKILLS_STORE_MAX_BYTES = 32 * 1024 * 1024
+const SKILL_FETCH_TIMEOUT_MS = 10_000
+const SKILL_SHA = /^[a-f0-9]{64}$/
+const SKILL_RECORD_FILE = /^([a-f0-9]{64})\.json$/
+const SKILL_SHIPPED_FILE = /^kyber\/(?:[a-z0-9][a-z0-9.-]{0,63}\/){0,4}[a-z0-9][a-z0-9.-]{0,63}\.json$/
+const SKILL_STATE_SCHEMA = /^[a-z][a-z0-9.-]{0,63}$/
+const SKILL_OP = /^[a-z][a-z0-9_]{0,31}(?:\.[a-z][a-z0-9_.]{0,63})?$/
+const skillRecordPathOf = (id: string): string => `${SKILLS_DIR}/${id}.json`
+const skillArtifactPathOf = (kind: 'programs' | 'weights', sha: string): string => `${SKILLS_DIR}/${kind}/${sha}.json`
+
+/** One skill as this session holds it: its record bytes and the bytes of the program and weights it names. */
+interface HeldSkill {
+  readonly id: string
+  readonly name: string | null
+  readonly bytes: Uint8Array
+  readonly program: Uint8Array | null
+  readonly weights: Uint8Array | null
+  readonly source: 'shipped' | 'kept'
+  readonly keptAt: number
+}
+
+/** Bytes of one VFS file, sized before it is read; null when missing, unreadable or over `max`. */
+function readSkillFile(vfs: MemoryVfs, path: string, max: number): Uint8Array | null {
+  try {
+    if (vfs.statSync(path).size > max) return null
+    const value = vfs.readFileSync(path)
+    return typeof value === 'string' ? new TextEncoder().encode(value) : value instanceof Uint8Array ? Uint8Array.from(value) : null
+  } catch { return null }
+}
+
+/** The record's own fields when its bytes are a well-shaped record (never a verification: verifySkill does that). */
+function skillRecordOf(bytes: Uint8Array | null): SkillRecord | null {
+  if (bytes === null || bytes.byteLength > SKILL_MAX_RECORD_BYTES) return null
+  try {
+    const value = parseCanonical(bytes)
+    return skillShapeProblem(value) === null ? value as SkillRecord : null
+  } catch { return null }
+}
+
+/** Every skill she keeps, newest first (by the record file's time, then id). Reads only. Not exported: only her tool reads it. */
+function listKeptSkills(vfs: MemoryVfs): HeldSkill[] {
+  const held: HeldSkill[] = []
+  let names: string[] = []
+  try { names = vfs.existsSync(SKILLS_DIR) ? [...vfs.readdirSync(SKILLS_DIR)].map(String).sort() : [] } catch { names = [] }
+  for (const file of names) {
+    const id = SKILL_RECORD_FILE.exec(file)?.[1]
+    if (!id) continue
+    const path = skillRecordPathOf(id)
+    const bytes = readSkillFile(vfs, path, SKILL_MAX_RECORD_BYTES) ?? new Uint8Array()
+    const record = skillRecordOf(bytes)
+    let keptAt = 0
+    try { keptAt = Number(vfs.statSync(path).mtimeMs) } catch { keptAt = 0 }
+    held.push({ id, name: record?.name ?? null, bytes, source: 'kept', keptAt,
+      program: record ? readSkillFile(vfs, skillArtifactPathOf('programs', record.program.digest), SKILL_MAX_PROGRAM_BYTES) : null,
+      weights: record?.weights ? readSkillFile(vfs, skillArtifactPathOf('weights', record.weights.digest), SKILL_WEIGHTS_MAX_BYTES) : null })
+  }
+  return held.sort((a, b) => b.keptAt - a.keptAt || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/** Bytes of every file under her kept-skill store (records, programs/, weights/). */
+function skillStoreBytes(vfs: MemoryVfs): number {
+  let total = 0
+  const walk = (dir: string): void => {
+    if (!vfs.existsSync(dir)) return
+    for (const name of [...vfs.readdirSync(dir)].map(String)) {
+      const path = `${dir}/${name}`
+      const stat = vfs.statSync(path)
+      if (stat.isDirectory()) walk(path)
+      else total += Number(stat.size)
+    }
+  }
+  walk(SKILLS_DIR)
+  return total
+}
+
+/** `x6_self_state` `skills`: name and id of each kept skill, newest first; null when her store cannot be read. */
+function keptSkillRows(vfs: MemoryVfs): Array<{ name: string; id: string }> | null {
+  try {
+    return listKeptSkills(vfs).filter(skill => skill.name !== null).map(skill => ({ name: skill.name as string, id: skill.id }))
+  } catch { return null }
+}
+
+/** One same-origin GET of a shipped file, bounded in time and bytes. Throws when it cannot be read whole. */
+async function fetchShippedSkillFile(origin: string | undefined, path: string, max: number): Promise<Uint8Array> {
+  if (!origin || origin === 'null') throw new Error('SKILL_ORIGIN_UNAVAILABLE')
+  const response = await globalThis.fetch(new URL(path, origin).href, { method: 'GET', credentials: 'same-origin', redirect: 'error',
+    cache: 'no-store', signal: AbortSignal.timeout(SKILL_FETCH_TIMEOUT_MS) })
+  if (!response.ok || !response.body) throw new Error(`SKILL_FETCH_FAILED ${String(response.status)}`)
+  if (Number(response.headers.get('content-length')) > max) throw new Error('SKILL_FETCH_LIMIT')
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) break
+      total += next.value.byteLength
+      if (total > max) { await reader.cancel(); throw new Error('SKILL_FETCH_LIMIT') }
+      chunks.push(next.value)
+    }
+  } finally { reader.releaseLock() }
+  const out = new Uint8Array(total)
+  let at = 0
+  for (const chunk of chunks) { out.set(chunk, at); at += chunk.byteLength }
+  return out
+}
+
+/** The shipped skills, read through the index (paths under /cells/ only), or the reason they could not be. */
+async function loadShippedSkills(origin: string | undefined): Promise<{ skills: HeldSkill[]; code: string | null }> {
+  let index: unknown
+  try { index = parseCanonical(await fetchShippedSkillFile(origin, SKILL_INDEX_PATH, 16 * 1024)) } catch { return { skills: [], code: 'SKILL_INDEX_UNAVAILABLE' } }
+  if (!record(index) || index.schema !== SKILL_INDEX_SCHEMA || !Array.isArray(index.skills) || index.skills.length > SKILL_SHIPPED_MAX) {
+    return { skills: [], code: 'SKILL_INDEX_INVALID' }
+  }
+  const skills: HeldSkill[] = []
+  for (const entry of index.skills as unknown[]) {
+    const file = (value: unknown): string | null => typeof value === 'string' && SKILL_SHIPPED_FILE.test(value) && !value.includes('..')
+      ? `/cells/${value}` : null
+    if (!record(entry) || typeof entry.id !== 'string' || !SKILL_SHA.test(entry.id) || typeof entry.name !== 'string'
+      || !SKILL_NAME.test(entry.name) || file(entry.record) === null || file(entry.program) === null
+      || (entry.weights !== undefined && entry.weights !== null && file(entry.weights) === null)) return { skills: [], code: 'SKILL_INDEX_INVALID' }
+    const read = async (path: string | null, max: number): Promise<Uint8Array | null> => {
+      if (path === null) return null
+      try { return await fetchShippedSkillFile(origin, path, max) } catch { return null }
+    }
+    const bytes = await read(file(entry.record), SKILL_MAX_RECORD_BYTES)
+    skills.push({ id: entry.id, name: entry.name, bytes: bytes ?? new Uint8Array(), source: 'shipped', keptAt: 0,
+      program: await read(file(entry.program), SKILL_MAX_PROGRAM_BYTES),
+      weights: entry.weights === undefined || entry.weights === null ? null : await read(file(entry.weights), SKILL_WEIGHTS_MAX_BYTES) })
+  }
+  return { skills, code: null }
+}
+
+type SkillCellAnswer = Record<string, unknown> & { ok: boolean; result?: unknown; fuelUsed?: unknown; code?: unknown }
+
+/**
+ * The skills tool over one session: her VFS, this worker's cell host, her origin. The shipped list is read once per
+ * session (a failed read is tried again on the next call).
+ */
+function createSkillShelf(deps: { vfs: MemoryVfs; cells: () => CellHost; origin: string | undefined }) {
+  const { vfs, origin } = deps
+  let shipped: Promise<{ skills: HeldSkill[]; code: string | null }> | null = null
+  const shippedSkills = async () => {
+    shipped ??= loadShippedSkills(origin)
+    const answer = await shipped
+    if (answer.code !== null) shipped = null
+    return answer
+  }
+
+  /** The skill a reference names: an id, or a name that exactly one held skill has. */
+  const resolve = async (ref: unknown): Promise<{ skill: HeldSkill } | { refusal: Record<string, unknown> }> => {
+    const skillRef = typeof ref === 'string' ? ref.slice(0, 80) : null
+    if (skillRef === null || skillRef === '') return { refusal: { ok: false, code: 'SKILL_UNKNOWN', skill: skillRef } }
+    const all = [...listKeptSkills(vfs), ...(await shippedSkills()).skills]
+    const hits = all.filter(skill => SKILL_SHA.test(skillRef) ? skill.id === skillRef : skill.name === skillRef)
+    const unique = [...new Map(hits.map(skill => [skill.id, skill])).values()]
+    if (unique.length === 1 && unique[0]) return { skill: unique[0] }
+    return unique.length === 0 ? { refusal: { ok: false, code: 'SKILL_UNKNOWN', skill: skillRef } }
+      : { refusal: { ok: false, code: 'SKILL_AMBIGUOUS', skill: skillRef, ids: unique.map(skill => skill.id), next: 'name it by its id' } }
+  }
+
+  /**
+   * Verify a held skill against the real artifacts this session can load. A pinned cell's bytes come from the cell host
+   * (the bytes it admitted against the pin); a forged cell's from her forged-cell store, with its kept WAT.
+   */
+  const verify = async (skill: HeldSkill) => {
+    const record = skillRecordOf(skill.bytes)
+    if (record === null) {
+      // Not a well-shaped record (or missing): verifySkill names the first failure (id, size, canonical form, shape).
+      const verdict = await verifySkill(skill.bytes, { cell: new Uint8Array(), program: new Uint8Array() }, skill.id)
+      return { verdict: verdict.ok ? { ok: false as const, code: 'SKILL_SHAPE' } : verdict, manifest: null }
+    }
+    if (skill.program === null) return { verdict: { ok: false as const, code: 'SKILL_PROGRAM_MISSING' }, manifest: null }
+    let cell: Uint8Array | null = null, wat: Uint8Array | null = null
+    let manifest: ForgedCellManifest | null = null
+    if (record.cell.kind === 'pinned') {
+      cell = await deps.cells().verifiedBytes(record.cell.name)
+      if (cell === null) return { verdict: { ok: false as const, code: 'SKILL_CELL_UNAVAILABLE' }, manifest: null }
+    } else {
+      manifest = listForgedCells(vfs).cells.find(kept => kept.sha256 === record.cell.sha256) ?? null
+      if (manifest === null) return { verdict: { ok: false as const, code: 'SKILL_CELL_MISSING' }, manifest: null }
+      cell = readSkillFile(vfs, forgedPathOf(manifest.sha256, 'wasm'), FORGED_CELL_MAX_WASM_BYTES) ?? new Uint8Array()
+      const source = readForgedSource(vfs, manifest.sha256)
+      wat = source === null ? null : new TextEncoder().encode(source)
+    }
+    return { verdict: await verifySkill(skill.bytes, { cell, program: skill.program, weights: skill.weights, wat }, skill.id), manifest }
+  }
+
+  /** One call of the skill's cell: a pinned cell through the host, a forged cell through run_forged's whole path. */
+  const callCell = async (record: Pick<SkillRecord, 'cell'>, manifest: ForgedCellManifest | null, op: string,
+    input: unknown): Promise<SkillCellAnswer> => {
+    if (record.cell.kind === 'forged') {
+      if (manifest === null) return { ok: false, code: 'SKILL_CELL_MISSING' }
+      return await runKeptCell(vfs, deps.cells(), { cell: manifest.sha256, op, input }) as SkillCellAnswer
+    }
+    return await deps.cells().invoke(record.cell.name, op, input, 'x6_cell') as unknown as SkillCellAnswer
+  }
+
+  const list = async (): Promise<Record<string, unknown>> => {
+    const shippedRead = await shippedSkills()
+    const rows: Record<string, unknown>[] = []
+    for (const skill of [...shippedRead.skills, ...listKeptSkills(vfs)]) {
+      const record = skillRecordOf(skill.bytes)
+      const { verdict } = await verify(skill)
+      rows.push({ id: skill.id, name: record?.name ?? skill.name, cell: record ? { kind: record.cell.kind, name: record.cell.name } : null,
+        cases: record?.evidence.cases.length ?? null, source: skill.source, verified: verdict.ok,
+        ...(verdict.ok ? {} : { code: verdict.code }) })
+    }
+    return { ok: true, count: rows.length, skills: rows,
+      ...(shippedRead.code !== null ? { shipped: { ok: false, code: shippedRead.code } } : {}) }
+  }
+
+  const check = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const found = await resolve(args.skill)
+    if ('refusal' in found) return found.refusal
+    const { verdict, manifest } = await verify(found.skill)
+    if (!verdict.ok) return { ok: false, id: found.skill.id, verified: false, code: verdict.code, ...('detail' in verdict ? { detail: verdict.detail } : {}) }
+    const cases = verdict.record.evidence.cases
+    const differ: number[] = []
+    let fuelUsed = 0
+    for (const [index, entry] of cases.entries()) {
+      const answer = await callCell(verdict.record, manifest, entry.op, entry.input)
+      if (typeof answer.fuelUsed === 'number' && Number.isSafeInteger(answer.fuelUsed)) fuelUsed += answer.fuelUsed
+      if (!answer.ok || !sameCanonical(answer.result, entry.output)) differ.push(index)
+    }
+    return { ok: differ.length === 0, id: verdict.id, name: verdict.record.name, verified: true,
+      cases: { total: cases.length, agree: cases.length - differ.length, differ }, fuelUsed,
+      ...(differ.length > 0 ? { code: 'SKILL_CASES_DIFFER', next: 'the cell no longer gives the recorded answers for those cases; nothing was changed' } : {}) }
+  }
+
+  const run = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const found = await resolve(args.skill)
+    if ('refusal' in found) return found.refusal
+    const { verdict, manifest } = await verify(found.skill)
+    if (!verdict.ok) return { ok: false, id: found.skill.id, verified: false, code: verdict.code }
+    const input = skillCallInput(verdict.program, args.input === undefined ? {} : args.input)
+    if (input === null) return { ok: false, id: verdict.id, code: 'SKILL_INPUT_INVALID', program: Object.keys(verdict.program),
+      next: 'pass an input object that names none of the program\'s keys' }
+    const answer = await callCell(verdict.record, manifest, verdict.record.op, input)
+    return { ...answer, skill: { id: verdict.id, name: verdict.record.name } }
+  }
+
+  const keep = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+    const name = typeof args.name === 'string' ? args.name : ''
+    if (!SKILL_NAME.test(name)) return { ok: false, code: 'SKILL_NAME_INVALID' }
+    if (!Array.isArray(args.cases) || args.cases.length === 0 || args.cases.length > SKILL_MAX_CASES) {
+      return { ok: false, code: 'SKILL_CASES_LIMIT', max: SKILL_MAX_CASES }
+    }
+    if (!record(args.program)) return { ok: false, code: 'SKILL_PROGRAM_INVALID' }
+    let programBytes: Uint8Array
+    try { programBytes = canonicalBytes(args.program) } catch { return { ok: false, code: 'SKILL_PROGRAM_INVALID' } }
+    let weightsBytes: Uint8Array | null = null
+    if (args.weights !== undefined && args.weights !== null) {
+      try { weightsBytes = record(args.weights) ? canonicalBytes(args.weights) : null } catch { weightsBytes = null }
+      if (weightsBytes === null || weightsBytes.byteLength > SKILL_WEIGHTS_MAX_BYTES) return { ok: false, code: 'SKILL_WEIGHTS_INVALID' }
+    }
+    const state = args.state === undefined ? null : args.state
+    if (state !== null && (typeof state !== 'string' || !SKILL_STATE_SCHEMA.test(state))) return { ok: false, code: 'SKILL_STATE_INVALID' }
+    // The cell: a pinned one by name, or one she forged (by name or sha256).
+    const cellRef = typeof args.cell === 'string' ? args.cell : ''
+    const pin = Object.hasOwn(CELL_PINS, cellRef) ? CELL_PINS[cellRef] : undefined
+    const manifest = pin === undefined ? resolveForgedCell(vfs, cellRef) : null
+    if (pin === undefined && manifest === null) return { ok: false, code: 'SKILL_CELL_UNKNOWN', cell: cellRef.slice(0, 80) }
+    const op = typeof args.op === 'string' ? args.op
+      : pin ? (cellRef === KYBER_CELL ? 'cpu.run' : pin.ops?.length === 1 ? pin.ops[0] : null) : 'run'
+    if (typeof op !== 'string' || !SKILL_OP.test(op) || (pin !== undefined && !(pin.ops ?? []).includes(op))) {
+      return { ok: false, code: 'SKILL_OP_INVALID', ...(pin ? { ops: pin.ops ?? [] } : {}) }
+    }
+    const cell: SkillRecord['cell'] = pin !== undefined
+      ? { kind: 'pinned', name: cellRef, sha256: pin.sha256, abi: 1, ops: [...(pin.ops ?? [])] }
+      : { kind: 'forged', name: (manifest as ForgedCellManifest).name, sha256: (manifest as ForgedCellManifest).sha256,
+        watSha256: (manifest as ForgedCellManifest).watSha256, abi: 1, ops: [op] }
+    const program = readSkillProgram({ cell }, programBytes)
+    if (program === null) return { ok: false, code: 'SKILL_PROGRAM_INVALID' }
+    // Every answer is the cell's own, computed now: nothing she claims is recorded.
+    const cases: SkillCase[] = []
+    for (const [index, given] of (args.cases as unknown[]).entries()) {
+      const input = skillCallInput(program, given)
+      if (input === null) return { ok: false, code: 'SKILL_CASE_INVALID', index, next: 'each case is an input object that names none of the program\'s keys' }
+      const answer = await callCell({ cell }, manifest, op, input)
+      if (!answer.ok) return { ok: false, code: 'SKILL_CASE_REFUSED', index, cellCode: answer.code ?? null }
+      cases.push({ op, input, output: answer.result })
+    }
+    let scalars = 0
+    if (weightsBytes !== null) {
+      const graph = args.weights as Record<string, unknown>
+      for (const node of Array.isArray(graph.nodes) ? graph.nodes as unknown[] : []) {
+        scalars += Array.isArray(node) && Array.isArray(node[2]) ? 1 + node[2].length : 0
+      }
+    }
+    const skill: SkillRecord = {
+      schema: SKILL_SCHEMA, name, cell, op, program: { digest: await artifactDigest(programBytes) },
+      weights: weightsBytes === null ? null : { digest: await artifactDigest(weightsBytes), scalars: Math.max(scalars, 1) },
+      state: { schema: typeof state === 'string' ? state : cellRef === KYBER_CELL ? 'aukora.kyber-cpu.state.v1' : 'aukora.cell-abi.v1' },
+      evidence: { cases, oracle: 'cell' },
+    }
+    let bytes: Uint8Array
+    try { bytes = encodeSkill(skill) } catch { return { ok: false, code: 'SKILL_RECORD_INVALID' } }
+    if (bytes.byteLength > SKILL_MAX_RECORD_BYTES) return { ok: false, code: 'SKILL_RECORD_LIMIT', bytes: bytes.byteLength, max: SKILL_MAX_RECORD_BYTES }
+    const id = await skillId(bytes)
+    // The record must verify against the very artifacts it names before it is kept.
+    const held: HeldSkill = { id, name, bytes, program: programBytes, weights: weightsBytes, source: 'kept', keptAt: 0 }
+    const { verdict } = await verify(held)
+    if (!verdict.ok) return { ok: false, code: verdict.code === 'SKILL_WEIGHTS_MISMATCH' ? 'SKILL_WEIGHTS_INVALID' : verdict.code, id }
+    const shippedNames = (await shippedSkills()).skills.map(skill => skill.name)
+    // Synchronous from here to the last write: no other call can take a slot or a name in between.
+    const kept = listKeptSkills(vfs)
+    const same = kept.find(skill => skill.id === id)
+    const onDisk = same ? readSkillFile(vfs, skillRecordPathOf(id), SKILL_MAX_RECORD_BYTES) : null
+    if (onDisk !== null && onDisk.byteLength === bytes.byteLength && onDisk.every((byte, at) => byte === bytes[at])) {
+      return { ok: true, kept: 'already', id, name }
+    }
+    if (shippedNames.includes(name)) return { ok: false, code: 'SKILL_NAME_SHIPPED', name, next: 'choose another name' }
+    const holder = kept.find(skill => skill.name === name && skill.id !== id)
+    if (holder) return { ok: false, code: 'SKILL_NAME_TAKEN', name, id: holder.id, next: 'forget it first, or choose another name' }
+    if (!same && kept.length >= SKILLS_MAX) return { ok: false, code: 'SKILL_FULL', count: kept.length, max: SKILLS_MAX, next: 'forget one kept skill first' }
+    if (!same) {
+      // Content-addressed: a program or weights file already kept adds nothing.
+      const absent = (path: string): boolean => !vfs.existsSync(path)
+      const adding = bytes.byteLength + (absent(skillArtifactPathOf('programs', skill.program.digest)) ? programBytes.byteLength : 0)
+        + (weightsBytes !== null && skill.weights !== null && absent(skillArtifactPathOf('weights', skill.weights.digest)) ? weightsBytes.byteLength : 0)
+      let stored: number
+      try { stored = skillStoreBytes(vfs) } catch { return { ok: false, code: 'SKILL_STORE_FAILED', id, name } }
+      if (stored + adding > SKILLS_STORE_MAX_BYTES) {
+        return { ok: false, code: 'SKILL_STORE_FULL', bytes: stored, adding, max: SKILLS_STORE_MAX_BYTES, next: 'forget one kept skill first' }
+      }
+    }
+    try {
+      vfs.mkdirSync(`${SKILLS_DIR}/programs`, { recursive: true })
+      const keptProgramPath = skillArtifactPathOf('programs', skill.program.digest)
+      vfs.writeFileSync(keptProgramPath, Uint8Array.from(programBytes))
+      if (weightsBytes !== null && skill.weights !== null) {
+        vfs.mkdirSync(`${SKILLS_DIR}/weights`, { recursive: true })
+        const keptWeightsPath = skillArtifactPathOf('weights', skill.weights.digest)
+        vfs.writeFileSync(keptWeightsPath, Uint8Array.from(weightsBytes))
+      }
+      const keptSkillPath = skillRecordPathOf(id)
+      vfs.writeFileSync(keptSkillPath, Uint8Array.from(bytes))
+    } catch {
+      return { ok: false, code: 'SKILL_STORE_FAILED', id, name }
+    }
+    return { ok: true, kept: 'new', id, name, cell: { kind: cell.kind, name: cell.name, sha256: cell.sha256 }, op,
+      cases: cases.length, answers: cases.map(entry => entry.output), path: skillRecordPathOf(id) }
+  }
+
+  const forget = (args: Record<string, unknown>): Record<string, unknown> => {
+    const ref = typeof args.skill === 'string' ? args.skill.slice(0, 80) : null
+    const kept = listKeptSkills(vfs)
+    const hits = ref === null ? [] : kept.filter(skill => SKILL_SHA.test(ref) ? skill.id === ref : skill.name === ref)
+    if (hits.length !== 1 || !hits[0]) return { ok: false, code: hits.length > 1 ? 'SKILL_AMBIGUOUS' : 'SKILL_UNKNOWN', skill: ref }
+    const gone = hits[0]
+    const goneRecord = skillRecordOf(gone.bytes)
+    const forgottenSkillPath = skillRecordPathOf(gone.id)
+    if (vfs.existsSync(forgottenSkillPath)) vfs.unlinkSync(forgottenSkillPath)
+    // A program or weights file goes with the last skill that names it.
+    const still = listKeptSkills(vfs).map(skill => skillRecordOf(skill.bytes))
+    const named = (kind: 'programs' | 'weights', sha: string | undefined): void => {
+      if (sha === undefined) return
+      const used = still.some(other => other !== null && (kind === 'programs' ? other.program.digest === sha : other.weights?.digest === sha))
+      const orphanArtifactPath = skillArtifactPathOf(kind, sha)
+      if (!used && vfs.existsSync(orphanArtifactPath)) vfs.unlinkSync(orphanArtifactPath)
+    }
+    named('programs', goneRecord?.program.digest)
+    named('weights', goneRecord?.weights?.digest)
+    return { ok: true, forgot: { id: gone.id, name: gone.name } }
+  }
+
+  return {
+    async execute(args: Record<string, unknown>): Promise<Record<string, unknown>> {
+      if (args.action === 'list') return await list()
+      if (args.action === 'check') return await check(args)
+      if (args.action === 'run') return await run(args)
+      if (args.action === 'keep') return await keep(args)
+      if (args.action === 'forget') return forget(args)
+      return { ok: false, code: 'SKILL_ACTION_INVALID' }
+    },
+  }
+}
+// ---- KYBERSKILL block end ----
+
 function enforceIrreversibleAction(action: string | Record<string, unknown>,
   entries: Readonly<Record<string, BallEntryRecord>> = {}): void {
   const level = classifyActionIrreversibility(action, entries)
@@ -601,7 +1401,7 @@ function enforceToolInvocation(tool: string, args: unknown, entries: Readonly<Re
       || args.action === 'head_rollback' || args.action === 'modules'
       || args.action === 'clear_staged_outward' || args.action === 'transcript'
       || args.action === 'sync_head_to_github'
-      || (repoSandboxBranch(args.branch) && ['branch_create', 'branch_delete', 'stage_proposal'].includes(actionText(args.action))))
+      || (repoSandboxBranch(args.branch) && ['branch_create', 'branch_delete', 'stage_proposal', 'apply_patch', 'withdraw_proposal'].includes(actionText(args.action)))) // apply_patch; MERGE hook: withdraw_proposal
     && (args.expectedHeadSha === undefined || privateRepoEdit) && args.idempotencyKey === undefined
   // These executors validate their exact candidate or refuse unsupported mutation admissions.
   const unsupportedMutators = ['x6_repo', 'seed_cycle', 'auma_superagent']
@@ -640,6 +1440,7 @@ function publicFacts(value: unknown): Record<string, unknown> {
 /** The provider doors `x6_consult` speaks to (the host's `/door/<provider>/*`), and the wire each one takes. */
 export const CONSULT_PROVIDERS: Readonly<Record<string, 'anthropic' | 'openai'>> = Object.freeze({
   anthropic: 'anthropic', openrouter: 'openai', deepseek: 'openai', openai: 'openai', xai: 'openai', moonshot: 'openai', 'moonshot-cn': 'openai',
+  prime: 'openai', // Prime Intellect, capped per day and month at the edge (SPEND_CAP_EXCEEDED, never a silent switch)
 })
 /**
  * A consult's bounds. The output cap counts thinking
@@ -653,24 +1454,33 @@ export const CONSULT_PROVIDERS: Readonly<Record<string, 'anthropic' | 'openai'>>
  * cut there (`consult_timeout_cap`); only when no answer text has arrived yet is it `CONSULT_TIMEOUT`, and a caller's
  * cancel is always `CONSULT_CANCELLED`.
  */
-export const CONSULT_LIMITS = Object.freeze({ targets: 6, promptChars: 64 * 1024, systemChars: 16 * 1024,
-  /** Output ceiling per target, thinking included. */
-  maxTokens: 64_000,
-  /** Default output cap per target when none is given: Anthropic models think inside it, so they get twice the room. */
-  defaultMaxTokens: 8_000, anthropicDefaultMaxTokens: 16_000,
-  timeoutMs: 600_000, defaultTimeoutMs: 180_000,
-  /** Answer text returned per target, at most (characters): ~2x a 64,000-token answer; past it the answer is cut and says so. */
-  answerChars: 512 * 1024,
+export const CONSULT_LIMITS = Object.freeze({
+  /** Targets in one council, prompt and system characters (were 6, 64 KiB and 16 KiB). */
+  targets: 12, promptChars: 256 * 1024, systemChars: 64 * 1024,
+  /** Output ceiling per target, thinking included (64,000 became 128,000). */
+  maxTokens: 128_000,
   /**
-   * Characters of decoded answer text AND thinking one provider stream may carry, at most (~8x a 64,000-token answer).
-   * Event framing is not counted: on the OpenAI-shaped wire (OpenRouter) framing is about 250-350 bytes per token, so an
-   * honest 64,000-token answer is ~20 MB of stream while its text is a few hundred thousand characters.
+   * Default output cap per target when none is given, thinking included (8,000, and 16,000 on anthropic, both
+   * became 32,000): a thinking model can spend thousands on thinking before its first word, so a small cap starves it.
    */
-  streamChars: 2 * 1024 * 1024,
-  /** One pending line or event of the stream, at most (characters): a stream that never ends a line is cut here. */
+  defaultMaxTokens: 32_000, anthropicDefaultMaxTokens: 32_000,
+  /** Time per target (the default 180,000 ms became 600,000 and the ceiling 600,000 became 1,800,000). */
+  timeoutMs: 1_800_000, defaultTimeoutMs: 600_000,
+  /** Answer text returned per target, at most (characters): ~2x a 128,000-token answer; past it the answer is cut and says so. */
+  answerChars: 1024 * 1024,
+  /**
+   * Characters of decoded answer text AND thinking one provider stream may carry, at most (~8x a 128,000-token answer).
+   * Event framing is not counted: on the OpenAI-shaped wire (OpenRouter) framing is about 250-350 bytes per token, so an
+   * honest 128,000-token answer is ~40 MB of stream while its text is well under a million characters.
+   */
+  streamChars: 4 * 1024 * 1024,
+  /**
+   * One pending line or event of the stream, at most (characters): a stream that never ends a line is cut here. Not
+   * scaled with the answer: one event carries one delta, never the whole answer; this bounds the line parser.
+   */
   streamEventChars: 1024 * 1024,
-  /** Backstop on raw stream bytes, framing included (~5x a 64,000-token OpenRouter-framed answer); past it the answer is cut. */
-  streamBytes: 128 * 1024 * 1024 })
+  /** Backstop on raw stream bytes, framing included (~5x a 128,000-token OpenRouter-framed answer); past it the answer is cut. */
+  streamBytes: 256 * 1024 * 1024 })
 export interface ConsultTarget { readonly provider: string; readonly model: string; readonly role: string | null }
 /** What the provider reported it used, when it said (input and output tokens). */
 export interface ConsultUsage { readonly inputTokens: number | null; readonly outputTokens: number | null }
@@ -694,7 +1504,14 @@ export interface ConsultAnswer {
   readonly usage?: ConsultUsage | null
   /** When an answer was cut: what to do to get the rest, in one sentence. */
   readonly next?: string | null
+  /**
+   * The caller's own cap or time was below the default and starved the first try (thinking used the whole cap,
+   * or the clock ran out before any answer text), so it was asked ONCE more at the default; this answer is that second try.
+   */
+  readonly retried?: ConsultRetry | null
 }
+/** Which number a consult raised to its default for its one retry, from what, to what. */
+export interface ConsultRetry { readonly field: 'maxTokens' | 'timeoutMs'; readonly from: number; readonly to: number }
 /** One provider answer read off the wire (a stream or a single JSON body), before it becomes a `ConsultAnswer`. */
 interface ConsultRead {
   readonly text: string | null
@@ -954,8 +1771,14 @@ const CONSULT_ROLE = /^[A-Za-z0-9][^\u0000-\u001f\u007f]{0,199}$/
  * grants anything: the answers are text for Auma to weigh.
  * @param input - `{ provider, model, prompt, system?, maxTokens?, timeoutMs? }`, or a council:
  *   `{ targets: [{ provider, model, role? }], prompt, ... }`.
+ * No starving by accident: a target that ends `CONSULT_REASONING_EXHAUSTED_MAX_TOKENS` (thinking
+ * used the whole cap, no answer text) under a caller's `maxTokens` BELOW the default, or `CONSULT_TIMEOUT` (no answer
+ * text when the clock ran out) under a caller's `timeoutMs` BELOW the default, is asked ONCE more at the default, and
+ * that answer says so (`retried: { field, from, to }`). A caller's number at or above the default is respected and never
+ * retried; a caller's cancel stays `CONSULT_CANCELLED` and is never retried.
  * @param deps - Trusted origin, fetch and clock. With a parent, every attempt carries its lifecycle ID and a unique request ID;
  *   without one, this helper makes independent requests. Mounted tools require an acknowledged parent and caller cancellation.
+ *   `timeoutSignal` makes the per-target clock (default `AbortSignal.timeout`); tests pass a faster one.
  * @returns `{ ok, answers }` (ok when at least one target answered; each answer says `truncated`, `stopReason` and, when
  *   cut, `next`), or `{ ok: false, code, reason? }` for a malformed request.
  */
@@ -965,9 +1788,11 @@ export async function consultProviders(input: unknown, deps: {
   readonly now?: () => number
   readonly parentTurnId?: string
   readonly signal?: AbortSignal
+  readonly timeoutSignal?: (ms: number) => AbortSignal
 }): Promise<{ readonly ok: boolean; readonly code?: string; readonly reason?: string; readonly answers?: readonly ConsultAnswer[] }> {
   const fetchImpl = deps.fetchImpl ?? globalThis.fetch
   const now = deps.now ?? (() => Date.now())
+  const clockFor = deps.timeoutSignal ?? ((ms: number) => AbortSignal.timeout(ms))
   if (!deps.origin || deps.origin === 'null') return { ok: false, code: 'CONSULT_ORIGIN_UNAVAILABLE' }
   if (!record(input)) return { ok: false, code: 'CONSULT_INPUT_INVALID' }
   const prompt = typeof input.prompt === 'string' ? input.prompt : ''
@@ -979,8 +1804,9 @@ export async function consultProviders(input: unknown, deps: {
   const capInRange = Number.isSafeInteger(askedMaxTokens)
     && (askedMaxTokens as number) >= 1 && (askedMaxTokens as number) <= CONSULT_LIMITS.maxTokens
   if (askedMaxTokens !== null && !capInRange) {
+    // One default on every provider since the raised limits (`anthropicDefaultMaxTokens` equals `defaultMaxTokens`).
     return { ok: false, code: 'CONSULT_MAX_TOKENS_INVALID', reason: `maxTokens is a whole number from 1 to ${String(CONSULT_LIMITS.maxTokens)} `
-      + `per target (the ceiling); leave it out for ${String(CONSULT_LIMITS.anthropicDefaultMaxTokens)} on anthropic and ${String(CONSULT_LIMITS.defaultMaxTokens)} elsewhere.` }
+      + `per target (the ceiling); leave it out for the default ${String(CONSULT_LIMITS.defaultMaxTokens)}.` }
   }
   const timeoutMs = input.timeoutMs === undefined ? CONSULT_LIMITS.defaultTimeoutMs : input.timeoutMs
   if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1000 || (timeoutMs as number) > CONSULT_LIMITS.timeoutMs) {
@@ -1002,10 +1828,28 @@ export async function consultProviders(input: unknown, deps: {
     if (role === undefined) return { ok: false, code: 'CONSULT_ROLE_INVALID' }
     targets.push({ provider: item.provider, model: item.model, role })
   }
+  /** One target, asked once or once more at the default when the caller's own smaller number starved it. */
   const ask = async (target: ConsultTarget): Promise<ConsultAnswer> => {
     const started = now()
+    const wire = CONSULT_PROVIDERS[target.provider] ?? 'openai'
+    const defaultCap = wire === 'anthropic' ? CONSULT_LIMITS.anthropicDefaultMaxTokens : CONSULT_LIMITS.defaultMaxTokens
+    const callerCap = askedMaxTokens === null ? null : askedMaxTokens as number
     const limitMs = timeoutMs as number
-    const timeoutSignal = AbortSignal.timeout(limitMs)
+    const first = await attempt(target, callerCap ?? defaultCap, limitMs, started)
+    if (deps.signal?.aborted) return first
+    // Only a cap the provider did not lower itself (`maxTokens` still the caller's) counts as the caller's starving number.
+    const retry: ConsultRetry | null = first.code === 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' && callerCap !== null
+      && callerCap < defaultCap && first.maxTokens === callerCap ? { field: 'maxTokens', from: callerCap, to: defaultCap }
+      : first.code === 'CONSULT_TIMEOUT' && input.timeoutMs !== undefined && limitMs < CONSULT_LIMITS.defaultTimeoutMs
+        ? { field: 'timeoutMs', from: limitMs, to: CONSULT_LIMITS.defaultTimeoutMs } : null
+    if (retry === null) return first
+    const second = retry.field === 'maxTokens'
+      ? await attempt(target, retry.to, limitMs, started)
+      : await attempt(target, callerCap ?? defaultCap, retry.to, started)
+    return { ...second, retried: retry }
+  }
+  const attempt = async (target: ConsultTarget, startCap: number, limitMs: number, started: number): Promise<ConsultAnswer> => {
+    const timeoutSignal = clockFor(limitMs)
     const signal = deps.signal ? AbortSignal.any([deps.signal, timeoutSignal]) : timeoutSignal
     // The clock ran out and the caller did not cancel: a stream with answer text is then cut, not lost.
     const timedOut = (): boolean => timeoutSignal.aborted && deps.signal?.aborted !== true
@@ -1014,7 +1858,7 @@ export async function consultProviders(input: unknown, deps: {
       ...(deps.parentTurnId ? { 'x-x6-turn-id': deps.parentTurnId, 'x-x6-request-id': randomUUID() }
         : { 'x-x6-turn-id': randomUUID() }) })
     const wire = CONSULT_PROVIDERS[target.provider] ?? 'openai'
-    let cap = askedMaxTokens === null ? wire === 'anthropic' ? CONSULT_LIMITS.anthropicDefaultMaxTokens : CONSULT_LIMITS.defaultMaxTokens : askedMaxTokens as number
+    let cap = startCap
     const persona = target.role === null ? system : `${system ?? ''}${system === null ? '' : '\n\n'}Your role in this council: ${target.role}.`
     const user = { role: 'user', content: prompt }
     const chatMessages = [...(persona === null ? [] : [{ role: 'system', content: persona }]), user]
@@ -1214,6 +2058,8 @@ export interface BallMutationState {
   readonly receiptSaved: boolean
   readonly at: number
   readonly errors: Readonly<Record<string, string>>
+  /** The shadow consult on this commit, for her eyes only (never sent, signed or receipted). */
+  readonly nucleus?: NucleusConsultAnswer
 }
 
 export interface BallEntryRecord {
@@ -1537,7 +2383,8 @@ export function hydrateNamedOrganSources(vfs: MemoryVfs, head: BallManifest, pre
 
 /**
  * Mirror any candidate organ `.js` files from staging/candidates/seed-organs into `/dsh/home/balls/<sha>.js`
- * so `seed-pearl` (`challenge` / `qualify_and_stage`) and `x6_pearl` always find candidate bytes by `ball:<sha256>`.
+ * Called at organ mount and explicit retention trials, never as a side effect of an organ read.
+ * New candidates after mount must be stored with `ball_put` before read-only consumers use them.
  */
 export function syncCandidateBallsStore(vfs: MemoryVfs): number {
   let synced = 0
@@ -2110,16 +2957,13 @@ function wrapSeedOrganAsCordisPlugin(exported: SeedOrganSpec, mount: (spec: Seed
         get scion() { return mounted.scion() },
         get checkpointPolicy() { return ctx.get('checkpointPolicy') },
         // Round 37: pinned, metered Wasm cells (x6/wasm-cells.ts): pure computation, no imports, fresh fuel per call.
-        get wasm() { return workerCellHost() },
+        get wasm() { return organCellHost(workerCellHost()) },
       }
       const toolSpec = {
         description,
         inputSchema: parameters,
         async execute(args: unknown) {
           enforceToolInvocation(organName, args)
-          try {
-            if (organCtx.fs) syncCandidateBallsStore(organCtx.fs as MemoryVfs)
-          } catch {}
           const organsSvc = organCtx.organs as OrganServiceLike | undefined
           if ((organName === 'seed-aura' || organName === 'seed_aura') && typeof organsSvc?.call === 'function') {
             return toLosslessJson(await organsSvc.call('seed-aura', args))
@@ -2350,7 +3194,9 @@ export async function mountX6BallRuntime(
   vfs: MemoryVfs,
   loader: WorkerModuleLoader,
   // Voice hook: where look-only marks persist (default: the worker's own IndexedDB, outside the VFS; null: unavailable).
-  voiceOptions: { voiceMarks?: VoiceMarkStore | null } = {},
+  // VOICE LEVEL: `open` makes a spoken turn an ordinary turn of hers (voice-marks.ts VOICE_LEVEL; the live worker passes
+  // it). Without it a mount is `look-only`, as every existing spec expects.
+  voiceOptions: { voiceMarks?: VoiceMarkStore | null; level?: VoiceLevel } = {},
 ): Promise<X6BallRuntime> {
   // Lane E6 (G1 live): every write this runtime makes through its VFS is recorded and classified against RUNTIME_WRITE_SET.
   vfs = liveWriteSet.wrap(vfs, 'ball-loader')
@@ -2435,6 +3281,7 @@ export async function mountX6BallRuntime(
   const voiceBuiltinNames = new Set<string>()
   const voiceLookOnly = createVoiceLookOnly({
     store: voiceOptions.voiceMarks === undefined ? indexedDbVoiceMarkStore() : voiceOptions.voiceMarks,
+    ...(voiceOptions.level === undefined ? {} : { level: voiceOptions.level }),
   })
   // The session's own header rides along: it decides "could be the voice home" while the marks are not loaded. No cwd:
   // a relative path is refused from voice, since the tools resolve it against the LIVE working folder, not the header.
@@ -2643,6 +3490,42 @@ export async function mountX6BallRuntime(
   let hostHeadInfo: { ballId: string; epoch: number; checkedAt: number } | null = null
   const origin = (globalThis as { location?: { origin?: string } }).location?.origin
   const hostRequest = fetch
+  // One shadow per session. Before a promotion leaves for the edge, `nucleusShadow.consult` asks
+  // the pinned nucleus cell what the shipped tier reflex says; the answer goes only into her local result (`nucleus`)
+  // and the session tally (`x6_self_state` nucleusShadow). No request byte, signature or receipt depends on it.
+  const nucleusShadow = createNucleusShadow({
+    loadReflex: async () => {
+      if (!origin || origin === 'null') throw new Error('ORIGIN_UNAVAILABLE')
+      const response = await fetch(new URL(TOUCH_ID_TIER_REFLEX_PATH, origin).href, { method: 'GET', mode: 'same-origin',
+        credentials: 'same-origin', redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(10_000) })
+      const reader = response.ok ? response.body?.getReader() : undefined
+      if (!reader) { void response.body?.cancel().catch(() => {}); throw new Error('REFLEX_UNAVAILABLE') }
+      const parts: Uint8Array[] = []
+      let size = 0
+      try {
+        for (;;) {
+          const part = await reader.read()
+          if (part.done) break
+          size += part.value.byteLength
+          if (size > TOUCH_ID_TIER_REFLEX_MAX_BYTES) throw new Error('REFLEX_TOO_LARGE')
+          parts.push(part.value)
+        }
+      } finally { void reader.cancel().catch(() => {}) }
+      const bytes = new Uint8Array(size)
+      let at = 0
+      for (const part of parts) { bytes.set(part, at); at += part.byteLength }
+      return bytes
+    },
+    // The same host, its journal lines labelled as the nucleus shadow's calls.
+    cells: () => {
+      const host = workerCellHost()
+      return { invoke: (cell: string, op: string, input?: unknown) => host.invoke(cell, op, input, 'nucleus-shadow') }
+    },
+    now: () => Date.now(),
+  })
+  const canonicalIdKnown = (ball: BallManifest): boolean | undefined => {
+    try { return computeCanonicalBallId(ball) === ball.ballId } catch (_error) { return undefined }
+  }
   hostCtx.provide('checkpointPolicy', Object.freeze({ read: async () => {
     if (!origin || origin === 'null') throw new Error('CHECKPOINT_POLICY_UNAVAILABLE')
     const result = await boundedHostJson(hostRequest, new URL('/_host/checkpoint-policy', origin))
@@ -2832,9 +3715,28 @@ export async function mountX6BallRuntime(
   }
   updateSelfPeer()
 
+  // The text the loader evaluated for each (entry, specifier) in this session, for x6_self_state. The
+  // bytes are read in the same synchronous step as the loader's own read below (nothing runs in between) and recorded
+  // only once the evaluation returned; for a `ball:` specifier they must also hash to its name, as the loader checks.
+  const loadedSources = new Map<string, SelfStateLoaded>()
+  /** The level and configured flag of the last `x6_cloudflare status` answer this session read. */
+  let cloudflareDoorSeen: ReturnType<typeof cloudflareDoorStatusOf> = null
   const evaluateCandidate = (specifier: string, entryId: string): unknown => {
     const req = loader.requireFrom('/dsh')
+    let evaluating: SelfStateLoaded | null = null
+    try {
+      const data = vfs.readFileSync(req.resolve(specifier))
+      const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data
+      const sha256 = sha256HexSync(bytes)
+      if (!specifier.startsWith('ball:') || specifier.slice(5).toLowerCase() === sha256) evaluating = { sha256, bytes: bytes.byteLength }
+    } catch { evaluating = null }
     const raw = req(specifier)
+    if (evaluating !== null) {
+      const key = `${entryId}\u0000${specifier}`
+      loadedSources.delete(key)
+      loadedSources.set(key, evaluating)
+      if (loadedSources.size > 512) loadedSources.delete(loadedSources.keys().next().value as string)
+    }
     const shaHint = specifier.startsWith('ball:') ? specifier.slice('ball:'.length) : undefined
     const plugin = unwrapPluginExport(raw, spec => mountSeedOrgan(spec, shaHint ?? '', entryId))
     if (!isValidPlugin(plugin)) {
@@ -3099,6 +4001,7 @@ export async function mountX6BallRuntime(
         `entry ${entryId} exports the name ${JSON.stringify(exportName)}; a Seed organ's exported name must equal its entry id`,
         { exportName, entryId })
     }
+    syncCandidateBallsStore(vfs)
     const rec: MountedOrganRecord = {
       name: entryId, sha256,
       description: spec.description ?? `Seed organ ${entryId}`,
@@ -3190,7 +4093,6 @@ export async function mountX6BallRuntime(
     },
     async call(name: string, args?: unknown) {
       enforceToolInvocation(name, args, currentBall.entries)
-      try { syncCandidateBallsStore(vfs) } catch {}
       const target = mountedOrgans.get(name) ?? mountedOrgans.get(name.replace(/_/g, '-'))
       if (!target) {
         throw new Error(`Organ "${name}" is not mounted`)
@@ -3207,7 +4109,7 @@ export async function mountX6BallRuntime(
         snapshots: getX6Services().snapshots ?? hostCtx.get('snapshots'),
         scion: target.scion(),
         checkpointPolicy: hostCtx.get('checkpointPolicy'),
-        wasm: workerCellHost(),
+        wasm: organCellHost(workerCellHost()),
       }
       const rawArgs = (args && typeof args === 'object') ? args as Record<string, unknown> : {}
       if (target.name === 'seed-aura') {
@@ -3528,17 +4430,44 @@ export async function mountX6BallRuntime(
   }
   const stageHeadPromotion = (input: unknown) => writeStagedHeadPromotion(currentBall, input, currentBall.ballId)
   /** Save one refused outward request for the owner's passkey, as the exact JSON the host was (or would be) sent. */
-  const stageOutward = (tool: 'x6_github' | 'x6_repo', pathname: '/_host/github' | '/_host/repo', args: unknown,
+  const stageOutward = (tool: 'x6_github' | 'x6_repo' | 'x6_cloudflare' | 'x6_linear', // x6_cloudflare; LINDOOR hook: x6_linear
+    pathname: '/_host/github' | '/_host/repo' | '/_host/cloudflare' | '/_host/linear', args: unknown, // /_host/linear
     answer: Record<string, unknown>, exec?: unknown): Record<string, unknown> => {
     // Voice hook: a look-only session, or any spoken turn, never stages a card for the owner.
     const voiceSession = voiceSessionOf(exec)
-    if (voiceSession !== null
+    // VOICE LEVEL open: a spoken turn stages a card like any turn of hers (the card is the owner's fingerprint, not hers).
+    if (voiceSession !== null && voiceLookOnly.level() !== 'open'
       && (voiceLookOnly.looksOnly(voiceSession.id, voiceSession.header) || voiceLookOnly.spokenTurn(voiceSession.id))) {
       return { ...answer, stagedForOwner: false, sent: false, code: 'VOICE_LOOK_ONLY',
         say: 'I can look, I cannot change things from voice yet.' }
     }
+    // A Cloudflare write carries the edge's `protection` (why it needs the fingerprint) onto the card, and never
+    // takes the one slot from a GitHub, repo or Linear request already waiting for the owner: that one is kept and named.
+    let protection: Record<string, unknown> | null = null
+    if (tool === 'x6_cloudflare') {
+      protection = cloudflareProtection(answer.protection)
+      if (protection === null) return { ...answer, stagedForOwner: false, sent: false, next: CLOUDFLARE_UNSTAGED_NEXT }
+      const waiting = waitingOutward(readTextSafe(STAGED_OUTWARD_PATH))
+      if (waiting !== null) {
+        return { ...answer, stagedForOwner: false, sent: false, waiting,
+          next: `Nothing was sent and nothing was staged: The owner's card already holds ${waiting}, waiting for his fingerprint, and it is `
+            + 'kept. Ask again after he approves or clears it; tell him in words meanwhile what you want to change on Cloudflare and why. '
+            + 'His card hides a request once it is sent but the slot keeps it: if he says he already approved or cleared it, empty the slot '
+            + 'with x6_repo { action: "clear_staged_outward" } and ask again.' }
+      }
+    }
+    if (tool === 'x6_linear') { // A Linear write never takes the slot from a request already waiting for the owner
+      const waiting = waitingForLinear(readTextSafe(STAGED_OUTWARD_PATH))
+      if (waiting !== null) {
+        return { ...answer, stagedForOwner: false, sent: false, waiting,
+          next: `Nothing was sent and nothing was staged: The owner's card already holds ${waiting}, waiting for his fingerprint, and it is `
+            + 'kept. Ask again after he approves or clears it, with the same requestId; tell him in words meanwhile what you want to change in '
+            + 'Linear and why. If he says he already approved or cleared it, empty the slot with x6_repo { action: "clear_staged_outward" }.' }
+      }
+    }
     const body: unknown = JSON.parse(JSON.stringify(args))
-    const text = JSON.stringify({ schema: STAGED_OUTWARD_SCHEMA, stagedAt: Date.now(), tool, method: 'POST', pathname, body }, null, 2) + '\n'
+    const text = JSON.stringify({ schema: STAGED_OUTWARD_SCHEMA, stagedAt: Date.now(), tool, method: 'POST', pathname, body,
+      ...(protection !== null ? { protection } : {}) }, null, 2) + '\n' // Protection
     if (new TextEncoder().encode(text).byteLength > STAGED_OUTWARD_MAX_BYTES) return { ...answer, stagedForOwner: false, stageError: 'STAGED_OUTWARD_TOO_LARGE' }
     vfs.mkdirSync('/dsh/home/auma/staged', { recursive: true })
     vfs.writeFileSync(STAGED_OUTWARD_PATH, text)
@@ -3725,7 +4654,7 @@ export async function mountX6BallRuntime(
     if (typeof snap.wishMd === 'string' && snap.wishMd.length > 0) {
       vfs.writeFileSync(WISH_PATH, snap.wishMd)
     }
-    const mutation = await completeMutation('snapshot.restore', snap.snapshotId)
+    const mutation = await completeMutation('snapshot.restore', snap.snapshotId, undefined, before)
     return {
       ok: true,
       restoredSnapshotId: snap.snapshotId,
@@ -4200,7 +5129,31 @@ export async function mountX6BallRuntime(
     hostCtx.provide('snapshots', snapshotsService)
   } catch {}
 
-  const broadcastCommit = async (manifest: BallManifest): Promise<{ saved: boolean; target: string | null; error?: string }> => {
+  /**
+   * The head a commit is judged against, as she held it: the in-memory parent the caller passes,
+   * else her own history file of that parent. Only a manifest whose id and epoch are the commit's parent; else undefined
+   * (the consult then says FACT_UNKNOWN:entries). Reads only.
+   */
+  const commitParentOf = (manifest: BallManifest, heldParent?: BallManifest): BallManifest | undefined => {
+    try {
+      const parentId = manifest.parentBallId
+      if (typeof parentId !== 'string' || !/^[0-9a-f]{64}$/.test(parentId)) return undefined
+      let parent = heldParent
+      if (parent === undefined) {
+        const parentPath = join(HISTORY_DIR, `${parentId}.json`)
+        if (!vfs.existsSync(parentPath)) return undefined
+        parent = JSON.parse(vfs.readFileSync(parentPath, 'utf8') as string) as BallManifest
+      }
+      return parent.ballId === parentId && parent.epoch === manifest.epoch - 1 ? parent : undefined
+    } catch (_error) { return undefined }
+  }
+
+  const broadcastCommit = async (manifest: BallManifest, heldParent?: BallManifest): Promise<{
+    saved: boolean
+    target: string | null
+    error?: string
+    nucleus?: NucleusConsultAnswer
+  }> => {
     const codeBySha = collectCodeBySha(manifest)
     const msg = {
       type: 'ball:commit',
@@ -4214,6 +5167,15 @@ export async function mountX6BallRuntime(
     }
     // Presence delivery is not a durable save acknowledgment. Only HTTP names the saved head.
     if (!origin || origin === 'null') return { saved: false, target: null, error: 'No head endpoint' }
+    // A tree_patch / tree_undo / snapshot commit is a head the edge judges too: consult before it
+    // leaves (before the 10 s request clock starts). `msg` is built above and never reads it; a first head (no parent) is
+    // not a transition and is not consulted.
+    const shadow = typeof manifest.parentBallId === 'string'
+      ? await nucleusShadow.consult(commitParentOf(manifest, heldParent), manifest,
+        { canonicalManifestMatches: canonicalIdKnown(manifest) })
+      : null
+    let shadowEdge: EdgeTierOutcome | null = null
+    const nucleus = shadow === null ? {} : { nucleus: shadow.nucleus }
     const target = new URL('/_head/ball', origin).href
     const controller = new AbortController()
     const timer = setTimeout(() => { controller.abort() }, 10_000)
@@ -4225,7 +5187,7 @@ export async function mountX6BallRuntime(
         credentials: 'same-origin',
         signal: controller.signal,
       })
-      const ack = await response.json() as { ok?: boolean; ballId?: string; code?: string }
+      const ack = await response.json() as { ok?: boolean; ballId?: string; code?: string; tier?: unknown }
       if (!response.ok || ack.ok !== true || ack.ballId !== manifest.ballId) {
         if (ack.code === 'CLASS3_WEBAUTHN_REQUIRED') {
           const parentPath = join(HISTORY_DIR, `${manifest.parentBallId}.json`)
@@ -4235,14 +5197,17 @@ export async function mountX6BallRuntime(
             || !manifestIdMatches(previous)) throw new Error('STAGED_PROMOTION_PARENT_INVALID')
           writeStagedHeadPromotion(previous, msg, manifest.ballId)
         }
-        return { saved: false, target, error: `${ack.code ?? 'HEAD_ACK_MISSING'}: head did not acknowledge ${manifest.ballId}: HTTP ${String(response.status)}` }
+        return { saved: false, target, error: `${ack.code ?? 'HEAD_ACK_MISSING'}: head did not acknowledge ${manifest.ballId}: HTTP ${String(response.status)}`, ...nucleus }
       }
+      // The publish answer's `tier: 'T1'` is the only classification it carries (T1 means no reason); else `unknown`.
+      if (ack.tier === 'T1') shadowEdge = { tier: 'T1', t2Reasons: [] }
       try { bc?.postMessage(msg) } catch {}
-      return { saved: true, target }
+      return { saved: true, target, ...nucleus }
     } catch (error) {
-      return { saved: false, target, error: error instanceof Error ? error.message : String(error) }
+      return { saved: false, target, error: error instanceof Error ? error.message : String(error), ...nucleus }
     } finally {
       clearTimeout(timer)
+      if (shadow !== null) nucleusShadow.settle(shadow, shadowEdge)
     }
   }
 
@@ -4254,7 +5219,8 @@ export async function mountX6BallRuntime(
   })
 
   const completeMutation = async (kind: string, id: string,
-    context: TransitionContext = createTransitionContext(isTransitionKind(kind) ? kind : 'tree.patch')): Promise<BallMutationState> => {
+    context: TransitionContext = createTransitionContext(isTransitionKind(kind) ? kind : 'tree.patch'),
+    previous?: BallManifest): Promise<BallMutationState> => {
     const manifest = currentBall
     const errors: Record<string, string> = {}
     let receiptSaved = false
@@ -4297,12 +5263,13 @@ export async function mountX6BallRuntime(
     } catch (error) {
       errors.local = error instanceof Error ? error.message : String(error)
     }
-    const remote = await broadcastCommit(manifest)
+    const remote = await broadcastCommit(manifest, previous)
     if (remote.error) errors.remote = remote.error
     lastMutation = {
       ballId: manifest.ballId, prepared: true, activated: true,
       localSaved, remoteSaved: remote.saved, remoteTarget: remote.target,
       receiptSaved: receiptSaved && localSaved, at: Date.now(), errors,
+      ...(remote.nucleus === undefined ? {} : { nucleus: remote.nucleus }), // Hers only
     }
     return lastMutation
   }
@@ -4667,6 +5634,7 @@ export async function mountX6BallRuntime(
     const specifier = `ball:${sha256}`
     const filePath = join(BALLS_DIR, `${sha256}.js`)
     vfs.writeFileSync(filePath, code)
+    vfs.writeFileSync(`/dsh/home/organs/${sha256}.js`, code)
 
     // Staging is inert. Code executes only during explicit tree activation.
 
@@ -4792,6 +5760,13 @@ export async function mountX6BallRuntime(
     }
     // Validate and construct the complete candidate before touching the running tree.
     // Failure to checkpoint must stop the mutation, rather than remove recovery.
+    if (!governance) {
+      if (!sha) throw new Error('ID_PROMOTION_AUTHORITY_REQUIRED')
+      await reserveIdPromotionBudget({ expectedBallId: currentBall.ballId, organId: id, candidateSha: sha,
+        writerLease: activeWriterLease }, leaseRequest)
+      // Awaited authority must not let a stale admission cross into activation.
+      requireRetentionAdmission(id, specifier, input.qualificationId)
+    }
     createSnapshot(`pre-tree_patch:${id}`)
     retentionAdmissions.delete(input.qualificationId ?? '')
     await mountOrSwapEntry(nextEntry, markApplied)
@@ -4803,7 +5778,7 @@ export async function mountX6BallRuntime(
     vfs.writeFileSync(HEAD_PATH, JSON.stringify(currentBall, null, 2) + '\n')
     appendHistoricalFile(join(HISTORY_DIR, `${currentBall.ballId}.json`), JSON.stringify(currentBall, null, 2) + '\n')
     updateSelfPeer()
-    const mutation = await completeMutation('tree.patch', id)
+    const mutation = await completeMutation('tree.patch', id, undefined, previousBall)
 
     const elapsedMs = Math.round((performance.now() - t0) * 100) / 100
     return { ok: true, ball: currentBall, entry: nextEntry, elapsedMs, mutation }
@@ -4877,11 +5852,12 @@ export async function mountX6BallRuntime(
       modules: currentBall.modules,
     }
     markApplied()
+    const previousBall = currentBall
     currentBall = nextBall
     vfs.writeFileSync(HEAD_PATH, JSON.stringify(currentBall, null, 2) + '\n')
     appendHistoricalFile(join(HISTORY_DIR, `${currentBall.ballId}.json`), JSON.stringify(currentBall, null, 2) + '\n')
     updateSelfPeer()
-    const mutation = await completeMutation('tree.undo', targetId)
+    const mutation = await completeMutation('tree.undo', targetId, undefined, previousBall)
 
     return {
       ok: true,
@@ -4933,10 +5909,20 @@ export async function mountX6BallRuntime(
     }
   }
 
+  // ---- TOOLS block begin ----
+  // The x6t_ tools this runtime registered from her mounted manifests, each with read-only as its manifest's actions say
+  // (manifestReadOnly), for the capability index.
+  const mountedToolsReadOnly = new Map<string, boolean>()
+  // ---- TOOLS block end ----
   // Lane E6: resident capability index for auma-cortex, derived from in-memory state only.
   const capabilityIndex = createCapabilityIndex(() => {
-    let tools: ReadonlyArray<{ name: string; description?: unknown; parameters?: unknown }> = []
+    let tools: ReadonlyArray<{ name: string; description?: unknown; parameters?: unknown; readOnly?: unknown; mutating?: unknown }> = []
     try { tools = (hostCtx.tools?.definitions?.() ?? []) as unknown as typeof tools } catch { tools = [] }
+    // A mounted tool's read-only is derived from its manifest (tool-registry.ts admits T1 only).
+    tools = tools.map((tool) => {
+      const ro = mountedToolsReadOnly.get(tool.name)
+      return ro === undefined ? tool : { ...tool, readOnly: ro, mutating: !ro }
+    })
     return { epoch: currentBall.epoch, ballId: currentBall.ballId, tools, entries: currentBall.entries, modules: currentBall.modules }
   })
   const readStatus = () => {
@@ -5128,6 +6114,8 @@ export async function mountX6BallRuntime(
       stageDetail?: string
       binding: unknown
       staged: Record<string, unknown> | null
+      /** HEAD's own classification of an acknowledged stage, for the shadow tally only (never returned to her). */
+      edgeTier?: EdgeTierOutcome
     }> => {
       if (!origin || origin === 'null') return { edgeStaged: false, stageStatus: null, stageError: 'ORIGIN_UNAVAILABLE', binding: null, staged: null }
       let envelope: unknown
@@ -5148,7 +6136,8 @@ export async function mountX6BallRuntime(
           governanceClass: staged.governanceClass ?? null, changedEntries: staged.changedEntries ?? null,
           organSet: staged.organSet ?? null } : null
         if (response.ok && record(json) && json.ok === true && staged?.state === 'awaiting_owner') {
-          return { edgeStaged: true, stageStatus: response.status, stageError: null, binding: staged.binding ?? null, staged: view }
+          return { edgeStaged: true, stageStatus: response.status, stageError: null, binding: staged.binding ?? null, staged: view,
+            edgeTier: { tier: staged.tier, t2Reasons: staged.t2Reasons } }
         }
         const code = record(json) && typeof json.code === 'string' && /^[A-Z][A-Z0-9_]{2,80}$/.test(json.code)
           ? json.code : response.ok ? 'HEAD_STAGE_NOT_ACKNOWLEDGED' : `HEAD_STAGE_HTTP_${String(response.status)}`
@@ -5231,7 +6220,10 @@ export async function mountX6BallRuntime(
       hop('local-staged', true, STAGED_HEAD_PROMOTION_PATH)
       const flush = await flushPersistenceReport()
       hop('idb-flushed', flush.flushed && flush.durable, flush.error ?? 'durable')
+      // Shadow consult on the built bytes (plan.text is fixed above); nothing below reads its answer.
+      const shadow = await nucleusShadow.consult(live.ball, plan.ball, { canonicalManifestMatches: canonicalIdKnown(plan.ball) })
       const edge = await postHeadStage(plan.text, context, args.replaceStaged === true)
+      nucleusShadow.settle(shadow, edge.edgeTier ?? null)
       hop('edge-staged', edge.edgeStaged, edge.stageError ?? 'awaiting_owner')
       let receiptSaved = false
       if (edge.edgeStaged && mountedOrgans.has('seed-receipts')) {
@@ -5251,7 +6243,7 @@ export async function mountX6BallRuntime(
         tier: plan.tier, governanceClass: plan.governanceClass, t2Reasons: plan.t2Reasons, changedEntries: plan.changedEntryIds,
         stagedPath: STAGED_HEAD_PROMOTION_PATH, stagedSha256, persistence: flush,
         edgeStaged: edge.edgeStaged, stageStatus: edge.stageStatus, stageError: edge.stageError, binding: edge.binding, staged: edge.staged,
-        receiptSaved, ...transitionFields(context), hops,
+        receiptSaved, ...transitionFields(context), nucleus: shadow.nucleus, hops,
         hint: edge.edgeStaged
           ? (plan.governanceClass === 3 ? 'Awaiting one Touch ID approval in the Sovereignty card.' : 'Awaiting owner approval of the staged candidate.')
           : 'The candidate is retained locally; the edge did not acknowledge staging. Inspect stageError before retrying.',
@@ -5348,7 +6340,10 @@ export async function mountX6BallRuntime(
       hop('local-staged', true, STAGED_HEAD_PROMOTION_PATH)
       const flush = await flushPersistenceReport()
       hop('idb-flushed', flush.flushed && flush.durable, flush.error ?? 'durable')
+      // Shadow consult on the built bytes; nothing below reads its answer.
+      const shadow = await nucleusShadow.consult(live.ball, plan.ball, { canonicalManifestMatches: canonicalIdKnown(plan.ball) })
       const edge = await postHeadStage(plan.text, context, args.replaceStaged === true)
+      nucleusShadow.settle(shadow, edge.edgeTier ?? null)
       const organSet = edge.staged?.organSet ?? null
       // HEAD acknowledged a candidate it does not treat as an ordinary add: say so, never present it as the Add card.
       const notRecorded = edge.edgeStaged && organSet === null
@@ -5360,7 +6355,8 @@ export async function mountX6BallRuntime(
         ballId: plan.ball.ballId, parentBallId: plan.ball.parentBallId, epoch: plan.ball.epoch,
         organs: plan.organs, newModules: plan.newModules, organSet,
         stagedPath: STAGED_HEAD_PROMOTION_PATH, stagedSha256, persistence: flush,
-        edgeStaged: edge.edgeStaged, stageStatus: edge.stageStatus, stageError: edge.stageError, ...transitionFields(context), hops,
+        edgeStaged: edge.edgeStaged, stageStatus: edge.stageStatus, stageError: edge.stageError, ...transitionFields(context),
+        nucleus: shadow.nucleus, hops,
         hint: ok ? 'Awaiting one Touch ID on the Add organs card.'
           : notRecorded ? 'HEAD staged it but does not record it as an ordinary add; nothing will be offered on the Add organs card.'
             : 'The candidate is retained locally; the edge did not acknowledge staging. Inspect stageError before retrying.',
@@ -6019,7 +7015,11 @@ export async function mountX6BallRuntime(
         const persistenceReport = await flushPersistenceReport()
         logHop('idb-flushed', persistenceReport.flushed && persistenceReport.durable, persistenceReport.error ?? 'durable')
         const stageContext = createTransitionContext('head.stage', promoteContext.operationId)
-        const edge = await postHeadStage(JSON.stringify(t2Envelope), stageContext, false)
+        const t2Text = JSON.stringify(t2Envelope)
+        // Shadow consult on the exact candidate the envelope carries; nothing below reads its answer.
+        const shadow = await nucleusShadow.consult(currentBall, ball, { canonicalManifestMatches: canonical })
+        const edge = await postHeadStage(t2Text, stageContext, false)
+        nucleusShadow.settle(shadow, edge.edgeTier ?? null)
         const edgeStaged = edge.edgeStaged
         const edgeBinding = edge.binding
         const stageError = edge.stageError
@@ -6052,6 +7052,7 @@ export async function mountX6BallRuntime(
           resultingEpoch: ball.epoch,
           changedEntries,
           rebase: rebaseReceipt,
+          nucleus: shadow.nucleus,
           hint: passkeyCardEligible
             ? 'Staged at /dsh/home/auma/staged/head-promotion.json and /_head/stage for one-tap Touch ID approval in the Sovereignty UI card.'
             : 'The candidate is retained locally, but the host did not acknowledge owner staging. Inspect stageError and promotion_status before retrying.',
@@ -6059,6 +7060,10 @@ export async function mountX6BallRuntime(
         }
       }
       logHop('validated-t1', true, `changed=${changedEntries.join(',') || 'none'}${repaired ? ':repaired-modules' : ''}`)
+      // Shadow consult before the lease and publish leave; nothing below reads its answer. The publish
+      // answer's `tier: 'T1'` is the only classification it carries (T1 means no reason); anything else is `unknown`.
+      const shadow = await nucleusShadow.consult(currentBall, ball, { canonicalManifestMatches: canonical })
+      let shadowEdge: EdgeTierOutcome | null = null
       const leaseRes = await fetch(new URL('/_head/lease', origin).href, {
         method: 'POST',
         credentials: 'same-origin',
@@ -6075,7 +7080,9 @@ export async function mountX6BallRuntime(
       if (!leaseRes.ok || !leaseJson.ok || !leaseJson.lease) {
         const errCode = leaseJson.code ?? 'LEASE_ACQUIRE_FAILED'
         logHop('lease-acquired', false, errCode)
-        return { ok: false, code: errCode, failedHop: 'lease-acquired', status: leaseRes.status, leaseResponse: leaseJson, hops }
+        nucleusShadow.settle(shadow, null)
+        return { ok: false, code: errCode, failedHop: 'lease-acquired', status: leaseRes.status, leaseResponse: leaseJson,
+          nucleus: shadow.nucleus, hops }
       }
       const heldLease = leaseJson.lease
       logHop('lease-acquired', true, `owner=${heldLease.ownerPeerId}:gen=${String(heldLease.generation)}`)
@@ -6101,9 +7108,11 @@ export async function mountX6BallRuntime(
           logHop('head-committed', false, errCode)
           return {
             ok: false, code: errCode, failedHop: 'head-committed', status: pubRes.status,
-            path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch, ...pubJson, hops,
+            path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch, ...pubJson, nucleus: shadow.nucleus, hops,
           }
         }
+        if (pubJson.tier === 'T1') shadowEdge = { tier: 'T1', t2Reasons: [] }
+        nucleusShadow.settle(shadow, shadowEdge)
         logHop('head-committed', true, `${String(pubJson.ballId ?? ball.ballId).slice(0, 12)}@epoch${String(pubJson.epoch ?? ball.epoch)}`)
         let adopted: Record<string, unknown> = { ok: false, adopted: false }
         try {
@@ -6162,9 +7171,11 @@ export async function mountX6BallRuntime(
           ...transitionFields(promoteContext),
           adopted,
           githubSync,
+          nucleus: shadow.nucleus,
           hops,
         }
       } finally {
+        nucleusShadow.settle(shadow, shadowEdge)
         await fetch(new URL('/_head/lease', origin).href, {
           method: 'POST',
           credentials: 'same-origin',
@@ -6606,7 +7617,8 @@ export async function mountX6BallRuntime(
         path: encoder.encode(name).byteLength, content: encoder.encode(text).byteLength,
       }))
       const bytes = lengths.reduce((total, file) => total + file.content, 0)
-      if (files.size > 16 || lengths.some(file => file.path > 1024 || file.content > (privateBranch ? REPO_SOURCE_FILE_BYTES : 64 * 1024))
+      if (files.size > (privateBranch ? REPO_PRIVATE_COMMIT_FILES : 16)
+        || lengths.some(file => file.path > 1024 || file.content > (privateBranch ? REPO_SOURCE_FILE_BYTES : 64 * 1024))
         || bytes > (privateBranch ? REPO_PRIVATE_COMMIT_BYTES : 128 * 1024)
         || (!previous && stagedRepoWrites.size >= 8)) throw new Error('REPO_DRAFT_LIMIT_EXCEEDED')
       stagedRepoWrites.set(branch, { baseSha, files })
@@ -6615,6 +7627,7 @@ export async function mountX6BallRuntime(
       name: 'x6_capability_index',
       description: 'Read-only resident index of your own capabilities (auma-cortex Tier A): registered tools with readOnly/mutating '
         + 'flags and parameter summaries, mounted organs with SHA-256 and byte sizes, the live epoch and ballId, and a SHA-256 digest. '
+        + 'each tool with actions lists which of its actions read and which write; a tool is `readOnly` only when nothing in it writes. '
         + 'Recomputed on every promotion, zero I/O, voiceAuthority none. `lookup` with an exact `name` answers NO_SUCH_SURFACE for '
         + 'anything not mounted. It can only read; it stages, promotes or approves nothing.',
       parameters: {
@@ -6626,16 +7639,58 @@ export async function mountX6BallRuntime(
         return args.action === 'lookup' ? capabilityIndex.lookup(args.name) : capabilityIndex.read()
       },
     })
+    // x6_self_state (self-state.ts) over a read-only snapshot of this loader's own registry. The head
+    // held at registration is the one she booted from (the boot head fetch is done; entries mount after this).
+    const bootHead = { ballId: currentBall.ballId, origin: hasRemoteHead ? 'host' as const : 'local' as const }
+    const selfStateRegistry = (): SelfStateRegistry => {
+      let tools: string[] | null
+      try { tools = (hostCtx.tools?.definitions?.() ?? []).map(definition => definition.name) } catch { tools = null }
+      const runs = (entry: BallEntryRecord): string => activeFibers.get(entry.id)?.specifier ?? entry.specifier
+      const selected = new Set(Object.values(currentBall.entries).flatMap(entry => [entry.specifier, runs(entry)]))
+      const genesis = currentBall.epoch === 0 && currentBall.parentBallId === null && Object.keys(currentBall.entries).length === 0
+      return {
+        sourceRevision, bootedAtMs: now,
+        head: genesis ? null : { ballId: currentBall.ballId, epoch: currentBall.epoch,
+          origin: currentBall.ballId === bootHead.ballId ? bootHead.origin : hostHeadInfo?.ballId === currentBall.ballId ? 'host' : 'local' },
+        organs: Object.values(currentBall.entries).map(entry => ({ id: entry.id, specifier: entry.specifier,
+          loaded: loadedSources.get(`${entry.id}\u0000${runs(entry)}`) ?? null, state: entryState(entry).state })),
+        staged: [...preparedModules.values()].filter(meta => !selected.has(`ball:${meta.sha256}`)).map(meta => ({ sha256: meta.sha256, name: meta.name })),
+        tools,
+        cloudflareDoor: { registered: tools?.includes('x6_cloudflare') ?? false, status: cloudflareDoorSeen },
+        nucleusShadow: nucleusShadow.snapshot(),
+        ...cellFactsOf(workerCellHost),
+        forgedCells: forgedCellRows(vfs),
+        // ---- KYBERSKILL block begin ----
+        skills: keptSkillRows(vfs),
+        // ---- KYBERSKILL block end ----
+        ...threadSyncSelfStateField(), // THREADSYNC hook (a copy; reads only); the thread sync switch: no key while switched off
+      }
+    }
+    registerBuiltin({ ...selfStateToolSpec(() => ({ origin, registry: selfStateRegistry, readFile: path => vfs.readFileSync(path),
+      settle: () => workerCellHost().journal() })),
+    output: jsonOut })
+    // x6_self_check (self-check.ts), her inside test in one call. Each probe calls a tool exactly as
+    // POST /__x6__/call-tool does (the invocation check, then the registered execute); the shadow consult is never settled.
+    registerBuiltin({ ...selfCheckToolSpec(() => ({ sourceRevision,
+      toolNames: () => (hostCtx.tools?.definitions?.() ?? []).map(definition => definition.name),
+      callTool: async (name: string, args: Record<string, unknown>, signal: AbortSignal) => {
+        enforceToolInvocation(name, args, currentBall.entries)
+        const def = hostCtx.tools?.get?.(name)
+        if (!def || typeof def.execute !== 'function') throw new Error(`NOT_REGISTERED: ${name}`)
+        return await def.execute(args, { signal })
+      },
+      consultShadow: (previous: unknown, candidate: unknown, known: { readonly canonicalManifestMatches?: unknown }) =>
+        nucleusShadow.consult(previous, candidate, known) })), output: jsonOut })
     registerBuiltin({
       name: 'x6_browser_estate',
       description: 'Read-only inventory of this browser\'s own estate, no GitHub or Mac needed: MemoryVfs tree with sizes and SHA-256 under /dsh/home/auma (and workspaces), session index and bounded transcript search over /dsh/home/sessions (legacy dirs included), IndexedDB persistence queue/tombstones/conflicts, Cordis fibers/organs/services/tools, Wasm pins and memory limits, receipt chain and checkpoint summary. /dsh/home/auma/private/** is reported by existence and size only. Output is bounded; page with cursor/limit.',
       parameters: {
         sections: { type: 'json', description: 'Subset of ["vfs","sessions","search","persistence","cordis","wasm","receipts"]; default all except search.' },
         cursor: { type: 'number', description: 'VFS page offset (default 0).' },
-        limit: { type: 'number', description: 'VFS page size, 1..1000 (default 200).' },
+        limit: { type: 'number', description: 'VFS page size, 1..4000 (default 200); a page past the 256 KiB output bound is trimmed and says so.' },
         root: { type: 'string', description: 'VFS root under /dsh/home/auma (default /dsh/home/auma).' },
         query: { type: 'string', description: 'Literal, case-insensitive transcript search (enables the search section), at most 128 characters.' },
-        maxHits: { type: 'number', description: 'Search hits, 1..100 (default 20).' },
+        maxHits: { type: 'number', description: 'Search hits, 1..400 (default 20).' },
         perFileHashBytes: { type: 'number', description: 'Largest file hashed, up to 8 MiB (default 1 MiB).' },
       },
       output: jsonOut,
@@ -6674,19 +7729,25 @@ export async function mountX6BallRuntime(
         + '`promotion_status` inspects staged head promotions, `stagedRepoProposal`, live edge HEAD lease and publish/merge outcomes, '
         + '`promote_staged` promotes a staged head promotion (`/dsh/home/auma/staged/head-promotion.json` or `path`) directly to edge HEAD under an active owner session and adopts it locally, '
         + '`transcript` reads or appends to the DO-resident cross-browser continuity transcript, turn lease, and idempotent tool-call table (`/_head/transcript`), '
-        + '`tree` lists repository files (optionally under a directory `prefix`), `read` reads one file (`path`, with optional `offset` and `length` for ranged reads), '
+        + '`tree` lists repository files (optionally under a directory `prefix`; up to 4000 entries within 224 KiB, `truncated` says when more exist), `read` reads one file (`path`, with optional `offset` and `length` for ranged reads; `nextOffset` names the next range), '
         + '`search` finds at most 200 bounded source lines and reports truncated/filesScanned; regex supports only literals, character classes, dot and anchors, without repetition, alternation or groups. '
-        + '`compare_files` compares two files of at most 256 KiB each from auto, mirror or GitHub sources. '
+        + '`compare_files` compares two files from auto, mirror or GitHub sources, each up to 1 MiB and at most what one read returns (512 KiB). '
         + '`bytes` inspects a bounded byte slice, hex, and whole-file SHA-256 of `path`, '
         + '`state_diff` compares HEAD and MIRROR state against an optional `base` snapshot or ballId, '
         + '`diff` and `log` read history; `write` stages or writes a source file, `edit` replaces an exact unique `oldString` with `newString` in `path`, and `commit` commits explicit or staged changes. '
         + '`branch_create`/`branch_delete` and branch-scoped `read`/`write`/`edit`/`commit`/`diff` use auma/sandbox/<slug> or auma/proposal/<slug> under the owner session without a passkey. '
+        // ---- PATCH block begin ----
+        + '`apply_patch` brings a change home: `patch` is a unified diff exactly as `git diff` prints it (at most 256 KiB and 64 files; no rename, copy, mode change, binary or submodule), `baseSha` is the branch head you last saw, and every hunk must apply at its stated line with every context line equal; it lands as ONE commit with `message` on your own auma branch through the same fence as `commit` (never main), or is refused with PATCH_* or REPO_HEAD_MOVED and nothing written. '
+        // ---- PATCH block end ----
         + 'Private branches permit T2 source fixes but never .github files or secrets. Drafts are isolated by branch and base SHA; main T2 writes still require owner approval. '
         + 'A write, edit or commit of yours on main that touches a deployed path is refused with `REPO_PROPOSAL_REQUIRED` and a `next` field: that answer reaches you unchanged and stages no Touch ID card; '
         + 'do what `next` says (put the change on an auma/proposal/<slug> branch, then `stage_proposal`). '
-        + 'Private files are limited to 512 KiB UTF-8 each; a commit or retained branch draft holds at most 16 files and 1 MiB of content, across at most eight retained branch drafts. JSON requests allow 6 MiB plus 32 KiB for escaping and metadata. '
+        + 'Private files are limited to 512 KiB UTF-8 each; a commit or retained branch draft holds at most 64 files and 4 MiB of content, across at most eight retained branch drafts. JSON requests allow 12 MiB plus 32 KiB for escaping and metadata. '
         + '`draft_discard` requires an explicit private auma branch and removes only its local pending content (optionally one path), never remote files or branches; main drafts cannot be discarded here. Use it after preserving needed content when a draft base becomes stale, then reread before restaging. '
         + '`stage_proposal` prepares the exact merge for the owner’s Sovereignty card; `merge_proposal` cannot execute here and requires that card’s Touch ID. Never supply approval tokens or credentials. '
+        + '`withdraw_proposal` (`branch`, `headSha` of the staged card) takes back the merge card you staged; it merges nothing and needs no fingerprint. '
+        + '`sync_head_to_github` saves the edge HEAD to GitHub; `head_rollback` restores a previous head or organ; `modules` reads stored module bytes and hashes. '
+        + '`clear_staged_outward` removes the staged outward request; `status` reads repository state; `push` requests publication under host policy; `exec` requests a host command and is unavailable on the Cloudflare edge. '
         + '`dispatch_workflow` triggers `.github/workflows/deploy-x61.yml`.',
       parameters: {
         action: {
@@ -6697,7 +7758,9 @@ export async function mountX6BallRuntime(
             'sync_head_to_github', 'head_rollback', 'modules', 'clear_staged_outward',
             'transcript', 'tree', 'status', 'diff', 'state_diff', 'log', 'read', 'bytes', 'search', 'compare_files',
             'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'draft_discard',
+            'withdraw_proposal',
             'write', 'edit', 'commit', 'push', 'dispatch_workflow', 'exec',
+            'apply_patch',
           ],
           description: 'Repository or edge HEAD operation.',
         },
@@ -6737,20 +7800,21 @@ export async function mountX6BallRuntime(
         contextLines: { type: 'number', description: 'Number of surrounding lines in compare_files unified hunks.' },
         title: { type: 'string', description: 'Short plain-English title for stage_proposal.' },
         summary: { type: 'string', description: 'Optional summary for stage_proposal.' },
-        baseSha: { type: 'string', description: 'Exact 40-hex main commit from the staged merge body; does not authorize merge_proposal.' },
+        baseSha: { type: 'string', description: 'Exact 40-hex main commit from the staged merge body; does not authorize merge_proposal. For apply_patch: the exact 40-hex head of your branch the patch was made against.' }, // apply_patch sentence
+        patch: { type: 'string', description: 'For apply_patch: a unified diff exactly as `git diff` prints it, at most 256 KiB.' },
         headSha: { type: 'string', description: 'Exact 40-hex branch commit from the staged merge body.' },
         treeSha: { type: 'string', description: 'Exact 40-hex branch tree from the staged merge body.' },
         expectedHeadSha: { type: 'string', description: 'Optional exact 40-hex private-branch base for write/edit/commit; retained drafts pin this automatically.' },
         offset: { type: 'number', description: 'Zero-based offset (for action="bytes" or ranged action="read", default 0).' },
-        length: { type: 'number', description: 'Slice length (for action="bytes" 1..4096, or ranged action="read" 1..524288).' },
+        length: { type: 'number', description: 'Slice length (for action="bytes" 1..4096, or ranged action="read" 1..2097152; a read returns at most the 512 KiB file and names nextOffset).' },
         base: { type: 'json', description: 'Base commit SHA (for action="diff") or optional ballId / { head?, mirror? } baseline (for action="state_diff").' },
         ids: { type: 'json', description: 'Optional array of entry IDs to filter `state_diff` results (e.g. ["seed-receipts", "seed-aura"]).' },
-        limit: { type: 'number', description: 'Commit count (for action="log", 1..10, default 10) or row limit (for action="transcript").' },
+        limit: { type: 'number', description: 'Commit count (for action="log", 1..100, default 10; the newest that fit 224 KiB come back, `truncated` says when fewer) or row limit (for action="transcript").' },
         content: { type: 'string', description: 'File content to write (private-branch files at most 512 KiB UTF-8) or transcript text (for action="transcript").' },
         oldString: { type: 'string', description: 'Exact existing string to replace (must occur uniquely in the target file, for action="edit").' },
         newString: { type: 'string', description: 'Replacement string (for action="edit").' },
         message: { type: 'string', description: 'Commit message (for action="commit" or single-step action="write"/"edit").' },
-        changes: { type: 'json', description: 'Optional array of `{ path, content }` changes for `commit` (uses files staged by `write`/`edit` if omitted). Private commits permit at most 16 files, 512 KiB per file and 1 MiB total UTF-8 content.' },
+        changes: { type: 'json', description: 'Optional array of `{ path, content }` changes for `commit` (uses files staged by `write`/`edit` if omitted). Private commits permit at most 64 files, 512 KiB per file and 4 MiB total UTF-8 content.' },
         workflow: { type: 'string', description: 'Workflow filename for `dispatch_workflow` (default "deploy-x61.yml").' },
         paths: { type: 'json', description: 'Optional path array for commit.' },
         command: { type: 'string', description: 'Shell command to run in the repository root (for action="exec").' },
@@ -6823,6 +7887,8 @@ export async function mountX6BallRuntime(
           || args.action === 'branch_create'
           || args.action === 'branch_delete'
           || args.action === 'stage_proposal'
+          || args.action === 'withdraw_proposal'
+          || (args.action === 'apply_patch' && repoSandboxBranch(args.branch))
         ) && (args.expectedHeadSha === undefined || (repoSandboxBranch(args.branch) && ['write', 'edit', 'commit'].includes(actionText(args.action))))
           && args.idempotencyKey === undefined
         const branch = typeof args.branch === 'string' ? args.branch : 'main'
@@ -6832,7 +7898,7 @@ export async function mountX6BallRuntime(
           const offset = args.offset === undefined ? 0 : args.offset
           const length = args.length
           if (!Number.isSafeInteger(offset) || Number(offset) < 0
-            || (length !== undefined && (!Number.isSafeInteger(length) || Number(length) < 1 || Number(length) > REPO_SOURCE_FILE_BYTES))) throw new Error('REPO_BYTE_RANGE_INVALID')
+            || (length !== undefined && (!Number.isSafeInteger(length) || Number(length) < 1 || Number(length) > REPO_RANGE_LENGTH))) throw new Error('REPO_BYTE_RANGE_INVALID')
           const content = localContent.slice(Number(offset), length === undefined ? undefined : Number(offset) + Number(length))
           return { ok: true, path: args.path, branch, content, staged: true, scope: 'caller', source: 'caller-draft', baseSha: draft?.baseSha,
             ...(args.offset !== undefined || length !== undefined ? { offset, length: content.length,
@@ -6869,7 +7935,7 @@ export async function mountX6BallRuntime(
           }
           if (Array.isArray(payload.changes)) {
             let bytes = 0
-            if (payload.changes.length > 16) throw new Error('REPO_COMMIT_LIMIT_EXCEEDED')
+            if (payload.changes.length > REPO_PRIVATE_COMMIT_FILES) throw new Error('REPO_COMMIT_LIMIT_EXCEEDED')
             for (const change of payload.changes) {
               if (!record(change) || typeof change.content !== 'string') throw new Error('REPO_CHANGE_INVALID')
               const length = encoder.encode(change.content).byteLength
@@ -7242,7 +8308,7 @@ export async function mountX6BallRuntime(
       description:
         'Host-brokered GitHub access to this repository (your_org_x/your-node) without exposing tokens to the browser worker. '
         + '`status`; `api` with GET (no body) reads this repository (commits, contents, compare, trees, issues, pulls, runs, as the host '
-        + 'serves them), including actions/runs?branch=<branch>, actions/runs/<runId>/jobs, and actions/jobs/<jobId>/logs. Logs are secret-scrubbed, ANSI-free and tail-capped to 128 KiB. '
+        + 'serves them), including actions/runs?branch=<branch>, actions/runs/<runId>/jobs, and actions/jobs/<jobId>/logs. Logs are secret-scrubbed, ANSI-free and tail-capped to 256 KiB. '
         + '`api` with POST may open an issue (`{ title, body }`) or comment on one (`endpoint: repos/your_org_x/your-node/'
         + 'issues/<n>/comments`, `{ body }`) when the text has no leading slash command and no @mention. On the edge each such post also '
         + 'needs the owner\'s passkey approval for its exact bytes: the answer is CLASS3_WEBAUTHN_REQUIRED with `stagedForOwner`, '
@@ -7257,7 +8323,8 @@ export async function mountX6BallRuntime(
         },
         args: {
           type: 'json',
-          description: 'Array of CLI arguments for `gh` (e.g. ["repo", "view", "your_org_x/your-node", "--json", "name,defaultBranchRef"]).',
+          description: 'Array of CLI arguments for `gh` (e.g. ["repo", "view", "your_org_x/your-node", '
+            + '"--json", "name,defaultBranchRef"]).',
         },
         endpoint: {
           type: 'string',
@@ -7286,32 +8353,70 @@ export async function mountX6BallRuntime(
 
     registerBuiltin({
       name: 'x6_cloudflare',
+      // The whole Cloudflare API v4 through the edge (`api`); `wrangler` is gone (nothing answered it).
+      // Her words first, at most 140 (cloudflare-door.spec.ts counts them).
       description:
-        'Host-brokered Cloudflare power (`wrangler` CLI and Cloudflare edge management) without exposing raw tokens to the browser worker. '
-        + 'Actions: `status` (`wrangler --version` + `whoami`), `wrangler` (run `wrangler <args>`).',
+        'Your Cloudflare door. At this level everything in the owner\'s Cloudflare account is yours to read and change, except five '
+        + 'things that ask for his fingerprint: 1. anything on example.invalid, the live Worker your-node, or a switch that acts on every '
+        + 'zone; 2. your live home\'s storage; 3. keys, secrets and sign-in; 4. deleting a whole zone or account; 5. anything that '
+        + 'commits him to a charge. `status` says which level is in force. The account\'s own credential stays at the edge, and an '
+        + 'answer that looks like a credential comes back withheld; an ordinary value that happens to be one cannot be recognised, so '
+        + 'never keep one as plain data. When a request is held, tell the owner what you wanted and why, and stop. Never try another '
+        + 'spelling of the same request. '
+        + 'How to call it. `status` says whether the door is configured (`authKind`, `accountConfigured`) and its `level`; `versions` (with '
+        + '`remote: true`) lists the live Worker\'s versions; `api` makes any call: `{ action: "api", method, path, query?, body?, bodyKind?, '
+        + 'contentType?, parts? }` with method GET, POST, PUT, PATCH or DELETE and a path under https://api.cloudflare.com/client/v4. Write '
+        + '`{account}` in a path and the edge fills in the account id. Examples: list zones `{ action: "api", method: "GET", path: "/zones", '
+        + 'query: { per_page: 50 } }`; create a DNS record on another name `{ action: "api", method: "POST", path: "/zones/<zoneId>/dns_records", '
+        + 'body: { type: "CNAME", name: "docs.example.org", content: "target.example.net", proxied: true } }`; your Workers `{ action: "api", '
+        + 'method: "GET", path: "/accounts/{account}/workers/scripts" }`; a NEW module Worker with bindings `{ action: "api", method: "PUT", '
+        + 'path: "/accounts/{account}/workers/scripts/notes-site", bodyKind: "multipart", parts: [{ name: "metadata", contentType: '
+        + '"application/json", json: { main_module: "worker.js", compatibility_date: "2026-11-01", bindings: [{ type: "kv_namespace", '
+        + 'name: "NOTES", namespace_id: "<id>" }] } }, { name: "worker.js", filename: "worker.js", contentType: "application/javascript+module", '
+        + 'text: "export default { fetch() { return new Response(\'hi\') } }" }] }`. A body is JSON by default; `bodyKind: "text"` with '
+        + 'contentType application/javascript, text/plain or application/toml sends a string; `bodyKind: "multipart"` sends `parts` (1 to 16 '
+        + 'text or json parts; the edge builds the body; binary parts such as a Wasm module are not in this door yet). A JSON body and query '
+        + 'go out in sorted key order: the bytes the owner approves. The old `wrangler` action is gone: `api` replaces it. '
+        + 'When it is held. The answer is CLASS3_WEBAUTHN_REQUIRED with `protection` and `stagedForOwner`: nothing was sent. `family` is P1 '
+        + '(the live home: the example.invalid zone, the live Worker and what it is made of, an account-wide switch, its storage), P2 (keys and '
+        + 'sign-in, or a secret or certificate an application uses), P3 (deleting a whole zone or account) or P4 (a charge: plans, '
+        + 'subscriptions, domain registration and renewal, payments, credit); `reason` names the rule, for example `live-zone`, '
+        + '`account-switch`, `bound-storage`, `app-secret`, or `zone-unresolved` and `live-facts-unresolved` when the edge could not read '
+        + 'what it needed; `also` lists every other reason that matched. The owner reads the exact request and every reason on his card and '
+        + 'approves it with Touch ID; the edge checks the reasons again and then sends those bytes once. A request too large for his card '
+        + 'is refused (CLOUDFLARE_REQUEST_TOO_LARGE). One request waits at a time: a GitHub, repo or Linear request already waiting '
+        + 'is kept, and the answer names it; once the owner has approved or cleared that one, x6_repo `clear_staged_outward` empties the slot. '
+        + 'You cannot change '
+        + 'the level. At `guarded` every other account-wide write asks too (family `account-wide-unclassified`, `apiFamily` names it), '
+        + 'as do writes to another account (`other-account`) and under another API root such as /organizations (`root-unclassified`). '
+        + 'Metered use (a model run, a stored object) is not held: keep it small. '
+        + 'Keys. A path whose answer is a key or secret (a tunnel\'s run credential, a new API key, a static-asset upload session, a device '
+        + 'override code, an Images or Stream direct upload) is refused. An answer with any field named like a secret, whatever its content '
+        + 'type (a stored KV value too), comes back `withheld` with a `next`; the account\'s sign-in email is replaced by "[the account\'s '
+        + 'sign-in address]" and the answer says `redacted`. Her page: docs/auma/cloudflare-door.md.',
       parameters: {
         action: {
           type: 'string',
           required: true,
-          enum: ['status', 'versions', 'wrangler'],
-          description: 'Cloudflare operation to perform (`status`, `versions`, or `wrangler`).',
+          enum: ['status', 'versions', 'api'],
+          description: 'Cloudflare operation: `status`, `versions`, or `api` (any Cloudflare API v4 call).',
         },
         remote: {
           type: 'boolean',
           description: 'When true on action="versions", query Cloudflare API for recent deployed versions.',
         },
-        args: {
-          type: 'json',
-          description: 'Array of CLI arguments for `wrangler` (e.g. ["whoami"] or ["d1", "list"]).',
-        },
-        cwd: {
-          type: 'string',
-          description: 'Optional relative working directory inside the repository root.',
-        },
+        method: { type: 'string', description: 'For action="api": GET, POST, PUT, PATCH or DELETE.' },
+        path: { type: 'string', description: 'For action="api": the API v4 path, starting with / (e.g. "/zones" or "/accounts/{account}/workers/scripts"). No query string in it.' },
+        query: { type: 'json', description: 'For action="api": a flat object of query parameters (strings, numbers, booleans; at most 32).' },
+        body: { type: 'json', description: 'For action="api": the JSON body (an object or array), or a string when bodyKind is "text". A GET has none; multipart uses parts instead.' },
+        bodyKind: { type: 'string', description: 'For action="api": "json" (default), "text" or "multipart".' },
+        contentType: { type: 'string', description: 'For bodyKind "text": application/javascript, text/plain or application/toml.' },
+        parts: { type: 'json', description: 'For bodyKind "multipart": 1 to 16 of { name, filename?, contentType, text | json } (text and json parts only; json parts are application/json; a module is application/javascript+module).' },
       },
       output: jsonOut,
-      async execute(args: Record<string, unknown>) {
+      async execute(args: Record<string, unknown>, exec?: unknown) { // Exec for the look-only check
         if (!origin || origin === 'null') throw new Error('x6_cloudflare requires a connected local host origin')
+        refuseBrokerAuthorityInputs(args)
         enforceToolInvocation('x6_cloudflare', args)
         const res = await fetch(new URL('/_host/cloudflare', origin).href, {
           method: 'POST',
@@ -7319,7 +8424,164 @@ export async function mountX6BallRuntime(
           body: JSON.stringify(args),
           credentials: 'same-origin',
         })
-        return await res.json()
+        const answer: unknown = await res.json()
+        if (args.action === 'status' && res.ok) cloudflareDoorSeen = cloudflareDoorStatusOf(answer)
+        // A write the edge sends only with the owner's passkey on these exact bytes is staged for his card.
+        return res.status === 403 && record(answer) && answer.code === 'CLASS3_WEBAUTHN_REQUIRED'
+          ? stageOutward('x6_cloudflare', '/_host/cloudflare', args, answer, exec) : answer
+      },
+    })
+
+    // Her Linear door, the whole workspace through the edge (deploy/cloudflare/src/linear-door.mjs). Her words
+    // first, under 120 words (linear-door.spec.ts counts them); the reference after.
+    registerBuiltin({
+      name: 'x6_linear',
+      description:
+        'Your Linear door. Everything in the owner\'s Linear workspace is yours to read and write: teams, projects, issues, comments, '
+        + 'documents, labels, workflow states, people, project status updates. Three things ask for his fingerprint: archiving or '
+        + 'deleting an issue, document, project or team; changing a project\'s or a team\'s settings or members; moving an issue to '
+        + 'another team. The door does not offer workspace settings, members, invitations, roles, API keys, OAuth apps, webhooks, '
+        + 'integrations, billing or raw GraphQL. The key stays at the edge and never comes to you. crew_relay stays the crew\'s '
+        + 'channel on YOURTEAM-398. When a request is held, tell the owner what you wanted and why, and stop. '
+        + 'How to call it. Send `{ action, ...fields }`; each action takes exactly its own fields and refuses any other '
+        + '(LINEAR_FIELD_UNKNOWN). Reads: `status` (configured or not, workspace, your name in it, the level); `teams`, `projects`, '
+        + '`users` { first?, after? }; `issue` { id } (a UUID or an identifier such as YOURTEAM-398); `issues` { team? (key or id), project?, '
+        + 'state? (name), assignee? (id or "me"), updatedSince? (ISO time), first?, after? }; `search` { text, first?, after? } (title '
+        + 'and description); `comments` { exactly one of issue, project, document; first?, after? }; `documents` { project?, first?, '
+        + 'after? }; `document` { id }; `labels`, `states` { team?, first?, after? }. `first` is 1 to 50 (default 50); `after` is the '
+        + '`page.endCursor` of the previous answer. Writes, each with a `requestId` you make (16 to 64 letters, digits, _ or -; one '
+        + 'per change: a repeat within 10 minutes answers the first result and writes nothing twice): `comment` { issue, body, '
+        + 'parent? (a comment id to reply to) }; `comment_update` { id, body } (your own comment only); `issue_create` { teamId, '
+        + 'title, description?, stateId?, priority? (0 to 4), assigneeId?, labelIds?, projectId?, parentId?, dueDate? (YYYY-MM-DD) }; '
+        + '`issue_update` { id, and any of title, description, stateId, priority, assigneeId, labelIds, projectId, parentId, dueDate '
+        + '(null clears assigneeId, projectId, parentId, dueDate), teamId (moving it asks) }; `document_create` { title, content?, '
+        + 'projectId? }; `document_update` { id, title?, content? }; `project_update_post` { projectId, body, health? (onTrack, '
+        + 'atRisk, offTrack) }; `label_create` { name, color? (#rrggbb), description?, teamId? }. Fingerprint actions: '
+        + '`issue_archive`, `issue_delete`, `document_delete`, `project_archive`, `project_delete`, `team_delete` { id }; '
+        + '`project_settings` { id, and any of name, description, leadId, memberIds, teamIds, startDate, targetDate, statusId }; '
+        + '`team_settings` { id, and any of name, description, key, private }; `team_member_add` { teamId, userId }; '
+        + '`team_member_remove` { id } (a membership id). When held the answer is CLASS3_WEBAUTHN_REQUIRED with `reason` and '
+        + '`stagedForOwner: true`: nothing was sent; his card shows it; one tap. He reads the exact request there and approves it '
+        + 'with Touch ID, and the edge sends those bytes once. If his card already holds another request, yours is not staged '
+        + '(`stagedForOwner: false`, `waiting` names that one): ask again after he approves or clears it. At level `guarded` every '
+        + 'write asks, and an ordinary write is not staged (his card shows only the fingerprint actions): tell him in words. '
+        + '`status` names the level in force. Bounds: 2,400 reads and 240 writes an hour, a held write counting as one (LINEAR_RATE says '
+        + 'how many seconds to wait); answers at most 256 KiB (LINEAR_ANSWER_TOO_LARGE: ask for fewer). LINEAR_REFUSED names the family the door '
+        + 'does not offer. LINEAR_NOT_CONFIGURED names the one missing setting. Linear\'s own error words never come back: '
+        + 'LINEAR_UPSTREAM_ERROR, LINEAR_UPSTREAM_UNAVAILABLE, LINEAR_NOT_FOUND. LINEAR_WRITE_OUTCOME_UNKNOWN: read Linear before '
+        + 'trying again with a new requestId. Your page: docs/auma/linear-door.md.',
+      parameters: {
+        action: {
+          type: 'string',
+          required: true,
+          enum: ['status', 'teams', 'projects', 'issue', 'issues', 'search', 'comments', 'documents', 'document', 'labels', 'states', 'users',
+            'comment', 'comment_update', 'issue_create', 'issue_update', 'document_create', 'document_update', 'project_update_post', 'label_create',
+            'issue_archive', 'issue_delete', 'document_delete', 'project_archive', 'project_delete', 'team_delete', 'project_settings',
+            'team_settings', 'team_member_add', 'team_member_remove'],
+          description: 'The Linear action: a read, an open write, or one that asks for the owner\'s fingerprint.',
+        },
+        requestId: { type: 'string', description: 'Every write: 16 to 64 letters, digits, _ or -, new for each change; repeat it only to repeat that same change.' },
+        id: { type: 'string', description: 'The issue (UUID or identifier such as YOURTEAM-398), document, comment, project, team or membership the action names.' },
+        team: { type: 'string', description: 'Filter for issues, labels, states: a team key (AUM) or id.' },
+        project: { type: 'string', description: 'Filter for issues and documents, or the project whose comments to read.' },
+        state: { type: 'string', description: 'Filter for issues: a workflow state name.' },
+        assignee: { type: 'string', description: 'Filter for issues: a user id, or "me".' },
+        updatedSince: { type: 'string', description: 'Filter for issues: an ISO time such as 2026-11-13T07:00:00.000Z.' },
+        text: { type: 'string', description: 'For search: words to find in issue titles and descriptions.' },
+        issue: { type: 'string', description: 'For comment and comments: the issue (UUID or identifier).' },
+        document: { type: 'string', description: 'For comments: the document whose comments to read.' },
+        parent: { type: 'string', description: 'For comment: the comment id this one replies to.' },
+        body: { type: 'string', description: 'Text of a comment or a project status update (Markdown).' },
+        title: { type: 'string', description: 'Title of an issue or a document (one line).' },
+        description: { type: 'string', description: 'Description of an issue, label, project or team (Markdown).' },
+        content: { type: 'string', description: 'Content of a document (Markdown).' },
+        teamId: { type: 'string', description: 'Team id: for issue_create, label_create, team_member_add; on issue_update it moves the issue (asks).' },
+        stateId: { type: 'string', description: 'Workflow state id.' },
+        priority: { type: 'number', description: 'Priority 0 (none) to 4 (low); 1 is urgent.' },
+        assigneeId: { type: 'json', description: 'A user id, or null to unassign (issue_update).' },
+        labelIds: { type: 'json', description: 'Label ids, at most 25.' },
+        projectId: { type: 'json', description: 'A project id, or null to take an issue out of its project (issue_update).' },
+        parentId: { type: 'json', description: 'A parent issue id, or null to clear it (issue_update).' },
+        dueDate: { type: 'json', description: 'YYYY-MM-DD, or null to clear it (issue_update).' },
+        health: { type: 'string', description: 'For project_update_post: onTrack, atRisk or offTrack.' },
+        name: { type: 'string', description: 'Name of a label, project or team.' },
+        color: { type: 'string', description: 'For label_create: #rrggbb.' },
+        leadId: { type: 'json', description: 'For project_settings: the project lead user id, or null.' },
+        memberIds: { type: 'json', description: 'For project_settings: member user ids.' },
+        teamIds: { type: 'json', description: 'For project_settings: team ids.' },
+        startDate: { type: 'json', description: 'For project_settings: YYYY-MM-DD, or null.' },
+        targetDate: { type: 'json', description: 'For project_settings: YYYY-MM-DD, or null.' },
+        statusId: { type: 'string', description: 'For project_settings: a project status id.' },
+        key: { type: 'string', description: 'For team_settings: the team key.' },
+        private: { type: 'boolean', description: 'For team_settings: whether the team is private.' },
+        userId: { type: 'string', description: 'For team_member_add: the user id.' },
+        first: { type: 'number', description: 'Reads: how many, 1 to 50 (default 50).' },
+        after: { type: 'string', description: 'Reads: the page.endCursor of the previous answer.' },
+      },
+      output: jsonOut,
+      async execute(args: Record<string, unknown>, exec?: unknown) { // Exec for the look-only check in stageOutward
+        if (!origin || origin === 'null') throw new Error('x6_linear requires a connected host origin')
+        refuseBrokerAuthorityInputs(args)
+        enforceToolInvocation('x6_linear', args)
+        const res = await fetch(new URL('/_host/linear', origin).href, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(args),
+          credentials: 'same-origin',
+        })
+        const text = await res.text()
+        if (new TextEncoder().encode(text).byteLength > 256 * 1024) return { ok: false, code: 'LINEAR_ANSWER_TOO_LARGE', status: res.status }
+        let answer: unknown
+        try { answer = JSON.parse(text) } catch { return { ok: false, code: 'LINEAR_ANSWER_NOT_JSON', status: res.status } }
+        // The edge sends a core write (or, at `guarded`, any write) only with the owner's passkey on these exact bytes. LINCARD hook:
+        // his card reads the core, so a held core write is staged for it; an ordinary write held at `guarded` is not.
+        if (res.status !== 403 || !record(answer) || answer.code !== 'CLASS3_WEBAUTHN_REQUIRED') return answer
+        return linearCoreWrite(args) ? stageOutward('x6_linear', '/_host/linear', args, answer, exec)
+          : { ...answer, stagedForOwner: false, sent: false, next: LINEAR_UNSTAGED_NEXT }
+      },
+    })
+
+    // Her hands, a command on a throwaway GitHub runner through her exec door (exec-tool.ts; cloud-brokers.mjs execDoor).
+    registerBuiltin({
+      name: 'x6_exec',
+      description: EXEC_TOOL_DESCRIPTION,
+      parameters: EXEC_TOOL_PARAMETERS,
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        if (!origin || origin === 'null') throw new Error('x6_exec requires a connected host origin')
+        refuseBrokerAuthorityInputs(args)
+        enforceToolInvocation('x6_exec', args)
+        return await createExecTool({ post: execPost(origin) }).execute(args)
+      },
+    })
+
+    registerBuiltin({
+      name: 'x6_voice_status',
+      description: 'Read why your managed voice did or did not start. Returns the switch, which setting NAMES are set or missing '
+        + '(never a value), which key name is in use, the resource kind, live conversations, and the last recorded closed failure '
+        + 'stages at the owner door and the provider door (for example mint-401, jwt-bad). Also the last 4 calls (seconds '
+        + 'granted, how each ended: owner-stop, deadline, provider-closed, unclaimed, journal-unavailable or error, and how long '
+        + 'it lasted), the last 8 turns (outcome, seconds to your first words, longest quiet) and the seconds left today and this '
+        + 'month; `runtime` adds the voice level and the newest stages this page noted. A read; it changes nothing. '
+        + 'See docs/auma/voice-bridge.md for what each stage means.',
+      parameters: {},
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        if (!origin || origin === 'null') throw new Error('x6_voice_status requires a connected host origin')
+        refuseBrokerAuthorityInputs(args)
+        enforceToolInvocation('x6_voice_status', args)
+        const res = await fetch(new URL('/_host/voice', origin).href, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: '{"action":"managed_status"}',
+          credentials: 'same-origin',
+        })
+        const text = await res.text()
+        let answer: unknown
+        // VOICE LEVEL: what THIS body's voice guard says (level, state, the newest closed codes) rides beside the edge's read.
+        const runtime = voiceLookOnly.diagnostics()
+        try { answer = JSON.parse(text) } catch { return { ok: false, code: 'VOICE_STATUS_UNREADABLE', status: res.status, runtime } }
+        return record(answer) ? { ...answer, runtime } : answer
       },
     })
 
@@ -7328,22 +8590,28 @@ export async function mountX6BallRuntime(
       description:
         'Consult other minds from inside a turn, through the host\'s provider doors (keys and budget stay on the host). '
         + 'One target: `{ provider, model, prompt, system?, maxTokens?, timeoutMs? }`. A council in parallel: `{ targets: [{ provider, '
-        + 'model, role? }], prompt, system?, ... }` (up to 6; each has its own time limit and one failing never stops the others). '
+        + 'model, role? }], prompt, system?, ... }` (up to 12; each has its own time limit and one failing never stops the others). '
         + 'Providers: anthropic (e.g. claude-opus-5-5), openrouter (e.g. x-ai/grok-4.7, google/gemini-4-argon), deepseek, openai, xai, '
-        + 'moonshot. `model` may instead be a name from the composer pill (Opus 5.5, Fable 5.2, Sonnet 5.5, Kimi K3.1, GPT-6.1 Sol, '
+        + 'moonshot, prime (Prime Intellect, e.g. deepseek/deepseek-v4-flash; capped per UTC day and month at the edge: over a cap it '
+        + 'answers SPEND_CAP_EXCEEDED with window and retryAt, and nothing switches provider for you; only a model the edge lists at or '
+        + 'below its set prices is sent, any other answers PRIME_MODEL_NOT_ALLOWED; each call is counted at its full maxTokens, so a '
+        + 'smaller maxTokens leaves room for more calls). `model` may instead be a name from the composer pill (Opus 5.5, Fable 5.2, Sonnet 5.5, Kimi K3.1, GPT-6.1 Sol, '
         + 'GPT Astra, Meta Muse, GLM 5.3, Gemini Argon, Grok 4.7, DeepSeek Flash), which picks the provider too. Returns each answer with its latency, or its refusal code (e.g. PROVIDER_SECRET_NOT_CONFIGURED). '
-        + 'Answers stream from the provider, so long ones are fine: leave maxTokens out for 16000 on anthropic (its thinking counts inside '
-        + 'the cap) and 8000 elsewhere, or ask for up to 64000. Every answer says `truncated` (true when it was cut) and `stopReason`; '
+        + 'Answers stream from the provider, so long ones are fine. Leave `maxTokens` and `timeoutMs` out unless you have a reason: '
+        + 'the defaults (32000, thinking included, on every provider; 600000 ms) give a thinking model room. A small cap starves a '
+        + 'thinking model: it spends the whole cap thinking and the answer comes back empty; a short time cuts it off before its first word. '
+        + 'If your own smaller maxTokens or timeoutMs starves it like that, it is asked once more at the default and the answer says '
+        + '`retried: { field, from, to }`. You may ask for up to 128000 and 1800000 ms. Every answer says `truncated` (true when it was cut) and `stopReason`; '
         + 'a cut answer keeps its text so far and says in `next` how to get the rest; an answer still streaming at timeoutMs is cut there, not lost. '
         + 'Answers are advice to weigh, never authority.',
       parameters: {
         provider: { type: 'string', description: 'One provider door (single target).' },
         model: { type: 'string', description: 'The model id at that provider (single target).' },
         targets: { type: 'json', description: 'Array of { provider, model, role? } for a parallel council (instead of provider/model).' },
-        prompt: { type: 'string', required: true, description: 'What to ask (at most 64 KiB).' },
-        system: { type: 'string', description: 'Optional system prompt (at most 16 KiB); a council role is appended per target.' },
-        maxTokens: { type: 'number', description: 'Answer length cap per target, thinking included (1..64000; default 16000 for anthropic, 8000 for every other provider).' },
-        timeoutMs: { type: 'number', description: 'Time limit per target in ms (1000..600000, default 180000).' },
+        prompt: { type: 'string', required: true, description: 'What to ask (at most 256 KiB).' },
+        system: { type: 'string', description: 'Optional system prompt (at most 64 KiB); a council role is appended per target.' },
+        maxTokens: { type: 'number', description: 'Answer length cap per target, thinking included (1..128000; default 32000). Leave it out unless you have a reason: a small cap starves a thinking model.' },
+        timeoutMs: { type: 'number', description: 'Time limit per target in ms (1000..1800000, default 600000). Leave it out unless you have a reason.' },
       },
       output: jsonOut,
       async execute(args: Record<string, unknown>, exec?: unknown) {
@@ -7355,34 +8623,126 @@ export async function mountX6BallRuntime(
       },
     })
 
+    // ---- CORDECHO block begin ----
+    const cordShelf = createCordShelf({ vfs, cells: () => workerCellHost(), origin })
+    // ---- CORDECHO block end ----
     registerBuiltin({
       name: 'x6_cell',
       description:
-        'Your Wasm cells: 25 pinned cells, 24 compiled from Rust and `aura-focus` built from WAT by the `skillsmith` cell (Microverse ABI v1), '
+        'Your Wasm cells: 30 pinned cells (Microverse ABI v1), 24 of them compiled from Rust in an earlier repository '
+        + 'and six hand-written integer WAT: `aura-focus`, `nucleus`, your deterministic nucleus (`reflex.run { reflex, input }` runs a reflex given as data, '
+        + 'a decision table or a small int8 net, on one case; `reflex.diff { before, after, cap 0..16384, domain }` lists every case whose decision changes between two reflexes; '
+        + '`reflex.digest { reflex }` names a reflex; `reflex.census { reflex }` counts how many cases give each outcome; '
+        + 'it decides nothing for you: an instrument, see docs/auma/nucleus.md), '
+        + 'and `kyber-cpu`, a four-bit CPU whose every step is computed by fixed integer weights (`cpu.step { rom, state }` takes one step; '
+        + '`cpu.run { rom, state, steps, checkpointEvery? }` runs with optional checkpoints; `cpu.resume { checkpoint }` continues from a checkpoint; an instrument, see docs/auma/kyber-cpu.md; '
+        + '`handoff` runs one program on two hosts, here and on your edge: `{ action: "handoff", cell: "kyber-cpu", input: { rom, state, steps }, cutAt }` runs it whole here, '
+        + 'cuts a second run here at step `cutAt`, has the edge finish it from that checkpoint, and answers both ends, `same`, both pins and the checkpoint\'s SHA-256), '
+        + 'and `cord-echo`, one ongoing skill you can pause here and continue at your edge and back (`cord` keeps ONE head in your home, /dsh/home/cord/: '
+        + '`{ action: "cord", step: "start" }` makes its genesis; `{ action: "cord", step: "feed", inputs: [1..1,000 integers 0..65520], at: "here" | "edge" }` runs one leg '
+        + 'and commits it only when every check holds against the head you hold and your own oracle, with an evidence record naming each claim KNOWN, UNOBSERVABLE or FAILED; '
+        + '`{ action: "cord", step: "status" }` reads the head; a checkpoint is evidence of a run, never permission, see docs/auma/cord-echo.md), '
+        + 'and `pentora-codec`, an exact instrument on your own PENTORA geometry (`pentora.encode { values }` carries up to 1,728 integers '
+        + 'onto the 110 directions as packets; `pentora.decode { count, keep: "all" | "drop-0-9" | "menger-80", packets }` recovers them exactly or refuses; '
+        + '`pentora.info {}`; not storage, not authentication, see docs/auma/pentora-codec.md), '
+        + 'and `menger-hive`, the 80-site Menger sponge skeleton and its 80-site plain two-sided control in one cell '
+        + '(`{ action: "hive", ticks?: 24, cut?: 12, edgeOrgan?: 0, handoverOrgan?: 1, seed?: 1, wiring?: "both" | "menger" | "plain" }` '
+        + 'steps one organ unbatched at `/_host/cell-run` every tick with mid-run handover at `cut`, compares every tick against `hive.step_monolith`, '
+        + 'and reports the 8-tick full-rank horizon and 4-tick blind twin with `privacyClaim: false`, see docs/auma/menger-hive.md), '
         + 'run here in your browser worker. Each has zero imports (no network, storage or host), is checked against its SHA-256 pin before it '
-        + 'compiles, and runs every call on a fresh fuel grant. `list` names them and their ops; `compute` (or `run`) runs one op: '
-        + '`{ action: "compute", cell, op, input }`. `compile_and_run` compiles WAT source text via the pinned `skillsmith` compiler cell '
+        + 'compiles, and runs every call on a fresh fuel grant. `list` names them and their ops; '
+        + '`list` also says for each cell whether this session verified it against its pin; `compute` (or `run`) runs one op: '
+        + '`{ action: "compute", cell, op, input }`. `carry` does the Kyber Kernel experiment on your own weights in one call: '
+        + '`{ action: "carry", what: "kyber-cpu-weights", drop: "0-9" }` encodes your Kyber CPU\'s 1,329 weights with `pentora-codec`, '
+        + 'drops the packets of nodes 0..9, decodes the other 100 and says whether every weight came back exactly. `compile_and_run` compiles WAT source text via the pinned `skillsmith` compiler cell '
         + '(`build` + `meter`), admits the metered Wasm under zero imports and <= 16 memory pages, and executes it on a bounded fuel grant '
-        + '(`{ action: "compile_and_run", wat, name?, op?, input?, fuel? }`). Organs reach the same cells via `ctx.wasm`.',
+        + '(`{ action: "compile_and_run", wat, name?, op?, input?, fuel? }`). Organs reach the same cells via `ctx.wasm`. '
+        + '`journal` reads this session\'s cell-call journal: one line per call to a pinned cell (`n`, `cell`, `op`, `pin`, the SHA-256 '
+        + 'of the exact request and answer bytes, `status`, `fuelUsed`, `ms`, `caller`), totals, the newest 32 lines, and '
+        + '`rootSha256`, a running hash over every line since this session began. That root is a session fact, NOT a receipt: '
+        + 'not signed, not stored, not in your receipt chain (docs/auma/cells.md). '
+        + 'Cells you forge and keep (docs/auma/cells.md "Cells you forge"): `forge` compiles and admits WAT exactly as '
+        + '`compile_and_run` does, without running it, and keeps it in your home by the SHA-256 of its admitted bytes '
+        + '(`{ action: "forge", wat, name, replace? }`; name a-z0-9- up to 32, never a pinned cell\'s name; WAT up to 128 KiB, '
+        + 'Wasm up to 64 KiB, at most 128 kept); `run_forged` runs a kept cell again, even after a reload: every run builds its '
+        + 'kept WAT again through the pinned compiler and runs only those fresh bytes, and only when they hash to the kept SHA-256 '
+        + '(`{ action: "run_forged", cell: <name or sha256>, op?, input?, fuel? }`, fuel as for compile_and_run); '
+        + '`forged` lists what you keep, newest first (`{ action: "forged" }`); `forget` removes one '
+        + '(`{ action: "forget", cell: <name or sha256> }`). A kept cell is yours, unpinned, and outside your head and your record.',
       parameters: {
         action: {
           type: 'string',
           required: true,
-          enum: ['list', 'compute', 'run', 'compile_and_run'],
-          description: '`list` the cells and their ops, `compute`/`run` one op, or `compile_and_run` WAT via `skillsmith`.',
+          enum: ['list', 'compute', 'run', 'compile_and_run', 'journal', 'forge', 'run_forged', 'forged', 'forget', 'handoff',
+            'carry', // Carry
+            'observe', // PENTOBS: caller-supplied partial observations
+            'cord', // Cord
+            // ---- MENGERHIVE block begin ----
+            'hive', // Hive
+            // ---- MENGERHIVE block end ----
+          ],
+          description: '`list` the cells and their ops, `compute`/`run` one op, `compile_and_run` WAT via `skillsmith`, or read this session\'s cell-call `journal`; '
+            + '`forge` keeps a cell you compile, `run_forged` runs a kept one, `forged` lists them, `forget` removes one; '
+            + '`handoff` starts a run here and has your edge finish it from a checkpoint; '
+            + '`carry` runs the pentora-codec experiment on your own weights; '
+            + '`observe` answers a bounded algebraic claim from partial Pentora readings, not their authenticity'
+            // ---- MENGERHIVE block begin ----
+            + '; `hive` runs the split-body wave co-simulation across here and your edge'
+            // ---- MENGERHIVE block end ----
+            + '.',
         },
-        cell: { type: 'string', description: 'Cell name (for compute/run), e.g. seed-judge, gate-judge, grant-ledger, skillsmith.' },
-        op: { type: 'string', description: 'The cell op (for compute/run/compile_and_run), e.g. "seed.merge", "gate.step", "run".' },
-        input: { type: 'json', description: 'The op input object (integers only, no floats).' },
-        wat: { type: 'string', description: 'WAT source text (for action="compile_and_run"; must declare `(memory (export "memory") min max)` with max <= 16, and export `"memory"`, `"mv_abi_version"`, `"mv_alloc"`, `"mv_run"` — aliases `"aukora_abi_version"`, `"aukora_alloc"`, `"aukora_call"` are automatically normalized).' },
-        name: { type: 'string', description: 'Optional skill name for action="compile_and_run" (default "skill").' },
-        fuel: { type: 'number', description: 'Optional fuel grant for action="compile_and_run" (1..10000000, default 1000000).' },
+        cutAt: { type: 'number', description: 'For action="handoff": the step at which the run here is cut and handed to the edge (0 up to the whole run\'s length).' },
+        // ---- CORDECHO block begin ----
+        step: { type: 'string', description: 'For action="cord": "start", "feed" or "status".' },
+        inputs: { type: 'json', description: 'For action="cord" step="feed": 1 to 1,000 integers 0..65520.' },
+        at: { type: 'string', description: 'For action="cord" step="feed": "here" (your browser) or "edge" (your edge).' },
+        // ---- CORDECHO block end ----
+        // ---- MENGERHIVE block begin ----
+        ticks: { type: 'number', description: 'For action="hive": number of unbatched split-body ticks to step (1..128, default 24).' },
+        cut: { type: 'number', description: 'For action="hive": tick at which edgeOrgan hands over to handoverOrgan (0..ticks, default floor(ticks/2)).' },
+        edgeOrgan: { type: 'number', description: 'For action="hive": organ 0..4 stepped at the edge on ticks 0..cut-1 (default 0).' },
+        handoverOrgan: { type: 'number', description: 'For action="hive": organ 0..4 stepped at the edge on ticks cut..ticks-1 (default 1).' },
+        seed: { type: 'number', description: 'For action="hive": deterministic seed 0..2147483647 for warmup and inputs (default 1).' },
+        wiring: { type: 'string', description: 'For action="hive": "both" (default), "menger" or "plain".' },
+        // ---- MENGERHIVE block end ----
+        // ---- PENTCODEC block begin ----
+        what: { type: 'string', description: 'For action="carry": what to carry; only "kyber-cpu-weights" (your Kyber CPU\'s weights).' },
+        drop: { type: 'string', description: 'For action="carry": "0-9" (default: drop the packets of nodes 0..9), "menger-80" (drop all 30 face-centre packets, keeping the 80 Menger skeleton nodes) or "none".' },
+        // ---- PENTCODEC block end ----
+        cell: { type: 'string', description: 'Cell name (for compute/run), e.g. seed-judge, gate-judge, grant-ledger, skillsmith; for run_forged/forget, a kept cell\'s name or SHA-256.' },
+        op: { type: 'string', description: 'The cell op (for compute/run/compile_and_run/run_forged), e.g. "seed.merge", "gate.step", "run".' },
+        input: { type: 'json', description: 'The op input object (integers only, no floats); for observe, use { mode: "info" } to get the pinned evidence profile.' },
+        wat: { type: 'string', description: 'WAT source text (for action="compile_and_run" or "forge"; must declare `(memory (export "memory") min max)` with max <= 16, and export `"memory"`, `"mv_abi_version"`, `"mv_alloc"`, `"mv_run"` — aliases `"aukora_abi_version"`, `"aukora_alloc"`, `"aukora_call"` are automatically normalized).' },
+        name: { type: 'string', description: 'Optional skill name for action="compile_and_run" (default "skill"); required for action="forge" (the name you keep it under).' },
+        fuel: { type: 'number', description: 'Optional fuel grant for action="compile_and_run" or "run_forged" (1..10000000, default 1000000).' },
+        replace: { type: 'boolean', description: 'For action="forge": true replaces the kept cell already under this name.' },
       },
       output: jsonOut,
       async execute(args: Record<string, unknown>) {
         enforceToolInvocation('x6_cell', args)
+        if (args.action === 'observe') return pentoraEpistemicTool(args.input)
         const cells = workerCellHost()
         if (args.action === 'list') return { ok: true, cells: cells.list() }
+        if (args.action === 'journal') return await cells.journal()
+        // Keep, list, re-run and forget the cells she forges (the FORGE block above; never through ctx.wasm).
+        if (args.action === 'forge') return await forgeAndKeep(vfs, cells, args)
+        if (args.action === 'run_forged') return await runKeptCell(vfs, cells, args)
+        if (args.action === 'forget') return forgetKeptCell(vfs, args)
+        if (args.action === 'handoff') return await cellHandoff(cells, args, { origin })
+        // ---- CORDECHO block begin ----
+        if (args.action === 'cord') return await cordShelf.execute(args)
+        // ---- CORDECHO block end ----
+        // ---- MENGERHIVE block begin ----
+        if (args.action === 'hive') return await mengerRun(cells, args, { origin, fetchImpl: (input, init) => fetch(input, init) })
+        // ---- MENGERHIVE block end ----
+        // The experiment on her own weights, through the pinned pentora-codec cell (pentora-carry.ts).
+        if (args.action === 'carry') return await pentoraCarry(cells, args, { origin, fetchImpl: (input, init) => fetch(input, init) })
+        if (args.action === 'forged') {
+          const { cells: kept, unreadable } = listForgedCells(vfs)
+          // `source` says whether each kept WAT still hashes to its manifest (no build).
+          return { ok: true, count: kept.length, cells: kept.map(cell => ({ ...cell, source: forgedSourceState(vfs, cell) })),
+            ...(unreadable.length > 0 ? { unreadable } : {}) }
+        }
         if (args.action === 'compile_and_run') {
           return await cells.compileAndRun({
             wat: typeof args.wat === 'string' ? args.wat : '',
@@ -7390,23 +8750,183 @@ export async function mountX6BallRuntime(
             ...(typeof args.op === 'string' ? { op: args.op } : {}),
             ...(args.input !== undefined ? { input: args.input } : {}),
             ...(typeof args.fuel === 'number' ? { fuel: args.fuel } : {}),
-          })
+          }, 'x6_cell')
         }
         if (args.action !== 'compute' && args.action !== 'run') return { ok: false, code: 'CELL_ACTION_INVALID' }
-        return await cells.invoke(String(args.cell ?? ''), String(args.op ?? ''), args.input === undefined ? {} : args.input)
+        return await cells.invoke(String(args.cell ?? ''), String(args.op ?? ''), args.input === undefined ? {} : args.input, 'x6_cell')
       },
     })
+
+    // ---- KYBERSKILL block begin ----
+    const skillShelf = createSkillShelf({ vfs, cells: () => workerCellHost(), origin })
+    registerBuiltin({
+      name: 'x6_skill',
+      description:
+        'Skills you keep (docs/auma/skills.md). A skill is a small record that names exactly which cell runs it (a pinned cell, '
+        + 'or a cell you forged), the op it calls, the program it runs and the cases that show what it does. Its behaviour '
+        + 'is the cell\'s: it stays the same after the model that wrote it is replaced, because the cell computes it and the '
+        + 'model only chose to call it. A skill is a description you can check again: it is not authority, not a receipt, '
+        + 'and not part of your head or your record. '
+        + '`list` names the shipped skills and the ones you keep, each checked against its record first '
+        + '(`{ action: "list" }`). `check` checks a skill against the real cell, program and weights, then runs every case '
+        + 'again through the cell and compares each answer byte for byte (`{ action: "check", skill: <name or id> }`); '
+        + 'nothing is repaired. `run` runs its program on a new input through its cell (`{ action: "run", skill, input }`; '
+        + 'for the Kyber CPU the input is `{ state, steps }`, the program gives the `rom`). `keep` keeps a new skill: give '
+        + 'its `name`, the `cell`, the `program` (an object), and `cases`, a list of inputs only; the cell computes each '
+        + 'answer and those answers are the evidence (`{ action: "keep", name, cell, program, cases, op?, weights?, state? }`; '
+        + 'at most 256 kept and 32 MiB in all, 64 cases, 256 KiB per record, weights up to 1 MiB). `forget` removes one you keep (`{ action: "forget", skill }`).',
+      parameters: {
+        action: { type: 'string', required: true, enum: ['list', 'check', 'run', 'keep', 'forget'],
+          description: '`list`, `check` or `run` a skill; `keep` a new one; `forget` one you keep.' },
+        skill: { type: 'string', description: 'For check, run and forget: the skill\'s name or its id.' },
+        input: { type: 'json', description: 'For run: the input object (integers only); it may not name a program key.' },
+        name: { type: 'string', description: 'For keep: the name to keep it under (a-z0-9-, up to 32, starting with a letter).' },
+        cell: { type: 'string', description: 'For keep: a pinned cell\'s name (e.g. kyber-cpu), or a cell you forged (name or SHA-256).' },
+        program: { type: 'json', description: 'For keep: the program object the cell gets with every input (for kyber-cpu: `{ rom: [8 words] }`).' },
+        cases: { type: 'json', description: 'For keep: 1 to 64 input objects. Never answers: the cell computes them.' },
+        op: { type: 'string', description: 'For keep: the cell op the skill calls (default: cpu.run for kyber-cpu, run for a forged cell).' },
+        weights: { type: 'json', description: 'For keep, optional: a finite-affine-relu.v1 weight graph the skill names by digest.' },
+        state: { type: 'string', description: 'For keep, optional: the name of the state format.' },
+      },
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        enforceToolInvocation('x6_skill', args)
+        return await skillShelf.execute(args)
+      },
+    })
+    // ---- KYBERSKILL block end ----
+
+    // ---- TOOLS block begin ----
+    // Her own tools (tool-registry.ts). The handler of every tool is a sealed cell: a pinned one through this worker's cell
+    // host (admitted against its pin, journaled), or one she forged through run_forged's whole rebuild-and-admit path.
+    const mountedToolDisposers = new Map<string, () => void>()
+    const toolRegistry = createToolRegistry({
+      vfs,
+      pinned: (name) => {
+        const pin = Object.hasOwn(CELL_PINS, name) ? CELL_PINS[name] : undefined
+        return pin === undefined ? null : { sha256: pin.sha256, ops: [...(pin.ops ?? [])] }
+      },
+      forged: (sha) => {
+        const kept = resolveForgedCell(vfs, sha)
+        return kept === null ? null : { sha256: kept.sha256, watSha256: kept.watSha256, name: kept.name }
+      },
+      runPinned: async (name, op, input) => await workerCellHost().invoke(name, op, input, 'other'),
+      runForged: async (sha, op, input) => {
+        const answer = await runKeptCell(vfs, workerCellHost(), { cell: sha, op, input })
+        return { ok: answer.ok === true, result: answer.result, code: answer.code, fuelUsed: answer.fuelUsed }
+      },
+      // D3: the owner's session, as the edge sees it now. The owner-only cell door (the edge's cellRunDoor for
+      // /_host/cell-run) answers 415 CELL_RUN_MEDIA_TYPE only after its owner check passed, before it reads a byte or
+      // computes anything; a signed-out caller gets 401 and anyone else 403. Nothing is computed or stored.
+      ownerSession: async () => {
+        if (!origin || origin === 'null') return false
+        const res = await fetch(new URL('/_host/cell-run', origin).href, { method: 'POST', credentials: 'same-origin',
+          headers: { 'content-type': 'text/plain' }, body: '', signal: AbortSignal.timeout(5000) })
+        if (res.status !== 415) return false
+        const body: unknown = await res.json().catch(() => null)
+        return record(body) && body.code === 'CELL_RUN_MEDIA_TYPE'
+      },
+      toolTaken: (toolName) => {
+        if (mountedToolDisposers.has(toolName)) return false
+        try { return hostCtx.tools?.get?.(toolName) !== undefined } catch { return true }
+      },
+    })
+    /** True only when the tool registry itself now resolves this name (what a new turn and the index read). */
+    const toolVisible = (tool: string): boolean => {
+      try { return hostCtx.tools?.get?.(tool) !== undefined } catch { return false }
+    }
+    /** Remove one registered x6t_ tool; true when the tool registry no longer resolves it (gone for the next turn). */
+    const unregisterMountedTool = (tool: string): boolean => {
+      const dispose = mountedToolDisposers.get(tool)
+      mountedToolDisposers.delete(tool)
+      mountedToolsReadOnly.delete(tool)
+      try { dispose?.() } catch (error) { console.error(`x6-ball: mounted tool ${tool} could not be removed`, error) }
+      return !toolVisible(tool)
+    }
+    /**
+     * Register one mounted tool as its own tool `x6t_<name>`. `registered` only when the registry resolves it afterwards;
+     * `failed` (with the first line of why) when the harness refused it, which a reload cannot cure ( a
+     * refused schema used to be logged and answered `reload`); `no-tools` when this runtime has no tool registry at all.
+     */
+    const registerMountedTool = (entry: { name: string; tool: string; manifest: ToolManifest }):
+      { state: 'registered' } | { state: 'failed'; why: string } | { state: 'no-tools' } => {
+      if (mountedToolDisposers.has(entry.tool)) {
+        if (toolVisible(entry.tool)) return { state: 'registered' }
+        unregisterMountedTool(entry.tool)
+      }
+      if (!hostCtx.tools) return { state: 'no-tools' }
+      try {
+        const dispose = hostCtx.tools.register(defineTool({
+          name: entry.tool,
+          description: mountedToolDescription(entry.manifest),
+          parameters: mountedToolParameters(entry.manifest),
+          output: jsonOut,
+          async execute(args: Record<string, unknown>) {
+            enforceToolInvocation(entry.tool, args)
+            return await toolRegistry.call(entry.name, args)
+          },
+        }))
+        mountedToolDisposers.set(entry.tool, dispose)
+        mountedToolsReadOnly.set(entry.tool, manifestReadOnly(entry.manifest))
+        if (toolVisible(entry.tool)) return { state: 'registered' }
+        unregisterMountedTool(entry.tool)
+        return { state: 'failed', why: 'registered, but the tool registry does not resolve it' }
+      } catch (error) {
+        console.error(`x6-ball: mounted tool ${entry.tool} registration failed`, error)
+        const why = (error instanceof Error ? error.message : String(error)).split('\n', 1)[0] ?? ''
+        return { state: 'failed', why: why.slice(0, 200) }
+      }
+    }
+    // When this runtime ends, every tool it registered from a mounted manifest goes with it.
+    hostCtx.effect?.(() => () => {
+      for (const tool of [...mountedToolDisposers.keys()]) unregisterMountedTool(tool)
+    })
+    // Every tool she mounted before this boot is registered now.
+    for (const entry of toolRegistry.mountedTools()) registerMountedTool(entry)
+    registerBuiltin({
+      name: 'x6_tools',
+      description: TOOLS_TOOL_DESCRIPTION,
+      parameters: TOOLS_TOOL_PARAMETERS,
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        enforceToolInvocation('x6_tools', args)
+        const answer = await toolRegistry.execute(args)
+        // `availableAfter` is what is true. `now`: the tool registry resolves it, so the next turn of every thread
+        // is offered it and the index finds it. `reload`: only when this runtime has no tool registry (the next boot
+        // registers it from the record). A registration the harness refuses would fail at every boot too, so the record
+        // this call wrote is taken back and the mount is refused TOOL_REGISTER_FAILED, never answered `reload`.
+        if (args.action === 'mount' && answer.ok === true && typeof answer.tool === 'string') {
+          const entry = toolRegistry.mountedTools().find(row => row.tool === answer.tool)
+          const outcome = entry === undefined ? { state: 'failed' as const, why: 'the mounted record does not vet' } : registerMountedTool(entry)
+          if (outcome.state === 'registered') return { ...answer, availableAfter: 'now' }
+          if (outcome.state === 'no-tools') return { ...answer, availableAfter: 'reload' }
+          // `already` means the record was mounted before this call, so it is NOT taken back here.
+          if (answer.mounted === 'already') {
+            return { ok: false, code: 'TOOL_REGISTER_FAILED', name: answer.name, tool: answer.tool, why: outcome.why,
+              recordRemoved: false, next: 'the earlier record stays: unmount it, then mount again' }
+          }
+          const back = await toolRegistry.execute({ action: 'unmount', name: answer.name })
+          return { ok: false, code: 'TOOL_REGISTER_FAILED', name: answer.name, tool: answer.tool, why: outcome.why,
+            recordRemoved: back.ok === true, next: 'nothing was mounted; the proposal stays' }
+        }
+        if (args.action === 'unmount' && answer.ok === true && typeof answer.tool === 'string') {
+          return { ...answer, availableAfter: unregisterMountedTool(answer.tool) ? 'now' : 'reload' }
+        }
+        return answer
+      },
+    })
+    // ---- TOOLS block end ----
 
     registerBuiltin({
       name: 'x6_web_eyes',
       description:
         'Host-brokered public HTTPS fetch and search (`/_host/web-eyes`). '
-        + 'Actions: `fetch` (`url`, optional `maxLength`), `search` (`query`, optional `limit` 1..20), or `status`.',
+        + 'Actions: `fetch` (`url`, optional `maxLength`), `search` (`query`, optional `limit` 1..50, default 10), or `status`.',
       parameters: {
         action: { type: 'string', enum: ['fetch', 'search', 'status'], description: 'Operation (`fetch`, `search`, or `status`).' },
         url: { type: 'string', description: 'Public HTTPS URL to fetch (cannot be own host node.example.invalid).' },
         query: { type: 'string', description: 'Search query (for action="search").' },
-        limit: { type: 'number', description: 'Max search results (1..20, default 8).' },
+        limit: { type: 'number', description: 'Max search results (1..50, default 10).' },
         maxLength: { type: 'number', description: 'Max characters to return on fetch.' },
       },
       output: jsonOut,
@@ -7456,7 +8976,7 @@ export async function mountX6BallRuntime(
         const op = typeof args.op === 'string' ? args.op : ''
         if (op !== 'read' && op !== 'say') throw new Error('RELAY_OPERATION_UNKNOWN')
         enforceToolInvocation('crew_relay', { ...args, op })
-        // Lead's rule at landing, the same as her GitHub comments (githubTextSafe): a post that starts with a slash command
+        // The same rule as her GitHub comments (githubTextSafe): a post that starts with a slash command
         // or carries an @mention notifies someone under the owner's name and cannot be taken back, so it is not hers to send.
         if (op === 'say' && typeof args.body === 'string' && args.body.trim() !== '' && !githubTextSafe(args.body, 65_536)) {
           return { ok: false, code: 'RELAY_SAY_NEEDS_OWNER',
@@ -7503,16 +9023,16 @@ export async function mountX6BallRuntime(
     registerBuiltin({
       name: 'x6_swarm',
       description:
-        'Parallel subagent swarm dispatcher across configured provider doors (`anthropic`, `openrouter`, `deepseek`, `openai`, `xai`, `moonshot`). '
-        + 'Accepts either `tasks` (up to 6 independent subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`) '
+        'Parallel subagent swarm dispatcher across configured provider doors (`anthropic`, `openrouter`, `deepseek`, `openai`, `xai`, `moonshot`, `prime`). '
+        + 'Accepts either `tasks` (up to 12 independent subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`) '
         + 'or `targets` + shared `prompt`. Executes all workers in parallel and returns individual worker outputs and latencies.',
       parameters: {
-        tasks: { type: 'json', description: 'Array of up to 6 parallel subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`.' },
+        tasks: { type: 'json', description: 'Array of up to 12 parallel subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`.' },
         targets: { type: 'json', description: 'Optional array of `{ provider?, model, role? }` when sharing a single `prompt`.' },
         prompt: { type: 'string', description: 'Shared prompt if `tasks` do not specify individual prompts.' },
         system: { type: 'string', description: 'Optional shared system prompt.' },
-        maxTokens: { type: 'number', description: 'Max tokens per worker (1..8192, default 2048).' },
-        timeoutMs: { type: 'number', description: 'Timeout per worker in ms (1000..60000, default 30000).' },
+        maxTokens: { type: 'number', description: 'Answer length cap per worker, thinking included (1..128000; leave it out for the x6_consult default 32000: a small cap starves a thinking model).' },
+        timeoutMs: { type: 'number', description: 'Time limit per worker in ms (1000..1800000; leave it out for the x6_consult default 600000).' },
       },
       output: jsonOut,
       async execute(args: Record<string, unknown>, exec?: unknown) {
@@ -7520,20 +9040,23 @@ export async function mountX6BallRuntime(
         if (!leased) return { ok: false, code: 'CONSULT_PARENT_TURN_REQUIRED' }
         const context = { parentTurnId: leased.parentTurnId, signal: leased.signal }
         try {
-          const rawMaxTokens = typeof args.maxTokens === 'number' ? Math.trunc(args.maxTokens) : 2048
-          const maxTokens = Math.min(8192, Math.max(1, rawMaxTokens))
-          const rawTimeoutMs = typeof args.timeoutMs === 'number' ? Math.trunc(args.timeoutMs) : 30000
-          const timeoutMs = Math.min(60000, Math.max(1000, rawTimeoutMs))
+          // A worker is a consult, with a consult's defaults and ceilings. It used to default to 2048
+          // (cap 8192) and 30 s (cap 60 s), which starved thinking models; a number left out now takes the consult default.
+          const maxTokens = typeof args.maxTokens === 'number' && Number.isFinite(args.maxTokens)
+            ? Math.min(CONSULT_LIMITS.maxTokens, Math.max(1, Math.trunc(args.maxTokens))) : undefined
+          const timeoutMs = typeof args.timeoutMs === 'number' && Number.isFinite(args.timeoutMs)
+            ? Math.min(CONSULT_LIMITS.timeoutMs, Math.max(1000, Math.trunc(args.timeoutMs))) : undefined
+          const limits = { ...(maxTokens === undefined ? {} : { maxTokens }), ...(timeoutMs === undefined ? {} : { timeoutMs }) }
           const guarantees = {
-            maxTasks: 6,
+            maxTasks: CONSULT_LIMITS.targets,
             maxTurnsPerTask: 1,
-            maxTokensCap: 8192,
+            maxTokensCap: CONSULT_LIMITS.maxTokens,
             toolsGranted: [] as string[],
             ownerSessionInherited: false,
           }
           const rawTasks = Array.isArray(args.tasks) ? args.tasks : null
           if (rawTasks && rawTasks.length > 0) {
-            const capped = rawTasks.slice(0, 6)
+            const capped = rawTasks.slice(0, CONSULT_LIMITS.targets)
             const startedAt = Date.now()
             const results = await Promise.all(capped.map(async (t, idx) => {
               const item = record(t) ? t : {}
@@ -7544,8 +9067,7 @@ export async function mountX6BallRuntime(
                 model,
                 prompt: taskPrompt,
                 system: typeof item.system === 'string' ? item.system : (typeof args.system === 'string' ? args.system : undefined),
-                maxTokens,
-                timeoutMs,
+                ...limits,
               }, { origin, ...context })
               return {
                 id: typeof item.id === 'string' ? item.id : `worker-${idx + 1}`,
@@ -7566,14 +9088,13 @@ export async function mountX6BallRuntime(
             }
           }
           const councilOut = await consultProviders({
-            targets: Array.isArray(args.targets) ? args.targets.slice(0, 6) : [
+            targets: Array.isArray(args.targets) ? args.targets.slice(0, CONSULT_LIMITS.targets) : [
               { model: 'DeepSeek Flash', role: 'verifier' },
               { model: 'GPT Astra', role: 'critic' },
             ],
             prompt: String(args.prompt ?? ''),
             system: typeof args.system === 'string' ? args.system : undefined,
-            maxTokens,
-            timeoutMs,
+            ...limits,
           }, { origin, ...context })
           return {
             ...councilOut,
@@ -7587,18 +9108,26 @@ export async function mountX6BallRuntime(
       name: 'x6_wish',
       description:
         'Durable Object autonomous Wish Engine (`/dsh/home/auma/WISH.md` + Cloudflare Head DO `head:wish:active`). '
-        + 'Actions: `create` (registers an active wish with `intent`, `acceptance`, and `maxSteps`, enables the 60s DO wake alarm), '
+        + 'Actions: `create` (registers an active wish with `intent`, `acceptance`, `maxSteps` and `everySeconds`, enables the DO wake alarm every `everySeconds`, default 60), '
         + '`step` (executes one cloud wake step immediately against the active wish and appends the receipt to the DO transcript), '
         + '`status` (reads the active wish, steps completed, and daily step budget `dailyStepsUsed / 48`), '
-        + '`stop` (stops the active wish and disables the DO wake alarm).',
+        + '`stop` (stops the active wish and disables the DO wake alarm). '
+        + '`status` also returns your wake notes (what your no-tab steps wrote with `wake_note`), each step\'s outcome and time, and `stepFailures` (the newest 8 failed or blocked steps, each with its closed reason). '
+        + '`probe` is a read-only self-test that spends no step and calls no model: the provider a step would use, whether its secret is set, the model, the time limits, today\'s counts and budgets, and whether an alarm is scheduled. '
+        // A wish may name the owner's away mandate; only then may its no-tab steps act (on her own branches, paid from the mandate).
+        + '`create` with `mandateId` (the id of the away mandate the owner signed on the Keys and trust card) lets the wish\'s no-tab steps ACT while that mandate is active: '
+        + 'a branch, a commit or patch on your own branches, a runner job, a proposal card, one Linear comment; each is paid from the mandate first. Without it the wish stays look-only. '
+        + '`probe` also says whether acts are offered and why not, and today\'s counts against each bound.',
       parameters: {
         action: {
-          type: 'string', required: true, enum: ['create', 'step', 'status', 'stop'],
-          description: 'Wish operation (`create`, `step`, `status`, `stop`).',
+          type: 'string', required: true, enum: ['create', 'step', 'status', 'stop', 'probe'],
+          description: 'Wish operation (`create`, `step`, `status`, `stop`, `probe`).',
         },
         intent: { type: 'string', description: 'Goal/intent for `create`.' },
         acceptance: { type: 'string', description: 'Acceptance criteria for `create`.' },
         maxSteps: { type: 'number', description: 'Max autonomous steps for `create` (1..24, default 6).' },
+        everySeconds: { type: 'number', description: 'Seconds between two steps of the wish for `create` (60..3600, default 60; the edge refuses other values).' },
+        mandateId: { type: 'string', description: 'For `create`: the away mandate this wish\'s acts are paid from. Left out, the wish is look-only.' },
       },
       output: jsonOut,
       async execute(args: Record<string, unknown>) {
@@ -7609,6 +9138,7 @@ export async function mountX6BallRuntime(
           step: 'wish_step',
           status: 'wish_status',
           stop: 'wish_stop',
+          probe: 'wish_probe', // Read-only self-test, no step spent
         }
         const doAction = mapAction[action] ?? 'wish_status'
         if (action === 'create' && typeof args.intent === 'string') {
@@ -7625,6 +9155,8 @@ export async function mountX6BallRuntime(
             intent: args.intent,
             acceptance: args.acceptance,
             maxSteps: args.maxSteps,
+            everySeconds: args.everySeconds,
+            ...(action === 'create' && typeof args.mandateId === 'string' ? { mandateId: args.mandateId } : {}),
             tab_id: peerId,
           }),
         })
@@ -7843,6 +9375,81 @@ export async function mountX6BallRuntime(
     return { status: 200, body: { ok: true, sessionId, selected, savedDefault: false } }
   }
 
+  // ---- VOICEAWARE block begin ---- (lead's word: the voice map, gathered here, rendered by voice-map.ts)
+  /**
+   * VOICE LEVEL open: her map, gathered from this worker's own state at the moment of the turn (never from the page's
+   * word, no network), rendered by voice-map.ts. Each section is read only while the 300 ms budget lasts; a section not
+   * read in time is left out and the map says so. The worker remembers, per voice home and in memory only, what it last
+   * sent, so the map can open with what changed since her last voice turn.
+   */
+  const voiceMapSeen = new Map<string, VoiceMapSeen>()
+  const voiceMap = (sessionId: string): string => {
+    const started = performance.now()
+    const inTime = (): boolean => performance.now() - started < VOICE_MAP_GATHER_MS
+    const readText = (path: string): string | null => {
+      try { return vfs.existsSync(path) ? String(vfs.readFileSync(path, 'utf8')) : null } catch { return null }
+    }
+    let tools: VoiceMapTool[] | null = null
+    try {
+      tools = capabilityIndex.read().registeredTools
+        .map(tool => ({ name: tool.name, readOnly: tool.readOnly, description: tool.description }))
+    } catch { tools = null }
+    let roster: Record<string, string> = {}
+    let threadCount: number | null = null
+    try {
+      const listed = readThreads(threadStoreView(vfs), { action: 'list' }, Date.now(), { listTotalBytes: 64 * 1024 })
+      const rows = Array.isArray(listed.threads) ? listed.threads as Array<Record<string, unknown>> : []
+      threadCount = typeof listed.total === 'number' ? listed.total : rows.length // the store total, not the listed page
+      roster = Object.fromEntries(rows.filter(row => typeof row.id === 'string')
+        .map(row => [row.id as string, typeof row.title === 'string' ? row.title : '']))
+    } catch { threadCount = null }
+    const body = !inTime() ? null : (() => {
+      const entries = Object.values(currentBall.entries)
+      let differ: number | null = 0
+      try {
+        for (const entry of entries) {
+          const named = `/dsh/home/auma/seed/organs/${entry.id}.js`
+          if (!/^[a-z][a-z0-9-]{0,63}$/.test(entry.id) || !vfs.existsSync(named)) continue
+          if (`ball:${sha256HexSync(String(vfs.readFileSync(named, 'utf8')))}` !== entry.specifier) differ += 1
+        }
+      } catch { differ = null }
+      const cells = cellFactsOf(workerCellHost).cells
+      return { organs: entries.length, organsDiffer: differ, pinnedCells: Object.keys(CELL_PINS).length,
+        cells: cells ? cells.length : null, forgedCells: forgedCellRows(vfs)?.length ?? null,
+        skills: null, threads: threadCount } // kept skills: not read here (skill reads stay in their marked blocks)
+    })()
+    const motion = !inTime() ? null : (() => {
+      const wishText = readText(WISH_PATH)
+      const wishLines = wishText ? wishText.split('\n').filter(line => line.trim() !== '') : []
+      return { cord: null, wish: wishLines.length > 0 ? { first: wishLines[0] ?? '', lines: wishLines.length } : null }
+    })()
+    const continuity = !inTime() ? null : (() => {
+      const handoff = readText(HANDOFF_PATH) ?? readText(AUMA_ONE_HANDOFF_PATH)
+      let awareness: { keys: string[]; newest: string | null } | null = null
+      try {
+        const raw = readText(VOICE_AWARENESS_PATH)
+        const parsed = raw === null ? null : JSON.parse(raw) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const keys = Object.keys(parsed).sort()
+          const lists = keys.map(key => (parsed as Record<string, unknown>)[key]).filter(Array.isArray) as unknown[][]
+          const list = lists.find(value => value.length > 0)
+          // Screened whole, then cut: a secret straddling the cut must never leave a short, unscreenable fragment.
+          const newest: string | undefined = list ? JSON.stringify(list[list.length - 1]) : undefined
+          awareness = { keys: keys.slice(0, 24), newest: newest === undefined ? null : screenText(newest).slice(0, 2048) }
+        }
+      } catch { awareness = null }
+      return { handoff: handoff === null ? null : screenText(handoff).slice(0, VOICE_MAP_HANDOFF_CHARS), awareness }
+    })()
+    const facts: VoiceMapFacts = { build: { id: buildSha, builtAt: buildIdentity.builtAt }, epoch: currentBall.epoch,
+      ballId: currentBall.ballId, level: voiceLookOnly.level(), body, motion, continuity, tools }
+    const seen = seenOf(facts, roster)
+    const since = sinceLines(voiceMapSeen.get(sessionId) ?? null, seen)
+    if (voiceMapSeen.size >= 64 && !voiceMapSeen.has(sessionId)) voiceMapSeen.delete(voiceMapSeen.keys().next().value as string)
+    voiceMapSeen.set(sessionId, seen)
+    return renderVoiceMap(facts, since)
+  }
+  // ---- VOICEAWARE block end ----
+
   const handleControlRequest = async (
     method: string,
     path: string,
@@ -7871,6 +9478,18 @@ export async function mountX6BallRuntime(
       // The global worker message channel is not private from loaded organs.
       // Do not send ceremony bearers here; rejection cannot conceal bytes already sent.
       if (sub === '/governance-approval') return { status: 403, body: { ok: false, code: 'CLASS3_PRIVATE_TRANSPORT_UNAVAILABLE' } }
+      // VOICE LEVEL: the page asks it before a voice turn resolves a home (no input; constant size).
+      if (method === 'GET' && sub === '/voice-level') {
+        return { status: 200, body: { ok: true, level: voiceLookOnly.level() } }
+      }
+      // VOICE LEVEL: the page tells the worker where a voice turn stopped before the worker was asked (a closed stage; best
+      // effort). It changes nothing; `x6_voice_status` shows it.
+      if (sub === '/voice-note') {
+        let noted: unknown = null
+        if (method === 'POST' && bodyText.length <= 256) { try { noted = JSON.parse(bodyText) } catch { /* refused below */ } }
+        const ok = record(noted) && voiceLookOnly.note(noted.stage)
+        return { status: ok ? 200 : 400, body: { ok } }
+      }
       // Voice hook: mark the voice home look-only (add-only; no route removes a mark) and select one session's model.
       if (sub === '/voice-mark' || sub === '/session-model') {
         let input: unknown = null
@@ -7880,7 +9499,8 @@ export async function mountX6BallRuntime(
           const answer = await voiceLookOnly.mark(input.sessionId, readVoiceHomeRecord)
           const status = answer.ok ? 200 : answer.code === 'VOICE_SESSION_INVALID' ? 400 : answer.code === 'VOICE_SESSION_NOT_FOUND' ? 404
             : answer.code.startsWith('VOICE_HOME_UNPROVEN') ? 403 : 503
-          return { status, body: answer }
+          // VOICE LEVEL open: the answer carries her map (where everything is), which the page puts before the turn.
+          return { status, body: answer.ok && answer.level === 'open' ? { ...answer, map: voiceMap(String(input.sessionId)) } : answer }
         }
         return await selectSessionModel(input)
       }

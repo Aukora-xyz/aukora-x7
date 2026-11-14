@@ -1,5 +1,6 @@
 /** The staged outward request is offered only when it is exactly the GitHub post the card describes. */
 import { describe, expect, it } from 'vitest'
+import { canonicalJson } from '../src/client/spatial/aumlok/class3-approval.ts'
 import { outwardWords, parseStagedOutward, STAGED_OUTWARD_SCHEMA } from '../src/client/spatial/aumlok/outward-class3.ts'
 
 const file = (body: unknown, more: Record<string, unknown> = {}) => JSON.stringify({ schema: STAGED_OUTWARD_SCHEMA, stagedAt: 1,
@@ -52,5 +53,31 @@ describe('the staged outward request', () => {
     expect(outwardWords(repo(edit)).rows).toEqual(expect.arrayContaining([['oldString', 'old words'], ['newString', 'new words'], ['dryRun', 'false']]))
     expect(outwardWords(repo(commit)).rows).toEqual(expect.arrayContaining([['file 1 (x/1.ts) content', 'export const one = 1\n'],
       ['file 2 (x/2.ts) content', ''], ['expectedHeadSha', 'a'.repeat(40)], ['idempotencyKey', 'key-0123456789abcdef']]))
+  })
+
+  // The card prints a staged Cloudflare write in the key order of the bytes the edge sends and the
+  // approval covers (canonicalJson), never through JSON.parse of the canonical text (that puts "2" and "10" first).
+  it('a staged Cloudflare write reads the same whatever order her keys were in: the canonical order, "10" before "2"', () => {
+    const cloudflare = (body: Record<string, unknown>) => parseStagedOutward(file(body, { tool: 'x6_cloudflare', pathname: '/_host/cloudflare',
+      protection: { family: 'P1', reason: 'live-zone' } }))!
+    const first = { action: 'api', method: 'PATCH', path: '/zones/abc/settings/ssl', query: { per_page: 5, '10': 'x', '2': 'y', a: 1 },
+      body: { value: 'full', '10': { b: 1, a: [2, { d: 1, c: 0 }] }, '2': true, meta: { z: null, y: 'q' } } }
+    const second = { body: { meta: { y: 'q', z: null }, '2': true, '10': { a: [2, { c: 0, d: 1 }], b: 1 }, value: 'full' },
+      query: { a: 1, '2': 'y', '10': 'x', per_page: 5 }, path: '/zones/abc/settings/ssl', method: 'PATCH', action: 'api' }
+    const [one, two] = [outwardWords(cloudflare(first)), outwardWords(cloudflare(second))]
+    expect(one.rows).toEqual(two.rows)
+    const rows = new Map(one.rows)
+    // With the layout's whitespace removed, the body and query rows are exactly the canonical text the edge sends.
+    expect(rows.get('body')!.replace(/\s+/gu, '')).toBe(canonicalJson(first.body))
+    expect(rows.get('query')!.replace(/\s+/gu, '')).toBe(canonicalJson(first.query))
+    expect(canonicalJson(first.body).indexOf('"10"')).toBeLessThan(canonicalJson(first.body).indexOf('"2"'))
+    // Not the order JSON.parse would give back (integer-like keys first, in number order).
+    expect(rows.get('body')!.replace(/\s+/gu, '')).not.toBe(JSON.stringify(JSON.parse(canonicalJson(first.body))))
+    // A json part of a multipart body is printed the same way.
+    const part = (json: Record<string, unknown>) => outwardWords(cloudflare({ action: 'api', method: 'PUT', path: '/accounts/{account}/workers/scripts/your-node',
+      bodyKind: 'multipart', parts: [{ name: 'metadata', contentType: 'application/json', json }] })).rows
+    expect(part({ main_module: 'w.js', '10': 1, '2': 2 })).toEqual(part({ '2': 2, '10': 1, main_module: 'w.js' }))
+    expect(new Map(part({ main_module: 'w.js', '10': 1, '2': 2 })).get('part 1 (metadata) content')!.replace(/\s+/gu, ''))
+      .toBe(canonicalJson({ main_module: 'w.js', '10': 1, '2': 2 }))
   })
 })

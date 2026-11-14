@@ -14,6 +14,7 @@ import {
   assertAllowedModelRoutes,
   type AllowedModelRoute,
 } from './model-selection.ts'
+import { assertEdgeDoors, type EdgeDoors } from './edge-doors.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -36,6 +37,11 @@ export interface Config {
   enabled: Volatile<boolean>
   /** Initial route list inherited when the user document does not override it. */
   allowedModels: Volatile<AllowedModelRoute[]>
+  /**
+   * Deployment door table: which provider routes leave through which edge door, so discovery can say a route is
+   * switched on but has no key at the edge. Empty routes (the default) read nothing.
+   */
+  edgeDoors?: EdgeDoors
 }
 
 /** Host settings owner that records Session authorization before the first model request. */
@@ -45,10 +51,27 @@ export class SubagentModelSelectionConfig extends Service {
   static Config = z.object({
     enabled: z.boolean().default(false).volatile(),
     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),
+    edgeDoors: z.object({
+      healthPath: z.string().default('/api/health'),
+      routes: z.array(z.object({
+        provider: z.string().min(1).required(),
+        door: z.string().min(1).required(),
+      })).default([]),
+    }),
   })
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'subagentModelSelection')
+    assertEdgeDoors(config.edgeDoors)
+  }
+
+  /**
+   * The deployment's door table, when it names any route.
+   * @returns the table, or undefined when no route leaves through an edge door.
+   */
+  edgeDoors(): EdgeDoors | undefined {
+    const doors = this.config.edgeDoors
+    return doors === undefined || doors.routes.length === 0 ? undefined : doors
   }
 
   protected async [Service.init](): Promise<void> {

@@ -389,6 +389,11 @@ test('his A then C: both releases are kept by attempt id; A\'s late landing is r
   assert.notEqual(a.headSha, c.headSha)
   const first = await releasedAttempt(fx, a)
   assert.equal((await first.release()).status, 200)
+  // A then C in TIME: releases are listed by `releasedAt`, then by attempt id. Two releases inside one millisecond would be
+  // listed by their random ids (seen once in six runs on a busy machine), so C is released at a later millisecond, as his
+  // two taps are.
+  const releasedFirstAt = Date.now()
+  while (Date.now() === releasedFirstAt) await new Promise((resolve) => { setTimeout(resolve, 1) })
   const second = await releasedAttempt(fx, c)
   const releasedC = await second.release()
   assert.equal(releasedC.status, 200, JSON.stringify(releasedC.body)); assert.equal(releasedC.body.released.attemptId, second.id)

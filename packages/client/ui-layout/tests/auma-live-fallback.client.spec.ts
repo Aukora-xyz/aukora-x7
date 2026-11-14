@@ -60,7 +60,10 @@ describe('Auma Live voice input: the browser recogniser is a consented fallback,
     expect(code).not.toContain('recogniser is listening')
     expect(code).not.toContain('vendor\'s service')
     expect(code).not.toContain('Voice input is unavailable')
-    expect(code).not.toContain('Typing works')
+    // "Typing works" appears in what runs exactly once, and not as the plan's sentence: the managed voice's own
+    // "not reachable" line, which the page says when that module does not load (no fallback).
+    expect(count(code, /Typing works/g)).toBe(1)
+    expect(code).toContain('const VOICE_UNREACHABLE_LINE = \'My voice is not reachable right now. Typing works.\';')
   })
 
   it('organ ready: the organ hears her, nothing is said, whatever else is so', () => {

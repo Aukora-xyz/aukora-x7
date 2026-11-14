@@ -1043,6 +1043,15 @@ async function routeTail(env, call, url) {
     const take = Math.min(max, window.length)
     return answer(window.slice(window.length - take), before - take, before, true)
   }
+  // `before` inside a line (the byte before it is not a newline) is answered
+  // as the bytes ending at `before`, back to that line's start or `max`, marked partial: snapping back to the line end
+  // before it left a line longer than one answer unreadable. A `before` past the last line end is still cut to it above.
+  // Only while THREAD_SYNC is exactly `on` (thread-mount.mjs passes `tailInsideLine`); in every other
+  // mode a `before` inside a line is answered exactly as main answers it (snapped back to the line end before it).
+  if (env.tailInsideLine && window[window.length - 1] !== 10) {
+    const from = Math.max(readFrom + lastNewline + 1, before - max)
+    return answer(window.slice(from - readFrom), from, before, true)
+  }
   const end = readFrom + lastNewline + 1
   const low = Math.max(0, end - max)
   if (low === 0) return answer(window.slice(0, end - readFrom), 0, end, false)
@@ -1057,17 +1066,19 @@ async function routeTail(env, call, url) {
  * none, or `{ unavailable: true }` when the bucket could not be read just now (503). `mirror.call(op, input, home?)`.
  * `approve(card)` is the owner's passkey check over the exact parsed retract body `{id, forkAt, to, sha256}`; it is
  * called only when MIRROR answers that the retract needs it, and answers true only for a valid approval of that body.
- * @param {object} options `{ request, url, mirror, parts, rescues, limits, protocol, now, approve, deadlines, importStep }`.
+ * `tailInsideLine`: true only while THREAD_SYNC is exactly `on`; then `/_thread/tail` answers a `before`
+ * inside a line (routeTail); false or absent, the route answers exactly as main.
+ * @param {object} options `{ request, url, mirror, parts, rescues, limits, protocol, now, approve, deadlines, importStep, tailInsideLine }`.
  * @returns {Promise<Response>}
  */
-export async function handleThreadRequest({ request, url, mirror, parts, rescues, limits = THREAD_LIMITS, protocol = THREAD_PROTOCOL, now: _now, approve, deadlines, importStep = THREAD_IMPORT_STEP.pieces } = {}) {
+export async function handleThreadRequest({ request, url, mirror, parts, rescues, limits = THREAD_LIMITS, protocol = THREAD_PROTOCOL, now: _now, approve, deadlines, importStep = THREAD_IMPORT_STEP.pieces, tailInsideLine = false } = {}) {
   try {
     const proto = normalizeThreadProtocol(protocol)
     if (!proto || !request || !mirror || typeof mirror.call !== 'function') stop(503, 'THREAD_UNAVAILABLE')
     const where = url ?? new URL(request.url)
     // `importStep`: pieces per import step, 1 to THREAD_IMPORT_STEP.pieces (MIRROR refuses a longer step).
     const step = Number.isSafeInteger(importStep) && importStep >= 1 ? Math.min(importStep, THREAD_IMPORT_STEP.pieces) : THREAD_IMPORT_STEP.pieces
-    const env = { proto, limits, parts, rescues, approve, importStep: step, deadlines: { ...THREAD_DEADLINES, ...deadlines } }
+    const env = { proto, limits, parts, rescues, approve, importStep: step, deadlines: { ...THREAD_DEADLINES, ...deadlines }, tailInsideLine: tailInsideLine === true }
     const call = createCaller(mirror)
     const route = where.pathname
     const posts = ['/_thread/append', '/_thread/import', '/_thread/retract', '/_thread/keep']

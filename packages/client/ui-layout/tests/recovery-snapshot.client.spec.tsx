@@ -246,7 +246,7 @@ describe('The recovery snapshot builder', () => {
 
 // ── The button on the real Continuity screen ───────────────────────────────────────────────────────────────────────────
 
-const HEAD = '7c01cb98514e4ae7a6aaa0dc29653282d94bc4717b85a18968b47aa4310120a8'
+const HEAD = '79fd695ce12f6fb6614d7b4c5fb10dffe52e6ed0fdb1ab4c30f7a5c9724cd5f2'
 const BALL = { ok: true, buildSha: 'c'.repeat(40), head: { ballId: HEAD, parentBallId: 'aa'.repeat(32), epoch: 162, entries: {} }, modules: { x: {} }, peers: [] }
 const FACTS = { ok: true, runtime: 'cloudflare', epoch: 162, ballId: HEAD, receiptTotal: 120, receiptsVerified: 120, evidenceStatus: 'complete' }
 const ESTATE = { ok: true, schema: 'aukora.edge-estate.v1', head: { epoch: 162 }, mirror: { entryCount: 2 } }
