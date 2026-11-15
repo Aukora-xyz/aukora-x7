@@ -63,7 +63,7 @@
 
 **一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（4,317）、`cloud-brokers.mjs`（3,456）、`owner-mandate.mjs`（211）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（173）、`deploy/ci/frozen-paths.mjs`（439）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（1,263）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（9,577）按符号读，不要整个读。
 
-**论证。** `docs/WHITEPAPER.md`（897，只有英文）是本项目的完整论证，不是状态页。据作者报告，它的 Book V 和 Book VI 曾对照较早的一棵树核对过：读了代码，没有运行；它的数字与这棵树不一致时，以这棵树的页面为准。
+**论证。** `docs/WHITEPAPER.md`（1156，只有英文）是本项目的完整论证，不是状态页。据作者报告，它的 Book V 和 Book VI 曾对照较早的一棵树核对过：读了代码，没有运行；它的数字与这棵树不一致时，以这棵树的页面为准。
 
 不要从 `AGENTS.md` 开始：除了顶部的一个指针，它放的是继承来的 harness 的编码规则，不是本项目的治理规则。它自己的开头仍把读者送到 `docs/START-HERE.md`，那是一个更旧的页面，把代码描述为继承来的运行时，并使用较旧的标签用词；先读本页。不要通过抽样 `packages/` 来了解 Aukora 是什么（第 7 节）。
 

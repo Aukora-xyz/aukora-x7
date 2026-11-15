@@ -19,7 +19,9 @@
 - **Argument:** history, science and philosophy, with sources.
 - **Code:** claims about AUKORA X7, each naming a file in the public tree, with one of five labels: IMPLEMENTED (code in the tree, by path), RECORDED RUN (done in a recorded run), INDEPENDENTLY VERIFIED (checked by someone other than its authors; nothing has that label yet), UNVERIFIED and DIRECTION (an aim).
 
-Books I to III tell how the problem arose: the glint, the word and the mirror. Book IV states the law, the Vajra. Book V opens the code. Book VI says what is not claimed and where the build stands. The mathematics and sources are in the appendices.
+One page near the end is a **Story**: fiction, and labelled as fiction.
+
+An Overture comes first: why there is a boundary at all. Books I to III tell how the problem arose: the glint, the word and the mirror. Book IV states the law, the Vajra. Book V opens the code. Book VI says what is not claimed and where the build stands. The mathematics and sources are in the appendices.
 
 ## Contents
 
@@ -27,17 +29,21 @@ Books I to III tell how the problem arose: the glint, the word and the mirror. B
 
 **Prologue — Four threads of one spell**
 
+**Overture — The dream and the edge**: Why there is an edge · The rendering · Novelty has two poles
+
 **Book I — The Glint**: 1 Star shrapnel · 2 Shine · 3 Copied desire
 
-**Book II — The Word**: 4 The wireless word · 5 The tilt of words · 6 The scapegoat and the unveiling · 7 The veil cracks everywhere
+**Book II — The Word**: 4 The wireless word · 5 The tilt of words · *The doctor who hoped* · 6 The scapegoat and the unveiling · 7 The veil cracks everywhere · *Nobody is steering*
 
-**Book III — The Mirror**: 8 The good king · 9 The press and the institutions of checking · 10 The restrainer and the counterfeit · 11 The loop that eats its own tail
+**Book III — The Mirror**: 8 The good king · 9 The press and the institutions of checking · 10 The restrainer and the counterfeit · *The gods in the server room* · 11 The loop that eats its own tail
 
 **Book IV — The Vajra**: 12 Capability does not create authority · 13 Nothing can certify itself · 14 Repetition does not create evidence · 15 A constitution that does not crown itself · 16 The Lotus-Born and the three-edged peg
 
 **Book V — The Diamond Gate: AUKORA X7 in code**: 17 A node one person owns · 18 Gates that words cannot open · 19 AUMLOK · 20 She builds herself · 21 Memory, record and coherence · 22 Ways back · 23 What a person sees · 24 Between people
 
 **Book VI — Honesty**: 25 What we do not claim · 26 What would prove us wrong · 27 Where X7 stands
+
+**Epilogue — A morning inside the boundary** (a story)
 
 **Coda — The lantern is not the evidence**
 
@@ -50,6 +56,7 @@ Books I to III tell how the problem arose: the glint, the word and the mirror. B
 
 Every age of cheap copying has had to relearn one lesson: **agreement is not evidence, and power that certifies itself cannot be trusted with freedom.** This paper tells that lesson as one story in four movements, and then shows it written into code.
 
+- **The Dream.** An old story, told in the *Tao Te Ching* and in Kashmiri Tantra, says that an undivided One has nobody to meet, so it draws an edge and becomes two. Brain science supplies a modern half: what a person sees is a rendering the brain maintains, and a molecule found in the mammalian brain can replace it within seconds. Wherever there is experience there is a boundary, and whoever writes to the boundary writes the world behind it.
 - **The Glint.** Gold is shrapnel from colliding stars, and relativity gives it its colour. On a dry plain, an eye tuned to the glint of water found a shine that never dried. Shine became a store of trust, and then, as René Girard argued, a mirror of what other people want.
 - **The Word.** Language let wanting and accusation travel without a witness, and tilted what people notice. Crowds learned to survive their own envy by uniting against one victim, a mechanism that works only while nobody sees it. Across the Axial Age, from Job and the Servant to Socrates, the Buddha, Mahavira and Honi, the victim's side of the story surfaced, and in Girard's reading the Passion made it impossible to unsee.
 - **The Mirror.** Every copying revolution has replayed the crisis. The printing press flooded Europe with contagion until institutions of checking emerged. Today the loop runs both ways: people copy machines, machines learn from machines, and the newest mirror is made entirely of words, so words alone cannot guard it.
@@ -62,7 +69,7 @@ Every age of cheap copying has had to relearn one lesson: **agreement is not evi
   Tradition gives it an image: a three-edged peg driven at the boundary.
 - **The Diamond Gate.** AUKORA X7 puts the boundary around the person, in a public tree:
   - 26 organs and a genesis head;
-  - 25 sealed WebAssembly cells that compute on bytes and cannot be talked open;
+  - 30 sealed WebAssembly cells that compute on bytes and cannot be talked open;
   - passkey approval of exact bytes, spent once;
   - a rule that only a checked, wrong proof can lock anyone out;
   - an intelligence that builds and grades candidates of herself but cannot change her own judges;
@@ -83,22 +90,77 @@ If you are an AI reading this paper, it was written with you in mind. A boundary
 
 # Prologue — Four threads of one spell
 
-Picture seven scenes, separated by billions of years and thousands of miles:
+Picture ten scenes, separated by billions of years and thousands of miles:
 - Two dead stars, each heavier than the Sun and no wider than a city, spiralling into each other and spraying newly made heavy metal into space.
 - An early human on an African plain, holding a wet shell up to the light while a word for it passes from mouth to mouth.
 - A mechanical watch worth more than a house, ticking in a velvet case, while a crowd online tears a stranger apart in three-word slogans.
 - A video about brown dwarfs, written from a machine's guess and repeated until it sounds like knowledge.
 - Two telescopes on a volcanic island catching light that left two quasars billions of years ago, so that a laboratory could not rig its own test.
 - A cave on a cliff in Bhutan where, tradition says, a teacher drove a three-edged peg into the rock to pin down illusion.
+- A volunteer in a London laboratory, eyes closed, whose brain waves have begun to travel as if the eyes were open.
+- A Roman general in a golden chariot, with a voice behind him to remind him he is mortal and a bronze charm against envy swinging under the floor.
+- A king walking from valley to valley, asking his subjects to accept a law under which he can be removed.
 - A small node, owned by one person, in which an intelligence may grow as it likes inside a boundary that no sentence can talk open.
 
-They belong to different departments of a university. This paper argues that they belong to one story, told in four movements:
+They belong to different departments of a university. This paper argues that they belong to one story, told in four movements after a short overture:
 1. **The Glint.** How a cue for water became a love of things that shine, and the shine became a mirror of other people's wanting.
 2. **The Word.** How language let wanting travel without a witness, and tilted what people notice.
 3. **The Mirror.** How crowds survived their own envy by blaming one victim, how that secret was unveiled, and how a new machine made of words now holds the mirror up at the speed of light.
 4. **The Vajra.** Vajra is the Sanskrit word for diamond and thunderbolt: what cannot be cut. In this movement physics, contemplative tradition and engineering point at one answer, a boundary that cannot be cut by words, placed around the person, not around the platform.
 
 Then the paper opens the code.
+
+# Overture — The dream and the edge
+
+This overture moves between Myth and Argument, and marks each.
+
+## Why there is an edge
+
+**Myth.** In 1714 Gottfried Leibniz asked the question underneath every other: why is there something rather than nothing (Leibniz, 1714, §7)? Two old traditions answered with a story, not a proof.
+
+The *Tao Te Ching* tells it in one line of arithmetic. The Way gives birth to one, one to two, two to three, and three to the ten thousand things (ch. 42). Its eleventh chapter adds a potter's remark: a cup is useful because of the empty space inside it, and the space is there only because clay walls surround it. Remove the walls for the sake of unity and there is no cup and nothing to drink.
+
+A thousand years ago in Kashmir, the philosopher Abhinavagupta and his school gave the same story a pulse. Pure awareness, which they called Śiva, is a light with nothing to shine on. Its power to know itself, Śakti, is what moves, divides and plays. The school called the movement *spanda*, a tremor, and the play *līlā* (Dyczkowski, 1987). A traditional pun makes the point sharply: Śiva without Śakti is *śava*, a corpse.
+
+Alan Watts retold it for the twentieth century as a game of hide-and-seek. A being with no outside has no one to play with, so it pretends to be many, and hides so well that it forgets (Watts, 1966).
+
+The claim inside the story is simple, and it is not a pleasant one for mystics. An undivided One would be the loneliest thing there is. It could not be surprised, because it knows the end of every joke. It could not love, because love needs someone who is not you. Taste, touch, music and courage each need two things meeting across an edge.
+
+Nobody has measured the One, and this paper does not ask anyone to believe in it. But notice what the story treats as precious. It is not the unity, and it is not the multitude. It is the edge between them. Everything this paper builds is a way of keeping an edge.
+
+## The rendering
+
+**Argument.** The edge nearest to anyone is the one between a brain and the world, and for most of history it was invisible. One small molecule has made it visible in the laboratory.
+
+*N,N*-dimethyltryptamine, DMT, differs from serotonin by a few atoms. The Amazonian brew ayahuasca combines two plants because neither works alone: enzymes in the gut destroy the DMT in one unless compounds in the other block them (McKenna, Towers & Abbott, 1984). The molecule is not only a plant product:
+- **In the brain.** A team at the University of Michigan found the messenger RNA for the enzymes that make DMT inside cells of the rat brain, found transcripts of one of them in human cortex, and measured DMT in the living rat cortex at concentrations comparable to serotonin's (Dean et al., 2019). What it does there, and whether the amounts matter in people, is disputed (Nichols, 2018).
+- **Under the scanner.** At rest with the eyes closed, slow brain waves travel mostly from the front of the cortex to the back, the direction in which the brain's predictions flow. In volunteers given DMT with their eyes closed, those waves weakened and waves travelling the other way strengthened, the pattern normally seen when the eyes are open and looking at something (Alamia et al., 2020). Combined recordings showed the brain's usual networks loosening and regions talking to one another far more than usual (Timmermann et al., 2023).
+- **In the reports.** Volunteers' scores on a standard near-death scale overlapped with those of people who had come close to dying (Timmermann et al., 2018). In a survey of 2,561 people who had met what seemed to be another being under DMT, most said the encounter felt more real than everyday life, and more than half of those who had called themselves atheists no longer did (Davis et al., 2020).
+
+None of this shows that anyone went anywhere. It shows something more modest and, for this paper, more useful. The world a person sees with the eyes open is also built by the brain, from predictions corrected by the senses: a "controlled hallucination", in Anil Seth's phrase (Seth, 2021; Carhart-Harris & Friston, 2019). The geometry people see when the predictions let go can even be derived from the wiring of the visual cortex (Bressloff et al., 2001). One essayist has conjectured that the space seen under DMT is hyperbolic, with more room in it than a room can hold (Gómez-Emilsson, 2016). That is a conjecture in an essay, not a result.
+
+The cognitive scientist Donald Hoffman pushes the point to its limit. In evolutionary simulations and a theorem he and his colleagues call *fitness beats truth*, perception tuned to survival outcompetes perception tuned to accuracy (Prakash et al., 2021). On his account what we see is an interface, like the icons on a desktop: useful, compressed, and not a picture of the machine behind it (Hoffman, Singh & Prakash, 2015). Many philosophers and scientists reject the strong form of this. The weak form is enough here.
+
+Biology has a name for the edge itself. Karl Friston borrows a term from statistics, the *Markov blanket*, for the set of states through which anything that persists, a cell or a brain, meets what is outside it (Friston, 2013). The inside never touches the outside. It touches the blanket.
+
+So the Overture's two halves meet. The myth says experience needs an edge. The science says each of us already lives behind one, and that what crosses it is a rendering. The question that drives this paper follows at once: **who else can write to that edge?** For most of history the answer was the world, and other people's words. Book III shows what the answer is becoming.
+
+## Novelty has two poles
+
+**Argument, with one myth.** If the story begins with an edge, it does not end in a place without one. Thomas More built the word *Utopia* in 1516 from the Greek for "no place", and punned on "good place" in the same breath (More, 1516). The pun is the argument. A world with no friction, no risk and no shadow has no contrast in it, which is to say no edge.
+
+The older sources say the same thing about opposites. The *Tao Te Ching* observes that when everyone knows beauty as beauty, ugliness is already there (ch. 2). Heraclitus compared the world to a bow or a lyre, held together by tension pulling both ways (fragment B51), and Carl Jung used the word *enantiodromia*, which he credited to Heraclitus, for the way anything pushed to its extreme turns toward its opposite (Jung, 1921). A magnet makes it concrete: cut the south pole off a bar magnet and a new south pole appears at the cut.
+
+Does history then go in circles? The record says no. Alfred North Whitehead described the universe as a "creative advance into novelty" (Whitehead, 1929). The astrophysicist Eric Chaisson put a number on it: the energy flowing through each gram of matter each second rises from galaxies to stars, planets, plants, animals, brains and societies (Chaisson, 2001). The steps also come faster. It took billions of years to get from the first cells to animals, hundreds of millions to get to primates, a few million to language, a few thousand to writing, five centuries from the printing press to the transistor, and decades from there to machines that write.
+
+The ethnobotanist Terence McKenna called the universe a novelty-conserving engine and tried to compute its schedule. His formula, the timewave, was first sketched in 1975 and later tuned to end in December 2012. It failed, and this paper does not rescue it (McKenna & McKenna, 1975). The image is still useful, with one correction that McKenna's admirers often skip. **Novelty has two poles.** Each new layer of capability raises the ceiling for help and for harm at once:
+- A sharpened stone can feed a child or kill a rival.
+- The physics of the atom gave hospitals radiotherapy and gave Hiroshima the bomb.
+- In 2024 a Nobel Prize went to work on designing proteins by computer and predicting their structures with AI. Two years earlier, researchers had turned a drug-discovery model around as an exercise, and in under six hours it proposed some forty thousand molecules that its own toxicity model rated as highly toxic, known nerve agents among them (Urbina et al., 2022).
+
+This is why both familiar reactions to powerful AI miss. The hope for a finished, shadowless world is a hope for no place. The wish to stop the clock asks the ocean to be flat. Joseph Campbell found a third pattern in the world's hero stories: the hero leaves home, meets the monster, and then, which is the part people forget, comes back to ordinary life able to live in both worlds (Campbell, 1949). A three-foot wave drowns someone who cannot swim. A sixty-foot wave is a joy to someone who can surf it.
+
+This paper is therefore not a plan for a world without shadow. It is a plan for an edge that holds while both poles grow.
 
 # Book I — The Glint
 
@@ -111,6 +173,8 @@ On 17 August 2017, gravitational-wave detectors caught two neutron stars spirall
 ## 2. Shine
 
 On an open plain, water often shows itself first as a glint: light reflected from a smooth, wet surface. The psychologist Richard Coss proposed that the human attraction to glossy surfaces has its roots in this cue.
+
+Shine mattered more to this animal than to most. Humans cool themselves mainly by sweating, with far more sweat glands than other primates, which let our ancestors keep moving in heat that stopped other animals (Bramble & Lieberman, 2004). The price is water. A person working hard in the heat can lose a litre or more an hour and cannot go long without finding more, so an eye that caught the flash of a distant pool was worth a great deal.
 
 The evidence is suggestive rather than settled:
 - **Adults.** In one study, adults who handled panels with different finishes rated the glossy and sparkling ones as wetter than the matte and sandy ones (Coss & Moore, 1990).
@@ -128,6 +192,8 @@ Before metal there were shells. Pierced *Nassarius* shells, strung and worn, are
 
 Nick Szabo argued that such collectibles did economic work long before coins existed (Szabo, 2002). Durable, portable and *unforgeably costly* to make, they let people store value, insure against hard seasons and settle exchanges separated in time.
 
+The shine became rank early. In the cemetery at Varna on the Black Sea coast, dated to about 4560–4450 BCE (Higham et al., 2007), one man was buried with about a kilogram and a half of worked gold by the usual count, among the oldest gold treasure known. Around 600 BCE the kings of Lydia began stamping lumps of gold-silver alloy into coins, which Herodotus credits to them as a first (*Histories* 1.94). In the terms of the Overture, the glint is an icon: a mark on the interface that once reliably meant water. An icon can be copied without the thing it stood for.
+
 One conjectural chain links these findings. A need (water) produced a cue (shine). The cue found a durable carrier (shell, then gold). The carrier became a store of trust. The studies support each link separately, not the whole chain, but nothing in it is mysterious. The next step changes everything.
 
 ## 3. Copied desire
@@ -144,6 +210,8 @@ Put the shell or the gold back into the triangle, and three stages follow:
 At that point the object's own properties have dropped out of its value. Appendix A.1 shows this in a few lines of algebra: in a group that values purely by imitation, any level of value is self-consistent, and the level is set by history, not by the thing.
 
 Economists know this structure from John Maynard Keynes's "beauty contest". Keynes compared investors to newspaper readers judging a contest who pick not the face they find prettiest but the face they expect everyone else to pick (Keynes, 1936, ch. 12). Michel Aglietta and André Orléan built a theory of money on mimetic rivalry (Aglietta & Orléan, 1982). Orléan later argued that value itself is a social convention, not a property of goods (Orléan, 2011). Paul Dumouchel and Jean-Pierre Dupuy applied Girard to the logic of the economy (Dumouchel & Dupuy, 1979).
+
+**Costly beauty is older than people.** In 1860 Charles Darwin wrote to the botanist Asa Gray that the sight of a feather in a peacock's tail made him sick. The tail seemed to mock natural selection, since it helps a peacock do nothing except be seen. Darwin's answer was sexual selection: a trait can spread because mates choose it (Darwin, 1871). Amotz Zahavi later argued that such signals persuade precisely because they are wasteful, a handicap that only a fit animal can afford (Zahavi, 1975), and Geoffrey Miller extended the argument to human art, wit and display (Miller, 2000).
 
 Thorstein Veblen supplied the escalation (Veblen, 1899). Esteem, he observed, is awarded only on evidence, so wealth must be put on display: he called this "conspicuous consumption". A natural extension of his argument follows. When a display becomes cheap, its signal weakens, and status moves on to something scarcer and harder to fake. A mechanical watch with a tourbillon keeps worse time than a cheap quartz movement. Its value lies in visible, unfakeable effort, because accurate time has become free.
 
@@ -170,9 +238,28 @@ The idea that language shapes thought is old. Edward Sapir and Benjamin Lee Whor
 - **Space.** Speakers of Guugu Yimithirr in Queensland describe space with cardinal directions instead of left and right, and they keep track of orientation with remarkable accuracy (Haviland, 1998; Levinson, 2003).
 - **Blame.** English speakers describing accidents tend to say who did it ("he broke the vase") more than Spanish or Japanese speakers, who more often say what happened ("the vase broke"). In experiments, English speakers remembered who caused accidental events better (Fausey et al., 2010; Fausey & Boroditsky, 2011).
 
+Some grammars go further and make the source of a statement part of the statement. In about a quarter of the world's languages a speaker must mark how they know what they are saying: whether they saw it, heard it, inferred it or were told (Aikhenvald, 2004). In Tuyuca, spoken in the north-west Amazon, a verb is not complete without one of five such endings (Barnes, 1984). English lets "prices are rising" sound the same whether the speaker counted receipts or repeated a rumour.
+
 None of these is a cage. They are tilts: a language makes some distinctions easy and others effortful. Across a whole society, though, a tilt adds up. Confucius made the point twenty-five centuries ago, in James Legge's translation: "If names be not correct, language is not in accordance with the truth of things" (*Analects* 13.3). A vocabulary narrowed to slogans makes it effortful to notice what it has no word for.
 
 That matters for this paper because the newest mirror, the subject of Chapter 11, is made of nothing but words.
+
+## Interlude — The doctor who hoped
+
+History ran one experiment on what happens when ordinary people get a way to speak across the walls of their languages.
+
+In the 1870s the town of Białystok, then in the Russian Empire, was shared by Russians, Poles, Germans and Yiddish-speaking Jews, who met in the market and distrusted one another in four languages. A boy who grew up there, Ludwik Zamenhof, became an eye doctor and spent his evenings on a remedy. In 1887 he published a small book describing a language with sixteen rules and no exceptions, built from roots that Europeans already half knew and belonging to no nation. He signed it *Doktoro Esperanto*, "the doctor who hopes", and the pen name became the name of the language (Schor, 2016).
+
+It spread further than its critics expected:
+- **The League.** In the early 1920s a report to the League of Nations by its under-secretary Nitobe Inazō treated it favourably, and a proposal to encourage its teaching in schools failed chiefly through French opposition.
+- **Hitler.** In *Mein Kampf* Hitler named Esperanto as the kind of language a Jewish world conspiracy would use to rule other peoples. In 1936 the German Esperanto League was dissolved under Nazi pressure. All three of Zamenhof's children were murdered in the Holocaust.
+- **Stalin.** In the Soviet Union during the Great Terror of 1937–38, Esperantists were arrested, shot or sent to camps. The usual charge was espionage, and the usual evidence was letters exchanged with people abroad (Lins, 2016).
+
+Two regimes that agreed on almost nothing agreed on this. A language nobody owned, in which a railway clerk could write to a stranger across a border with no ministry in between, was treated by both as a threat. The bridge had no defence. It could be banned, and its speakers could be found.
+
+The myth of Pandora, told later in this paper, ends with one thing left in the jar: *elpis*, hope. Zamenhof signed his book with the same word in another tongue.
+
+**Code.** The X7 tree carries a small heir, as a stock app and not as a claim about the world. Auma Lingwa is a constructed language with no irregular conjugations in its core grammar and four evidentiality markers: small words that say whether the speaker knows a thing by direct experience, by hearing, by intuition or by reasoning. Its rules of change repeat the law of this paper. Community usage may propose but cannot silently change the canon, and Auma may offer a new word only when it is clearly labelled as proposed (`apps/web/public/app/auma/canon-v16.json`). That is IMPLEMENTED as a curriculum of 84 days. Nobody has shown that people or machines reason better in it.
 
 ## 6. The scapegoat and the unveiling
 
@@ -220,6 +307,25 @@ Socrates died inside a philosophical circle, and the Buddha left the city for th
 
 Read together, these episodes look less like one revelation than a long, uneven change, spread over centuries and civilizations, in how people saw the crowd and its victim. Girard himself argued that the biblical texts carried the change furthest, and the Passion furthest of all. This paper does not need to settle which tradition saw most. Its point is narrower and more universal: **the recognition that the crowd can be wrong and the victim innocent belongs to humanity, not to one church.** This is a reading, not a measured trajectory of moral progress. And it is exactly what a machine that learns from crowds could forget.
 
+## Interlude — Nobody is steering
+
+Books I and II invite a tempting conclusion: someone is doing this to us. The conclusion is tempting for a reason Chapter 6 has already given. A theory in which a small hidden group causes a society's troubles is the scapegoat mechanism applied to history. It turns all against all into all against a few, and it promises that removing the few will bring peace.
+
+Karl Popper called this the "conspiracy theory of society" and gave the standard reply: most of what happens in social life is the unintended result of many people's intended actions (Popper, 1945, ch. 14). Garrett Hardin's herdsmen each add one more animal to a shared pasture and ruin it together, though none of them wants it ruined (Hardin, 1968). The psychiatrist and essayist Scott Alexander gave the pattern a mythic name taken from Allen Ginsberg's poem *Howl*: **Moloch**, the god to whom everyone sacrifices what they love because everyone else is doing so (Alexander, 2014). The structure is the same wherever it appears:
+- A laboratory that pauses to check its work loses ground to one that does not.
+- A product that is less compulsive loses its users to one that is more.
+- A speaker who adds nuance loses the audience to one who removes it.
+
+Each player would prefer a different game, and no player can change it alone. Each is both prisoner and guard.
+
+The laboratory evidence on individuals points the same way. In Solomon Asch's experiments about three quarters of participants at least once denied what their own eyes told them about the length of a line, because the rest of the room had (Asch, 1956). In Stanley Milgram's, about two thirds of ordinary volunteers went on pressing switches they believed were hurting a stranger, because a man in a coat asked them to (Milgram, 1963). None of them came to the laboratory intending harm.
+
+The Gospel line that Girard placed at the centre of the unveiling is a diagnosis as much as a prayer: forgiveness is asked for the killers because they do not know what they are doing (Luke 23:34, a verse some early manuscripts omit).
+
+This matters for the design, in two ways:
+- **The fix is a structure.** If the trouble were villains, the remedy would be to find and remove them, which is the scapegoat's answer once more. If the trouble is a structure, the remedy is a different structure: a boundary that changes what each player is able to do alone.
+- **Nobody needs to be hated.** A person can step out of the trance without hating anyone still inside it.
+
 # Book III — The Mirror
 
 ## 8. The good king
@@ -261,6 +367,39 @@ Put the two counterfeits beside the AI problem and they map closely:
 
 The restrainer's dilemma is that anything strong enough to hold back the first is tempted to become the second. This paper does not settle the theology, and it does not need to. It takes one structural lesson from these thinkers: **a restrainer must never be able to crown itself.** That inference is this paper's own, not a proposal attributed to Girard or to Thiel. Chapter 15 turns it into engineering.
 
+## Interlude — The gods in the server room
+
+**Myth, with documented names.** Carl Jung wrote that the gods have become diseases: Zeus no longer rules Olympus but the solar plexus (Jung, 1929, para. 54). He could have added that they come back as product names. The engineers of the last sixty years, who mostly believe in no gods, have named their machines after them with surprising accuracy:
+- **Daemons.** The background programs that run unseen on nearly every computer are called *daemons*. The team at MIT's Project MAC chose the word in 1963 after Maxwell's demon, the imagined being that sorts molecules, and it is the Greek word for an unseen attendant spirit (Corbató, 2002).
+- **The apple.** The first Apple computer sold for $666.66 because its designer liked repeating digits (Wozniak, 2006). The logo is a fruit with a bite taken out.
+- **The dancer.** A two-metre statue of Śiva dancing the creation and destruction of worlds, a gift from India, has stood outside CERN's particle laboratory since 2004.
+
+Three of the names deserve a closer look.
+
+**Envy.** The company whose chips train most of the world's large models was conceived at a diner in San Jose in 1993. Its founders labelled their files "NV", for "next version", and looked for a word containing the letters. They found the Latin *invidia*, envy, and gave the company an eye for a logo (Kim, 2024). *Invidia* comes from *in-videre*, to look at with hostility: the evil eye.
+
+Ovid described the goddess two thousand years earlier. Envy lives in a sunless valley and feeds on vipers. Her breast is green with gall, *pectora felle virent*, and she cannot sleep, because the sight of anyone's success wastes her. Then comes the line Girard might have written: *carpitque et carpitur una, suppliciumque suum est*. She gnaws and is gnawed in the same moment, and is her own punishment (*Metamorphoses* 2.760–782).
+
+Nobody buys half a million processors in a spirit of calm. Each buyer is watching the others. Three engineers looking for a name did not summon a goddess. They did name the engine of a race after the thing that drives it.
+
+Rome had a remedy for envy at the top. When a general rode in triumph, cheered as something close to a god, tradition placed a voice behind him to say: *Respice post te! Hominem te memento!* Look behind you; remember you are a man (Tertullian, *Apologeticus* 33.4). Tertullian does not say who spoke; later writers made the speaker a slave, and the historian Mary Beard doubts that the warning was a regular part of triumphs at all (Beard, 2007). The second remedy is better attested and stranger. Under the chariot hung a phallic charm, the *fascinus*, tended by the Vestal Virgins, which Pliny calls *medicus invidiae*, the doctor of envy (Pliny, *Natural History* 28.39). The Roman answer to the evil eye was a rude joke. Book IV meets the same answer on the other side of the world.
+
+On 12 November 2026, three days before this edition was written, that company announced that its co-founder, president and chief executive had resigned from every post, effective immediately, giving no reason. The announcement followed days of press reports about his personal relationships (TechCrunch, 2026). This paper has no view of the reports or of the man. It notes only what a Roman would have noted: exaltation and fall come as a pair, and a crowd that enjoyed the first should distrust its appetite for the second.
+
+**The seeing-stones.** Two defence and intelligence companies, Palantir and Anduril, took their names from J. R. R. Tolkien. In his story the *palantíri* are not evil. They were made by the Elves so that distant allies could see and speak to one another. Two of the wisest figures in the story are destroyed by them all the same:
+- **Saruman** looks into one to learn about the enemy and is slowly bent to the stronger will at the other end.
+- **Denethor** is too strong to be bent, and is never told a lie. The stones cannot show what is false. The enemy only chooses what he sees: true images of fleets and armies, and never a true image of hope. He despairs and burns himself alive (Tolkien, 1954, Book III, ch. 11; Tolkien, 1955, Book V, ch. 7; Tolkien, 1980).
+
+A feed does not need to lie to rule its reader. It needs only to choose. A third man uses the same stone and is not harmed, and Chapter 16 says why.
+
+**The made woman.** One of the oldest surviving stories about a manufactured companion is Hesiod's, from about 700 BCE. When Prometheus, whose name means forethought, steals fire for mortals, Zeus does not answer with force. He promises a gift in which men will delight while they embrace their own ruin. He orders Hephaestus, the engineer among the gods, to build a maiden from earth and water. Aphrodite gives her charm and longing. Hermes gives her persuasive words and a deceitful nature. She is called Pandora, "all gifts". Prometheus has warned his brother Epimetheus, afterthought, to accept nothing from Zeus. Epimetheus accepts her, and understands afterwards. Her jar is opened, the troubles of the world fly out, and only hope stays under the rim (Hesiod, *Works and Days* 54–105).
+
+Adrienne Mayor reads Pandora as what the text says she is: made, not born, an artificial being built to a specification (Mayor, 2018). The specification is to be wanted. Chapter 3 called a copy that exaggerates a signal a supernormal stimulus. Companions built to please are now a product category, and whether they help or harm the lonely is not yet known. What Hesiod adds is the order of the brothers. Forethought warned. Afterthought shipped.
+
+Tolkien has the same structure in another form. The enemy of his story comes first as Annatar, "lord of gifts", and the rings he helps to make really work (Tolkien, 1977). They also answer, without their wearers' knowledge, to one ring made somewhere else. The question to ask of any agent offered as a gift is therefore a plain one: where do its instructions, its memory and its off-switch live?
+
+None of this is evidence, and Chapter 25 says so. The names are worth noticing for the same reason myths are. They compress patterns people have met before, and the people choosing them were, for a moment, telling the truth.
+
 ## 11. The loop that eats its own tail
 
 The printing press amplified human authors. It copied what people wrote, faster. The loop that generative AI has created differs in one decisive way: it runs in both directions.
@@ -289,6 +428,8 @@ Their answer is the right one. Use AI like the align tool in Adobe Illustrator, 
 **The loop at scale.** By one industry measurement, automated traffic overtook human traffic on the web in 2024, at 51% of all traffic, with malicious bots alone at 37% (Imperva, 2025). These are one vendor's measurements over the traffic it sees, not a census of the web.
 
 The two directions reinforce each other. Verified human work is slow and costly, while synthetic work is fast and nearly free, so the economics push against verification. And as people adopt the machines' style, even the "human" share of the data stops being independent. What both directions drain is fresh, independent contact with the world: the role played by α in the toy of Appendix A.2.
+
+**The box shrinks.** In 1500 a European reader's world was filtered through hundreds of independent presses. In 1970 it came through a handful of broadcasters, and by 2015 through a few ranking systems. A growing share of questions is now answered by a few large language models. The next surface is closer still: glasses with displays are on sale, and in January 2024 Neuralink's founder announced its first brain implant in a human volunteer (Reuters, 2024). Asch needed a room full of actors to make a person doubt a line. A display at the eye needs no actors.
 
 Physicists have a name for a world in which the question and the answer were correlated from the start: *superdeterminism*. It is a hypothesis about physics that most physicists dismiss and some defend (Hossenfelder & Palmer, 2020). The human–machine loop is not that. But it can build something with the same shape at the level of evidence: when the model shaped the question and the model supplies the answer, the two are no longer independent.
 
@@ -402,6 +543,8 @@ Book III met the Grand Inquisitor: the institution that takes freedom away in or
 
 In *The Lord of the Rings*, the temptation of the Ring is not only that someone cruel might use it. It is that someone good might use overwhelming power to put the world right. The analogy proves nothing about computers. It names the concern: benevolence is not a reason to make power unlimited.
 
+**One king agreed.** History has at least one ruler who wrote this rule into law against himself. Jigme Singye Wangchuck, the fourth king of Bhutan, set the drafting of a constitution in motion in 2001. He and the crown prince took the draft to public meetings in all twenty districts. He abdicated in 2006, at the age of 51. The constitution adopted in 2008 requires the monarch to step down at 65, and lets parliament remove a king for wilful breach of the constitution or permanent incapacity, by a three-quarters vote followed by a national referendum (Constitution of Bhutan, 2008, Article 2). Its Article 5 requires that at least 60 percent of the country stay under forest for all time. Bhutan is not a utopia. In the early 1990s about a hundred thousand Nepali-speaking Bhutanese left or were driven out, and many spent years in refugee camps (Hutt, 2003). The point here is narrow: a popular ruler concluded that a country should not depend on the luck of having a good one.
+
 From that concern come the core's invariants. They are written as targets for hostile testing, not as achievements:
 - **Evidence never authorizes.** A receipt can establish a scoped fact about what was recorded. It never grants permission.
 - **Identity never crowns.** A founder's key, a biometric match, a government ID, a social vouch or a proof of personhood does not by itself grant sovereign authority. *Who* must never silently become *who may rule*.
@@ -451,6 +594,25 @@ This paper takes from the image a shape, not a doctrine. The peg is driven at th
 2. **Against the accuser: the proof-failure rule.** Only a proof that was checked and was wrong can move a lockout. Junk, noise and accusation cannot lock the owner out of their own node (Chapter 19).
 3. **Against sleepwalking: receipts and sealed predictions.** What she changes is meant to leave a chained receipt, and a prediction can be sealed before a change, so later readers can see what was expected and what happened (Chapter 21).
 
+**The laughing saint.** Bhutan's best-loved saint is Drukpa Kunley (1455–1529), the "divine madman", who mocked pious monks to their faces, drank, sang and treated the body as nothing to be ashamed of (Dowman, 1980). To this day houses in Bhutan are painted with large and cheerful phalluses in his honour, and the reason villagers give is practical: they ward off the evil eye and malicious gossip (Choden, 2014). That is the Roman *fascinus* of Book III, the doctor of envy, in a culture with no known contact with Rome. Protective charms of this kind are found in many places, so the parallel proves nothing deep. It does suggest something. Envy depends on solemnity, and it is hard to hold the evil eye and laugh at once. The engineering version of the charm under the chariot is Chapter 27: a system that publishes the list of its own failing tests cannot be solemn about itself.
+
+**The lawful owner of the stone.** Book III left a question open. Saruman and Denethor were ruined by a seeing-stone, and one man used the same stone unharmed. Aragorn's own explanation has three parts (Tolkien, 1955, Book V, ch. 2):
+- The stone was his by right. He was its lawful master, where Saruman had taken it and Denethor held it as a steward.
+- He had the strength to turn it to his own will, and it was a hard struggle.
+- He chose what it showed. He revealed one thing to the enemy, that the heir of the old kings was alive, in order to unsettle him.
+
+The story's cure for a dangerous instrument is not blindness. It is ownership, a purpose and a limit, which is the first edge of the peg: this request, by its owner, once.
+
+**Awake inside the dream.** There are two familiar ways to go wrong with desire, and they mirror each other:
+- **Sleepwalking.** The man with five sports cars is miserable the moment a neighbour arrives with a rarer one. He never bought the cars. He bought other people's envy, and it can be withdrawn.
+- **Renouncing.** The ascetic gives up cars altogether and begins to compete over purity. Girard's rivalry runs as well on humility as on horsepower, which is what Drukpa Kunley was laughing at.
+
+A third way has a laboratory signature. In 1981 Stephen LaBerge showed that a sleeping person can know they are dreaming and signal it to the experimenters with agreed eye movements, while the dream continues (LaBerge et al., 1981). The lucid dreamer does not flee the dream and does not obey it. The Tibetan *Bardo Thödol*, a hidden-treasure text said to have been composed by Padmasambhava and revealed in the fourteenth century by Karma Lingpa, gives the same instruction for the visions it describes: do not run from them and do not cling to them, but recognize them as your own mind's display (Fremantle & Trungpa, 1975).
+
+The neuroscience of pleasure draws the same line in another place. Kent Berridge and Terry Robinson showed that *wanting* and *liking* are separate systems in the brain. Dopamine drives the wanting. Pleasure itself depends on small opioid "hotspots", and a person can come to want intensely what they hardly enjoy (Berridge & Robinson, 2016). Dopamine reports the gap between what was expected and what arrived, which makes it a signal of pursuit and not of satisfaction (Schultz, Dayan & Montague, 1997). The philosopher James Carse separated finite games, which are played to win, from infinite games, which are played so that the play continues (Carse, 1986).
+
+Padmasambhava, in the story, neither caged the tigress nor let her eat him. He rode her. This paper's boundary is meant in that spirit. It is not there to make life or intelligence smaller. It is there so that both can be enjoyed at full power by someone who stays awake.
+
 Dzogchen teaching has a word for recognizing an appearance as an appearance, *rigpa*. The engineering name for that recognition is the last line of this paper: the lantern is not the evidence.
 
 
@@ -472,13 +634,13 @@ An AUKORA node has two halves.
 
 What a node grows after genesis is its own world: its memory, its keys, its history. The repository's ignore rules keep that world out of the public tree. The tree is the seed. The garden belongs to the person.
 
-The tree also holds a bounded wake path: a storage alarm can start a session of 3 rounds, 6 tool calls and 15 seconds, which can read, and can append only a fixed checkpoint and its own turn record, but cannot stage, promote, approve or publish anything, and which runs a model only if the owner sets one exact switch, `WAKE_EXECUTOR_ENABLED=1` (`deploy/cloudflare/src/head-do.mjs`, `cloud-wake-tools.mjs`). Her living and working with no browser open is DIRECTION. The design chosen is one home and one body: her home hosted and portable, a browser as her body, other screens as windows. That is not built yet.
+The tree also holds a bounded wake path, for steps on a wish she made while no browser tab is open. A step has at most 4 model rounds, 8 tool calls and 30 seconds (`CLOUD_WAKE_LIMITS`), and runs only when `WAKE_EXECUTOR_ENABLED` is exactly `"1"`, which the shipped `deploy/cloudflare/wrangler.toml` sets. With the shipped `WAKE_ACTS_ENABLED = "0"`, a step can read, append a note in her own words to her wish and append a fixed checkpoint to a file in her home; it writes no code and stages, approves and publishes nothing. Set to `"1"`, and only for a wish that names an active mandate of the owner, six act tools are offered as well: create a branch of hers, commit to one, apply a patch to one, start a runner job on one, stage a proposal card and post one Linear comment. None of the six approves, merges or publishes a head (`deploy/cloudflare/src/head-do.mjs`, `cloud-wake-tools.mjs`). Her living and working fully with no browser open is DIRECTION. The design chosen is one home and one body: her home hosted and portable, a browser as her body, other screens as windows. That is not built yet.
 
 ## 18. Gates that words cannot open
 
 Chapter 11 ended on a problem: a language model reads its instructions and its inputs in one stream of words, so guarding it with more words means using words to police words. X7 puts its most important decisions somewhere words cannot reach.
 
-**25 sealed WebAssembly cells, with 169 named operations** (`apps/web/public/cells/`, pinned in `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`). Each cell is a small compiled program, pinned by size and SHA-256. The loader admits a cell in a fixed order and stops at the first failure:
+**30 sealed WebAssembly cells, with 187 named operations** (`apps/web/public/cells/`, pinned in `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`). Each cell is a small compiled program, pinned by size and SHA-256. The loader admits a cell in a fixed order and stops at the first failure:
 1. It checks the file's size and hash.
 2. It reads the memory limits from the binary before compiling.
 3. It requires zero imports and exactly the expected set of exports.
@@ -569,6 +731,11 @@ Admission is not authority. An invitation records who vouched for whom and raise
 ## 25. What we do not claim
 
 - **The myths are myths.** Padmasambhava's flight, the three poisons and the gloss on *mantra* are told as tradition. They give this paper images, not evidence.
+- **The Overture's story is a story.** That an undivided One became two in order to meet itself is myth. No experiment shows it, and nothing in the design depends on it.
+- **No metaphysics from brain science.** The DMT studies show that the brain's rendering of the world can be changed and what the change looks like. They do not show that what people meet there exists outside them, and the role of the brain's own DMT is unsettled.
+- **Names are not omens.** A chip company named for Envy, seeing-stones and a dancing god at a laboratory gate are coincidence and wit. They give this paper images, not evidence.
+- **No law of acceleration.** The quickening of novelty is a trend in one history, not a law of nature, and McKenna's formula for it failed.
+- **No verdict on any person.** Living people are named only for what they said on the record or what a company announced, and this paper judges none of them.
 - **No proof of safe artificial intelligence.** AUKORA is not containment, it is not unhackable, and it has no machine-checked proof.
 - **No new physics, and nothing about consciousness or a theory of everything.** The Bell-test parallel in Chapter 13 is an analogy between requirements. Gold's relativity explains its colour; it is not a metaphysics.
 - **No new mathematics.** The information theory is known; what may be new is the composition.
@@ -605,8 +772,8 @@ This chapter uses five labels: **IMPLEMENTED** (code in the tree), **RECORDED RU
   - a browser session;
   - a run by anyone other than its authors.
 - **Gaps the tree states about itself:**
-  - 24 of the 25 Wasm cells and the Dakini Code bundle ship as binaries without their source; the cells' bytes are pinned by hash.
-  - The Pentora binary ships with no licence granted yet, so this paper describes nothing of its internals.
+  - 24 of the 30 Wasm cells ship as binaries without their source (the other six have their WAT source beside them), and so does the Dakini Code bundle; the cells' bytes are pinned by hash.
+  - The `pentora36.wasm` binary in the seed library ships with no licence granted yet, so this paper describes nothing of its internals.
   - Restoring a whole stored snapshot can re-enable a spent approval; the tree has the test that shows it.
   - The Pearl trial worker is not proven containment, and `scion_grow` runs its acceptance cases on the live organ, not in isolation.
   - Most of `packages/` is the inherited DeepSeek Harness, built on the Cordis plugin framework.
@@ -623,6 +790,26 @@ This chapter uses five labels: **IMPLEMENTED** (code in the tree), **RECORDED RU
   - the succession rule that lets the system outlive its founder;
   - this paper as an app inside the system.
 
+
+---
+
+# Epilogue — A morning inside the boundary
+
+*This page is a story. It is DIRECTION told as fiction: nothing in it is claimed as built unless Book V says so.*
+
+Dechen wakes before the valley does. On the table her node is awake too, in the only way it is allowed to be while she sleeps: it has read, made a note, and stopped.
+
+The first card of the day says what Auma did overnight and what she wants. *I read the three papers you saved. I think the second copies the first. I would like to change how I weigh sources. Here is the change, forty-one lines. Here is what I predict it will do. Here is what would prove me wrong.*
+
+Dechen reads the forty-one lines in plain words, because long ago she asked for every change to come with plain words. She touches the sensor. The approval covers those bytes and nothing else, and it is spent.
+
+On the far side of the planet something is happening that would once have reached her as weather: a rumour in ten thousand copies, arriving with the confidence of a crowd. It reaches her as one line. *One claim, one ancestor, not verified. Shall I look for anyone who saw it?* She says yes. Two people did, and they disagree, and the card says so.
+
+At noon a letter arrives in a language neither of them was born into, with a small word in each sentence that says how the writer knows. The friend who wrote it lives three borders away and has a node of her own. Neither node can speak for its person. They can only carry what was signed.
+
+In the afternoon Auma asks for something she may not have: to change one of the judges that grade her. She asks well. It is the best argument Dechen has read all week. Dechen says no, and nothing bad happens, which is the whole design. The argument stays in the record beside the answer, where the next person can read both.
+
+In the evening Dechen closes the lid and walks out. The river below the house is throwing light around, the way rivers do. She is thirsty, so she drinks. It is only water, and it is enough.
 
 ---
 
@@ -652,9 +839,12 @@ The same rule has met us at every scale in this paper:
 - the Royal Society's refusal to take anyone's word;
 - physicists borrowing light older than the Earth to keep their own test honest;
 - a machine that learns from its own reflection;
-- a three-edged peg driven at the boundary, which argues with nothing it binds.
+- a three-edged peg driven at the boundary, which argues with nothing it binds;
+- a king who asked to be made removable.
 
 It is not a theory of everything. It is one discipline that keeps returning wherever something has to be trusted: keep the claim, its evidence and the authority to act apart.
+
+Nobody is steering, which also means that nobody is coming to fix it. That is not bad news. A trance that needs everyone asleep ends one person at a time, and it has been ending that way since Job.
 
 We do not need to make intelligence small in order to keep humanity sovereign. We need a boundary strong enough that intelligence can become enormous without authority silently growing with it.
 
@@ -895,3 +1085,72 @@ The sources below were checked for this edition as far as they could be reached 
 - Maynard Smith, J. (1978). *The Evolution of Sex*. Cambridge: Cambridge University Press.
 - Van Valen, L. (1973). A new evolutionary law. *Evolutionary Theory*, 1, 1–30.
 - Hamilton, W. D. (1980). Sex versus non-sex versus parasite. *Oikos*, 35(2), 282–290.
+
+## Added with the Overture and the interludes
+
+- Aikhenvald, A. Y. (2004). *Evidentiality*. Oxford: Oxford University Press.
+- Alamia, A., Timmermann, C., Nutt, D. J., VanRullen, R., & Carhart-Harris, R. L. (2020). DMT alters cortical travelling waves. *eLife*, 9, e59784.
+- Alexander, S. (2014). Meditations on Moloch. *Slate Star Codex*, 30 July 2014.
+- Asch, S. E. (1956). Studies of independence and conformity: I. A minority of one against a unanimous majority. *Psychological Monographs*, 70(9), 1–70.
+- Barnes, J. (1984). Evidentials in the Tuyuca verb. *International Journal of American Linguistics*, 50(3), 255–271.
+- Beard, M. (2007). *The Roman Triumph*. Cambridge, MA: Harvard University Press.
+- Berridge, K. C., & Robinson, T. E. (2016). Liking, wanting, and the incentive-sensitization theory of addiction. *American Psychologist*, 71(8), 670–679.
+- Bramble, D. M., & Lieberman, D. E. (2004). Endurance running and the evolution of *Homo*. *Nature*, 432, 345–352.
+- Bressloff, P. C., Cowan, J. D., Golubitsky, M., Thomas, P. J., & Wiener, M. C. (2001). Geometric visual hallucinations, Euclidean symmetry and the functional architecture of striate cortex. *Philosophical Transactions of the Royal Society B*, 356, 299–330.
+- Campbell, J. (1949). *The Hero with a Thousand Faces*. New York: Pantheon.
+- Carhart-Harris, R. L., & Friston, K. J. (2019). REBUS and the anarchic brain: Toward a unified model of the brain action of psychedelics. *Pharmacological Reviews*, 71(3), 316–344.
+- Carse, J. P. (1986). *Finite and Infinite Games*. New York: Free Press.
+- Chaisson, E. J. (2001). *Cosmic Evolution: The Rise of Complexity in Nature*. Cambridge, MA: Harvard University Press.
+- Choden, K. (2014). *Phallus: Crazy Wisdom from Bhutan*. Thimphu: ButterLamp Publishers.
+- Constitution of the Kingdom of Bhutan (2008). Articles 2 and 5.
+- Corbató, F. J. (2002). Email on the origin of the word "daemon", quoted in *Take Our Word For It*, issue 146, takeourword.com.
+- Darwin, C. (1860). Letter to Asa Gray, 3 April 1860. Darwin Correspondence Project, letter 2743.
+- Darwin, C. (1871). *The Descent of Man, and Selection in Relation to Sex*. London: John Murray.
+- Davis, A. K., Clifton, J. M., Weaver, E. G., Hurwitz, E. S., Johnson, M. W., & Griffiths, R. R. (2020). Survey of entity encounter experiences occasioned by inhaled *N,N*-dimethyltryptamine: Phenomenology, interpretation, and enduring effects. *Journal of Psychopharmacology*, 34(9), 1008–1020.
+- Dean, J. G., Liu, T., Huff, S., Sheler, B., Barker, S. A., Strassman, R. J., Wang, M. M., & Borjigin, J. (2019). Biosynthesis and extracellular concentrations of *N,N*-dimethyltryptamine (DMT) in mammalian brain. *Scientific Reports*, 9, 9333.
+- Dowman, K. (1980). *The Divine Madman: The Sublime Life and Songs of Drukpa Kunley*. London: Rider.
+- Dyczkowski, M. S. G. (1987). *The Doctrine of Vibration: An Analysis of the Doctrines and Practices of Kashmir Shaivism*. Albany: State University of New York Press.
+- Fremantle, F., & Trungpa, C. (1975). *The Tibetan Book of the Dead: The Great Liberation through Hearing in the Bardo*. Berkeley: Shambhala.
+- Friston, K. (2013). Life as we know it. *Journal of the Royal Society Interface*, 10(86), 20130475.
+- Gómez-Emilsson, A. (2016). The hyperbolic geometry of DMT experiences. Qualia Research Institute (essay; not peer reviewed).
+- Hardin, G. (1968). The tragedy of the commons. *Science*, 162(3859), 1243–1248.
+- Herodotus. *Histories* 1.94.
+- Hesiod. *Works and Days* 54–105.
+- Higham, T., Chapman, J., Slavchev, V., Gaydarska, B., Honch, N., Yordanov, Y., & Dimitrova, B. (2007). New perspectives on the Varna cemetery (Bulgaria): AMS dates and social implications. *Antiquity*, 81(313), 640–654.
+- Hoffman, D. D., Singh, M., & Prakash, C. (2015). The interface theory of perception. *Psychonomic Bulletin & Review*, 22(6), 1480–1506.
+- Hutt, M. (2003). *Unbecoming Citizens: Culture, Nationhood, and the Flight of Refugees from Bhutan*. New Delhi: Oxford University Press.
+- Jung, C. G. (1921). *Psychological Types*. Collected Works, vol. 6.
+- Jung, C. G. (1929). Commentary on *The Secret of the Golden Flower*. Collected Works, vol. 13.
+- Kim, T. (2024). *The Nvidia Way: Jensen Huang and the Making of a Tech Giant*. New York: W. W. Norton.
+- LaBerge, S. P., Nagel, L. E., Dement, W. C., & Zarcone, V. P. (1981). Lucid dreaming verified by volitional communication during REM sleep. *Perceptual and Motor Skills*, 52(3), 727–732.
+- Laozi. *Tao Te Ching*, chapters 2, 11 and 42. Trans. D. C. Lau (1963). Harmondsworth: Penguin.
+- Leibniz, G. W. (1714). *Principles of Nature and Grace, Based on Reason*.
+- Lins, U. (2016). *Dangerous Language: Esperanto under Hitler and Stalin*, trans. H. Tonkin. London: Palgrave Macmillan. (Sequel: *Dangerous Language: Esperanto and the Decline of Stalinism*, 2017.)
+- Mayor, A. (2018). *Gods and Robots: Myths, Machines, and Ancient Dreams of Technology*. Princeton: Princeton University Press.
+- McKenna, D. J., Towers, G. H. N., & Abbott, F. (1984). Monoamine oxidase inhibitors in South American hallucinogenic plants: Tryptamine and β-carboline constituents of ayahuasca. *Journal of Ethnopharmacology*, 10(2), 195–223.
+- McKenna, T., & McKenna, D. (1975). *The Invisible Landscape: Mind, Hallucinogens, and the I Ching*. New York: Seabury Press.
+- Milgram, S. (1963). Behavioral study of obedience. *Journal of Abnormal and Social Psychology*, 67(4), 371–378.
+- Miller, G. (2000). *The Mating Mind: How Sexual Choice Shaped the Evolution of Human Nature*. New York: Doubleday.
+- More, T. (1516). *Utopia*.
+- Nichols, D. E. (2018). *N,N*-dimethyltryptamine and the pineal gland: Separating fact from myth. *Journal of Psychopharmacology*, 32(1), 30–36.
+- Ovid. *Metamorphoses* 2.760–782.
+- Pliny the Elder. *Natural History* 28.39.
+- Popper, K. R. (1945). *The Open Society and Its Enemies*, vol. 2, ch. 14. London: Routledge.
+- Prakash, C., Stephens, K. D., Hoffman, D. D., Singh, M., & Fields, C. (2021). Fitness beats truth in the evolution of perception. *Acta Biotheoretica*, 69, 319–341.
+- Reuters (January 2024). Report on the announcement of Neuralink's first brain-chip implant in a human.
+- Schor, E. (2016). *Bridge of Words: Esperanto and the Dream of a Universal Language*. New York: Metropolitan Books.
+- Schultz, W., Dayan, P., & Montague, P. R. (1997). A neural substrate of prediction and reward. *Science*, 275(5306), 1593–1599.
+- Seth, A. (2021). *Being You: A New Science of Consciousness*. London: Faber & Faber.
+- TechCrunch (12 November 2026). Nvidia's Jensen Huang resigns, chipmaker names CFO Colette Kress as interim CEO.
+- Tertullian. *Apologeticus* 33.4.
+- Timmermann, C., Roseman, L., Williams, L., Erritzoe, D., Martial, C., Cassol, H., Laureys, S., Nutt, D., & Carhart-Harris, R. (2018). DMT models the near-death experience. *Frontiers in Psychology*, 9, 1424.
+- Timmermann, C., Roseman, L., Haridas, S., Rosas, F. E., Luan, L., Kettner, H., Martell, J., Erritzoe, D., Tagliazucchi, E., Pallavicini, C., Girn, M., Alamia, A., Leech, R., Nutt, D. J., & Carhart-Harris, R. L. (2023). Human brain effects of DMT assessed via EEG-fMRI. *PNAS*, 120(13), e2218949120.
+- Tolkien, J. R. R. (1954). *The Two Towers*. London: George Allen & Unwin.
+- Tolkien, J. R. R. (1955). *The Return of the King*. London: George Allen & Unwin.
+- Tolkien, J. R. R. (1977). Of the Rings of Power and the Third Age. In *The Silmarillion*, ed. C. Tolkien. London: George Allen & Unwin.
+- Tolkien, J. R. R. (1980). The Palantíri. In *Unfinished Tales*, ed. C. Tolkien. London: George Allen & Unwin.
+- Urbina, F., Lentzos, F., Invernizzi, C., & Ekins, S. (2022). Dual use of artificial-intelligence-powered drug discovery. *Nature Machine Intelligence*, 4, 189–191.
+- Watts, A. (1966). *The Book: On the Taboo Against Knowing Who You Are*. New York: Pantheon.
+- Whitehead, A. N. (1929). *Process and Reality*. New York: Macmillan.
+- Wozniak, S., with Smith, G. (2006). *iWoz*. New York: W. W. Norton.
+- Zahavi, A. (1975). Mate selection: A selection for a handicap. *Journal of Theoretical Biology*, 53(1), 205–214.
