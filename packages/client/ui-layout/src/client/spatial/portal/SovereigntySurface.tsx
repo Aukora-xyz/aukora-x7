@@ -28,7 +28,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { readAumlokStatus, type AumlokHostRead } from '../aumlok/aumlok-ceremony.ts'
 import { approveClass3, canonicalJson } from '../aumlok/class3-approval.ts'
 import {
-  canonicalManifestIdMatches, classifyHeadTransition, describeGovernanceChange, headPromotionBinding, headRecordProblems,
+  canonicalManifestIdMatches, classifyHeadTransition, declinedButPublishedWords, declineStagedHead, describeGovernanceChange,
+  headPromotionBinding, headRecordProblems, heldOrdinaryNothingNeeded,
   landApprovedPromotion, manifestProblem,
   moduleBytes, parseStagedPromotion, promoteStagedOnHead, promotionReadiness, readHeadLease, readHeadStaged, sameStagedBody,
   STAGED_PROMOTION_CHANGE, STAGED_PROMOTION_PATH, stagedPromotionTooLarge, stageOnHead, writerLeaseWords,
@@ -323,6 +324,9 @@ export type PromotionState =
     readonly kind: 'head-blocked'
     readonly record: HeadStagedRecord
     readonly why: string
+    /** An ORDINARY change HEAD holds (T1, no governance, no organ set, no removal): nothing is wrong, Auma
+     * publishes it herself without his fingerprint; the card says so instead of "cannot land". */
+    readonly ordinary?: true
     readonly otherInHome?: { readonly ballId: string; readonly epoch: number }
   }
 
@@ -444,6 +448,13 @@ async function classifiedStateOf(staged: StagedPromotion | null, context: Promot
     reasons: allReasons, lease: context.lease, checkedAt: context.now, leaseUnread: context.leaseUnread ?? null }
 }
 
+/** What the held card says of an ordinary change: two plain sentences. */
+export const ORDINARY_HELD_WORDS = 'This is an ordinary change: Auma can publish it herself; it needs no fingerprint from you. Decline takes it back.'
+
+/** The card state of a held ordinary change that needs nothing from him (set only by `heldOrdinaryNothingNeeded`): never
+ * counted or announced as waiting for his fingerprint. */
+export const isHeldOrdinary = (state: PromotionState): boolean => state.kind === 'head-blocked' && state.ordinary === true
+
 /**
  * THE CARD FOR THE PEARL HEAD HOLDS ITSELF (Wave 3). The staged bytes HEAD serves are classified and checked exactly like
  * her staged file (`promotionStateOf`); on top of that, HEAD's record must agree with what this page computed from those
@@ -462,13 +473,18 @@ export async function headPromotionStateOf(record: HeadStagedRecord, context: Pr
   switch (state.kind) {
     case 'staged': return { ...state, reasons: [...state.reasons, ...headRecordProblems(record, state.binding)], source: 'head', onHead: record }
     // HEAD's own record may say otherwise (its governance class): then the two readings disagree, and that is what is said.
-    // A Pearl that only adds ordinary organs is offered on its own card (OrganSetCell), with every organ listed.
-    case 'not-class-3': return record.organSet != null && record.governanceClass === 1 ? state : { kind: 'head-blocked', record, why: record.governanceClass === 3
-      ? 'HEAD\'s record calls this a governance change (class 3), but this page\'s own reading of the staged bytes finds none, so the two '
-        + `disagree and no passkey is asked for.${held} Refresh reads both again.`
-      : 'A passkey approves only a governance change (Class 3), and this page\'s reading of the staged bytes finds none: no organ it '
-        + 'changes is one of the named governance organs, and none declares `governance` (on the entry or in its config).'
-        + `${held} Nothing is offered here; Auma must stage it again.` }
+    // A Pearl that only adds ordinary organs, or only removes one, is offered on its own card (OrganSetCell).
+    case 'not-class-3': {
+      if ((record.organSet != null || record.organRemove != null) && record.governanceClass === 1) return state
+      // An ordinary change (T1, class 1): nothing stands in its way and nothing is asked of him.
+      if (heldOrdinaryNothingNeeded(record)) return { kind: 'head-blocked', record, ordinary: true, why: ORDINARY_HELD_WORDS }
+      return { kind: 'head-blocked', record, why: record.governanceClass === 3
+        ? 'HEAD\'s record calls this a governance change (class 3), but this page\'s own reading of the staged bytes finds none, so the two '
+          + `disagree and no passkey is asked for.${held} Refresh reads both again.`
+        : 'A passkey approves only a governance change (Class 3), and this page\'s reading of the staged bytes finds none: no organ it '
+          + 'changes is one of the named governance organs, and none declares `governance` (on the entry or in its config).'
+          + `${held} Nothing is offered here; Auma must stage it again.` }
+    }
     case 'several': return { kind: 'head-blocked', record, why: `HEAD takes one governance change at a time; this one changes ${
       state.entryIds.join(', ')}.${held} Nothing is offered here; Auma must stage them one at a time.` }
     // The Pearl was read from HEAD's record, not her file: said so where it is named.
@@ -483,6 +499,8 @@ export function headRecordRows(record: HeadStagedRecord): { readonly rows: [stri
     rows: [
       ['held on HEAD', `epoch ${String(record.epoch)} · changes ${record.changedEntries.join(', ') || 'no entry it names'}`],
       ['why HEAD holds it', record.t2Reasons.join(', ') || 'no reason named'],
+      // HEAD's own last publish outcome refused THIS candidate: its closed code, as HEAD gave it.
+      ...(record.lastRefusal === undefined ? [] : [['her last publish of it', `refused by HEAD (${record.lastRefusal})`] as [string, string]]),
       ['candidate digest', record.candidateDigest === null ? 'not named by HEAD'
         : `${record.candidateDigest} (${record.digestMatches ? 'the hash of the fields above, checked here' : 'NOT the hash of the fields above'})`],
     ],
@@ -566,7 +584,9 @@ function recheckLine(again: PromotionState): PromotionLine {
 /** The staged card's summary line for every state but a staged Pearl that was checked. */
 function promotionSummaryOther(promotion: PromotionState, stagedUnchecked: boolean): string {
   switch (promotion.kind) {
-    case 'head-blocked': return `epoch ${String(promotion.record.epoch)} · held on HEAD: no passkey can approve it as staged`
+    case 'head-blocked': return promotion.ordinary === true
+      ? `epoch ${String(promotion.record.epoch)} · an ordinary change: Auma can publish it herself`
+      : `epoch ${String(promotion.record.epoch)} · held on HEAD: no passkey can approve it as staged`
     case 'head-unread': return 'not checked: what HEAD holds for you was not read'
     case 'malformed': return 'a staged file this page cannot read as a promotion'
     case 'several': return 'it changes several governance organs at once'
@@ -679,6 +699,9 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
   // with the exact card state it was merged into. It hides only that state, and only while no later read failed.
   const [publishedFor, setPublishedFor] = useState<PublishedFor | null>(null)
   const [promotionOutcome, setPromotionOutcome] = useState<PromotionLine | null>(null)
+  // DECLINE: the Pearls the owner declined in this page session (review B-S1), and the one her home still holds.
+  const declinedRef = useRef(new Set<string>())
+  const [declinedAtHome, setDeclinedAtHome] = useState<string | null>(null)
   // The staged Pearl the outcome line is about: it never shows under a different one.
   const [outcomeFor, setOutcomeFor] = useState<string | null>(null)
   const [promoting, setPromoting] = useState(false)
@@ -710,7 +733,8 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
     quietRead.current = false
     const changesAtRead = changesSeen.current
     void (async () => {
-      const settle = (next: PromotionState, published: { readonly ballId: string; readonly epoch: number } | null = null): void => {
+      const settle = (next: PromotionState, published: { readonly ballId: string; readonly epoch: number } | null = null,
+        declinedHere: string | null = null): void => {
         if (controller.signal.aborted) return
         if (promotingRef.current) { pendingRead.current = true; return }
         // A BACKGROUND read that failed keeps the Pearl on screen, and says so on the card (Refresh still shows the failure).
@@ -722,6 +746,7 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
         setPromotionStale(null)
         changesChecked.current = changesAtRead
         setPublishedFor(published === null ? null : { state: next, ...published })
+        setDeclinedAtHome(declinedHere)
         setPromotion(next)
       }
       // One lease read serves both sources.
@@ -745,14 +770,20 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
       // HER FILE FIRST, THEN HEAD'S ANSWER: HEAD's answer is asked for only once her file has been
       // read, so the published list in it is never older than the Pearl it is compared with.
       const file = await readHomePromotion(reader, sessionId, controller.signal)
-      const [home, held] = await Promise.all([fromHome(file), fromHead()])
+      const [fromFile, held] = await Promise.all([fromHome(file), fromHead()])
       if (held.kind === 'staged' && head.kind === 'idle') { settle({ kind: 'reading' }); return }
+      // DECLINED HOLDS AGAINST HER HOME COPY (review B-S1): a Pearl the owner declined in this page session is not offered
+      // again from her own file while HEAD holds none of it (her file is hers; the page never touches it). One line says so.
+      const homeId = fromFile.staged?.ball.ballId ?? null
+      const declinedHere = homeId !== null && declinedRef.current.has(homeId)
+        && !(held.kind === 'staged' && held.record.ballId === homeId) ? homeId : null
+      const home: HomeCard = declinedHere === null ? fromFile : { state: { kind: 'absent' }, staged: null }
       // THE ONE PEARL THIS CARD SHOWS, merged by the rule the chat card merges by (promotion-sources.ts).
       const merged = await mergePromotionSources(home, held, async record => headPromotionStateOf(record, await context()))
       // the head the classification's lease read named, this round (null when it was not read).
       const read = contextIfRead()
       const leaseHead = read === null ? null : (await read).freshHead ?? null
-      settle(merged, await publishedPearlOf(merged, home.staged, held, true, leaseHead))
+      settle(merged, await publishedPearlOf(merged, home.staged, held, true, leaseHead), declinedHere)
     })().catch(() => {
       if (controller.signal.aborted) return
       if (promotingRef.current) { pendingRead.current = true; return }
@@ -798,7 +829,7 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
   })
   useEffect(() => { if (!active) reread.cancel() }, [active, reread])
   const promote = async (): Promise<void> => {
-    if (promotion.kind !== 'staged' || promotion.reasons.length > 0 || promoting) return
+    if (promotion.kind !== 'staged' || promotion.reasons.length > 0 || promoting || decliningRef.current) return
     // SAFARI: the passkey sheet opens only inside the tap. A card checked this recently, with no change since and no failed
     // read since, goes straight to the passkey challenge (HEAD checks the candidate, its parent and the lease again when the
     // approved request arrives); any other card is checked again first, as before.
@@ -962,8 +993,42 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
       setStaging(false)
     }
   }
+  // DECLINE: the owner takes back the Pearl HEAD holds on this card, by its exact ballId; no passkey (it only
+  // removes the request). Taken back, the card reads again and goes; refused, HEAD's code shows in the card's outcome line.
+  const [declining, setDeclining] = useState(false)
+  // A ref, not only state (review B-N5): a double tap sends one withdraw, and an approval cannot start meanwhile.
+  const decliningRef = useRef(false)
+  const decline = async (ballId: string): Promise<void> => {
+    if (decliningRef.current || promotingRef.current || staging) return
+    decliningRef.current = true
+    setDeclining(true)
+    reread.cancel()
+    try {
+      const outcome = await declineStagedHead(ballId)
+      if (outcome.kind === 'declined') {
+        declinedRef.current.add(ballId)
+        setPromotionOutcome(null)
+        setStageLine(null)
+      } else if (outcome.kind === 'published') {
+        // Already live (review B-M1): said on the card, which does not vanish silently.
+        setOutcomeFor(ballId)
+        setPromotionOutcome({ ok: true, text: declinedButPublishedWords(ballId), keep: true })
+      } else {
+        setOutcomeFor(ballId)
+        setPromotionOutcome({ ok: false, text: outcome.kind === 'refused' ? `HEAD did not take it back (${outcome.code}); nothing changed.`
+          : `${outcome.detail}: whether HEAD still holds it is unclear. Refresh reads HEAD again.` })
+      }
+      quietRead.current = true
+      setCardTick(n => n + 1)
+    } finally {
+      decliningRef.current = false
+      setDeclining(false)
+    }
+  }
   // Whether the repo and outward cards show (they decide themselves), so the waiting section shows only when something does.
   const [repoShown, setRepoShown] = useState(false)
+  // Whether the repo card's proposal still waits (a merged one stays on screen with its outcome, waiting for nothing).
+  const [repoWaiting, setRepoWaiting] = useState(false)
   const [outwardShown, setOutwardShown] = useState(false)
   const [organSetShown, setOrganSetShown] = useState(false)
   const [snapshot, setSnapshot] = useState<SnapshotState>({ kind: 'idle' })
@@ -1122,6 +1187,9 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
   // HEAD's own record of the Pearl on the card, when HEAD holds one (Wave 3).
   const heldRecord = promotion.kind === 'staged' ? promotion.onHead ?? null : promotion.kind === 'head-blocked' ? promotion.record : null
   const heldRows = heldRecord === null ? null : headRecordRows(heldRecord)
+  // DECLINE is offered only for a Pearl HEAD itself holds (a staged card awaiting him, or one HEAD holds that no
+  // passkey can approve), by the exact ballId of HEAD's record.
+  const declineBallId = heldRecord !== null && /^[0-9a-f]{64}$/u.test(heldRecord.ballId) ? heldRecord.ballId : null
   const fromHeadRecord = promotion.kind === 'head-blocked' || promotion.kind === 'head-unread'
     || ((promotion.kind === 'staged' || promotion.kind === 'unreadable') && promotion.source === 'head')
   // The staging line, only beside the Pearl it is about.
@@ -1138,10 +1206,11 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
   const promotionBadge: { text: string; tone: 'gold' | 'mint' | 'muted' } = promotion.kind === 'staged'
     ? (promotion.reasons.length > 0 ? { text: notChecked ? 'NOT CHECKED' : 'CANNOT LAND', tone: 'muted' }
       : noPasskey ? { text: 'NO PASSKEY', tone: 'muted' } : { text: 'CLASS 3', tone: 'gold' })
-    : promotion.kind === 'malformed' || promotion.kind === 'several' || promotion.kind === 'head-blocked' ? { text: 'CANNOT LAND', tone: 'muted' }
-      : stagedUnchecked || promotion.kind === 'head-unread' ? { text: 'NOT CHECKED', tone: 'gold' }
-        : promotion.kind === 'on-head' ? { text: 'ON HEAD', tone: 'mint' }
-          : { text: promotion.kind === 'reading' ? 'READING' : 'NOTHING TO APPROVE', tone: 'muted' }
+    : promotion.kind === 'head-blocked' && promotion.ordinary === true ? { text: 'NOTHING NEEDED FROM YOU', tone: 'mint' }
+      : promotion.kind === 'malformed' || promotion.kind === 'several' || promotion.kind === 'head-blocked' ? { text: 'CANNOT LAND', tone: 'muted' }
+        : stagedUnchecked || promotion.kind === 'head-unread' ? { text: 'NOT CHECKED', tone: 'gold' }
+          : promotion.kind === 'on-head' ? { text: 'ON HEAD', tone: 'mint' }
+            : { text: promotion.kind === 'reading' ? 'READING' : 'NOTHING TO APPROVE', tone: 'muted' }
   // An unchecked Pearl is named by where it was read: her staged file, unless only HEAD's record was.
   const fromStagedFile = !fromHeadRecord
   const promotionLead = promotion.kind === 'malformed'
@@ -1177,7 +1246,9 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
     ...(runtime.kind === 'ok' && runtime.value.releaseId !== '—'
       ? [['latest captured release', runtime.value.latestCaptured], ['release candidates', String(runtime.value.candidates)]] as [string, string][] : []),
   ]
-  const waitingCount = (showPromotion ? 1 : 0) + (repoShown ? 1 : 0) + (outwardShown ? 1 : 0) + (organSetShown ? 1 : 0)
+  // A held ordinary change is shown (with Decline) but never counted or announced as waiting for him.
+  const promotionWaits = showPromotion && !isHeldOrdinary(promotion)
+  const waitingCount = (promotionWaits ? 1 : 0) + (repoWaiting ? 1 : 0) + (outwardShown ? 1 : 0) + (organSetShown ? 1 : 0)
   const approvalStatusBadge = continuity ? null
     : waitingCount > 0
       ? { text: `${String(waitingCount)} WAITING FOR TOUCH ID`, tone: 'gold' as const,
@@ -1203,7 +1274,8 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
       {/* WAITING FOR YOUR TOUCH ID (Lane B2): every card that waits for the passkey, first and open, the button at its top. */}
       {continuity ? null : (
         <section data-sovereignty-waiting="" hidden={!(showPromotion || repoShown || outwardShown || organSetShown)}>
-          <SectionLabel>Waiting for your Touch ID</SectionLabel>
+          <SectionLabel>{waitingCount > 0 ? 'Waiting for your Touch ID'
+            : showPromotion ? 'Staged by Auma: nothing is needed from you' : 'Nothing is waiting for your Touch ID'}</SectionLabel>
           <PortalGrid open>
             {showPromotion ? (
               <PortalCell data-sovereignty-portal="promotion" data-sovereignty-promotion-source={fromHeadRecord ? 'head' : 'home'}>
@@ -1211,7 +1283,7 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
                   defaultExpanded
                   tone="gold"
                   icon="approvals"
-                  title="Staged governance Pearl"
+                  title={promotion.kind === 'head-blocked' && promotion.ordinary === true ? 'Staged ordinary change' : 'Staged governance Pearl'}
                   summary={promotionSummary}
                   badge={<StatusPill tone={promotionBadge.tone}>{promotionBadge.text}</StatusPill>}
                 >
@@ -1219,7 +1291,7 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
                     <>
                       {promotion.reasons.length === 0 ? (
                         <>
-                          <button type="button" className="x5-field" data-sovereignty-promote="" disabled={promoting || !owner.bound}
+                          <button type="button" className="x5-field" data-sovereignty-promote="" disabled={promoting || declining || !owner.bound}
                             onClick={() => { void promote() }}>
                             {`Approve Staged Governance Pearl (${promotion.binding.organId} ${promotion.binding.candidateSha256.slice(0, 8)}…) with Touch ID`}
                           </button>
@@ -1282,6 +1354,17 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
                       {promotionLead === null ? null : <Lead>{promotionLead}</Lead>}
                     </>
                   )}
+                  {declineBallId === null ? null : (
+                    <>
+                      <button type="button" className="x5-field" data-sovereignty-decline={declineBallId}
+                        disabled={declining || promoting || staging} onClick={() => { void decline(declineBallId) }}>
+                        Decline
+                      </button>
+                      <Lead>
+                        Decline takes this Pearl back from HEAD. It asks for no passkey and publishes nothing; Auma can stage again.
+                      </Lead>
+                    </>
+                  )}
                   {promotion.kind === 'staged' && promotion.edgeEmpty === true ? (
                     <>
                       <button type="button" className="x5-field" data-sovereignty-stage-edge="" disabled={staging || promoting}
@@ -1310,12 +1393,17 @@ export function SovereigntySurface({ activeSurface, useSessions, reader, schedul
                 </PortalButton>
               </PortalCell>
             ) : null}
-            <RepoProposalCell active={active} round={round} ownerBound={owner.bound} onShown={setRepoShown} />
+            <RepoProposalCell active={active} round={round} ownerBound={owner.bound} onShown={setRepoShown} onWaiting={setRepoWaiting} />
             <OrganSetCell active={active} round={round} ownerBound={owner.bound} onShown={setOrganSetShown} />
             <OutwardApprovalCell active={active} round={round} reader={reader} sessionId={sessionId} ownerBound={owner.bound}
               onShown={setOutwardShown} />
           </PortalGrid>
         </section>
+      )}
+      {continuity || declinedAtHome === null || showPromotion ? null : (
+        <Lead><span role="status" data-sovereignty-declined={declinedAtHome}>
+          {`Declined: Pearl ${declinedAtHome.slice(0, 12)} is no longer held for you. Auma's copy stays in her home; she can stage it again.`}
+        </span></Lead>
       )}
       {continuity || alreadyPublished === null ? null : (
         <Lead><span role="status" data-sovereignty-published-pearl={alreadyPublished.ballId}>

@@ -28,8 +28,8 @@ function loadSeedReceiptsOrgan(): {
 describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () => {
   const laterBall = {
     epoch: 167,
-    ballId: '0d8a2461e922bbe3d88f2ae01d451c7cb224d9ab6daccb6f6c13ff70dcd7af0b',
-    parentBallId: '07a4e16fb3ffe890a07bbf1e04b9c0b2c51afa91fae32ed505a5ea655d21e51',
+    ballId: 'ead2e32f5fbe169cdc751ccd575225c4735332fd5b0e76acdf8445bd313d91be',
+    parentBallId: '0d8a2461e922bbe3d88f2ae01d451c7cb224d9ab6daccb6f6c13ff70dcd7af0',
     entries: {
       'seed-pearl': { specifier: 'ball:3f990d30355989282f489f25c200b75caba33864ffdbf5e16fdc45ac1323788c' },
       'seed-recall': { specifier: 'ball:7af77b062d261473a60a216aef97cbc6d19c8a22b237ba24d33d45f2d9e43758' },
@@ -129,9 +129,9 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
 
   it('deduplicates across both ball.promote and head.promote and derives T1/T2 approval honestly', () => {
     const existing = [
-      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 1, kind: 'ball.promote', data: { epoch: 63, ballId: '1669de78fc1606a9' } }),
-      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 2, kind: 'head.promote', data: { epoch: 64, ballId: '5d881283d9b64abf507be98cb94bad85241ca35352bb45b240a55fe7cb799848' } }),
-      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 3, kind: 'head.promote', data: { epoch: 65, ballId: 'ead2e32f5fbe169cdc751ccd575225c4735332fd5b0e76acdf8445bd313d91be' } }),
+      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 1, kind: 'ball.promote', data: { epoch: 63, ballId: 'f27b0a827ed961dd' } }),
+      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 2, kind: 'head.promote', data: { epoch: 64, ballId: '05e739c37236c35a16b3baa92a9a5f526db26da56761d254b73675138490bb96' } }),
+      JSON.stringify({ schema: 'aukora.receipt.v3', seq: 3, kind: 'head.promote', data: { epoch: 65, ballId: '98b06a0eb5458ddcdf14577168edadf2b03a861a698fb44c07c72b7bce7d6dcd' } }),
     ].join('\n') + '\n'
 
     // Without matching lastPublishOutcome for epoch 167, post-65 headAdopt does not invent a receipt.
@@ -185,7 +185,7 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
         return await organ.run({ action: 'append', kind, data }, { fs: vfs }) as { ok?: boolean }
       },
     })
-    const ballId = '688d831c4e8e159b000000000000000000000000000000000000000000000167'
+    const ballId = '7c4938450b882917000000000000000000000000000000000000000000000067'
     const [first, second, third] = await Promise.all([
       appendOnce({
         kind: 'ball.promote',
@@ -219,7 +219,7 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
     const ballId = 'b'.repeat(64)
     const data = { ballId, parentBallId: 'a'.repeat(64), epoch: 151, tier: 'T1' }
     for (const invalid of [{ ballId: 'short' }, { ballId: 'z'.repeat(64) }, { parentBallId: null },
-      { parentBallId: '1669de78fc1606a9' }, { parentBallId: 'g'.repeat(64) }, { tier: 'T3' }, { tier: undefined }]) {
+      { parentBallId: 'f27b0a827ed961dd' }, { parentBallId: 'g'.repeat(64) }, { tier: 'T3' }, { tier: undefined }]) {
       expect(await append({ kind: 'head.promote', epoch: 151, ballId, data: { ...data, ...invalid } }))
         .toEqual({ ok: false, deduplicated: false })
     }
@@ -234,13 +234,13 @@ describe('ensureRetroPromotionReceipts strict cold-boot idempotency (C1)', () =>
   it('preserves seq 1 through 150 including the historical short-id epoch-63 leaf at seq 134', async () => {
     const original = Array.from({ length: 150 }, (_, index) => JSON.stringify({ schema: 'aukora.receipt.v3', seq: index + 1,
       kind: index === 133 ? 'head.promote' : 'synthetic',
-      data: index === 133 ? { epoch: 63, ballId: '1669de78fc1606a9' } : {} })).join('\n') + '\n'
+      data: index === 133 ? { epoch: 63, ballId: 'f27b0a827ed961dd' } : {} })).join('\n') + '\n'
     let text = original
     const append = createSerializedPromotionReceiptAppender({ readReceiptsJsonl: () => text,
       appendReceipt: async (kind, data) => { text += JSON.stringify({ kind, data }) + '\n'; return { ok: true } } })
     // The planner invents no receipt for an epoch this node never promoted itself.
     expect(planIdempotentRetroReceipts({ currentBall: laterBall, existingReceiptsText: '', persistenceReady: true, chainVerified: true })).toEqual([])
-    const recovered63 = { ballId: 'a2939919affdea31be35ca8e84812f5fe7e57d71309738ee4d9a1b506c9cea36', data: { entryId: 'seed-receipts', ballId: 'a2939919affdea31be35ca8e84812f5fe7e57d71309738ee4d9a1b506c9cea36', parentBallId: 'a'.repeat(64), epoch: 63, tier: 'T1' } }
+    const recovered63 = { ballId: '456250574f46538598d5eac5bd4c455c4857a6a397edd110e1742ade2e36aa77', data: { entryId: 'seed-receipts', ballId: '456250574f46538598d5eac5bd4c455c4857a6a397edd110e1742ade2e36aa77', parentBallId: 'a'.repeat(64), epoch: 63, tier: 'T1' } }
     for (let boot = 0; boot < 3; boot++) {
       expect(await append({ kind: 'head.promote', epoch: 63, ballId: recovered63.ballId, data: recovered63.data }))
         .toEqual({ ok: true, deduplicated: true })

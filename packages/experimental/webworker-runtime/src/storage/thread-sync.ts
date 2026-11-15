@@ -1,5 +1,5 @@
 /**
- * Thread sync, job 1: readers that pull her threads.
+ * Thread sync, the reader half: readers that pull her threads.
  *
  * Runs once per page load, after idb-persist has attached her store and before her tree boots (worker-host.ts), and
  * ONLY when the page's boot document carried the switch as exactly `on` (`bootThreadSyncIfOn`, the thread sync switch): with the
@@ -23,7 +23,7 @@
  *   not a GET or HEAD, and the GETs that change her node (`READER_REFUSED_GETS`), with the reader sentence
  *   (`readerRefusal`, the `the thread sync` block in worker-host.ts). The page and the edge refuse the same.
  * - The page hears the state on BroadcastChannel `aukora-x6-thread-sync`, each message carrying its page's id.
- * Job 2 (her writer copies each line as it is written, mode `on`) is thread-writer.ts.
+ * The writer half (her writer copies each line as it is written, mode `on`) is thread-writer.ts.
  * @module thread-sync
  */
 import { idleFetch } from '../idle-fetch.ts'
@@ -64,7 +64,7 @@ export const THREAD_SYNC_LIMITS = Object.freeze({
 })
 export type ThreadSyncLimits = { -readonly [K in keyof typeof THREAD_SYNC_LIMITS]: number }
 
-/** The reader sentences (BRIEF-SYNC shared facts), exactly. */
+/** The reader sentences (shared facts), exactly. */
 export const READER_OLDER_FOOTER = 'Reading an older copy of her from her cloud. She answers in the browser that holds her home. Nothing typed here is saved.'
 export const NONE_ON_FOOTER = 'This browser does not hold her home. Its new lines stay here.'
 
@@ -186,7 +186,15 @@ export function parseIndexPage(reply: Pick<ThreadNetReply, 'status' | 'bytes'>):
     if (!isRecord(row) || typeof row.id !== 'string' || !HEX64.test(row.id) || typeof row.path !== 'string') continue
     const bytes = count(row.bytes)
     if (bytes === null) continue
-    threads.push({ id: row.id, path: row.path, bytes, activeAt: timeOf(row.activeAt), updatedAt: timeOf(row.updatedAt) })
+    threads.push({
+      id: row.id,
+      path: row.path,
+      bytes,
+      activeAt: timeOf(row.activeAt),
+      updatedAt: timeOf(row.updatedAt),
+      title: plainOf(row.title, TITLE_CHARS),
+      preview: plainOf(row.preview, PREVIEW_CHARS),
+    })
   }
   const next = typeof body.next === 'string' && HEX64.test(body.next) ? body.next : null
   return { mode, threads, next, holder: holderOf(body.lease) }
@@ -490,6 +498,179 @@ export function pullIsFresh(report: ThreadPullReport): boolean {
   return report.wanted === 0 && report.long === 0 && report.failed.length === 0 && report.leftForLater === 0 && report.overRoom === 0
 }
 
+/** CARD 3a: how long a title and a preview may be, after control characters are dropped (the edge cuts the same way). */
+const TITLE_CHARS = 200
+const PREVIEW_CHARS = 160
+
+// `plainOf` is a function declaration so `parseIndexPage` above can use it wherever it is written in this module.
+/** A string as the lane may show it: printable characters only, trimmed, cut to `chars`; null when nothing is left. */
+function plainOf(value: unknown, chars: number): string | null {
+  if (typeof value !== 'string') return null
+  let plain = ''
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code >= 0x20 && code !== 0x7f) plain += value[index] ?? ''
+  }
+  plain = plain.trim()
+  if (plain === '') return null
+  return plain.length > chars ? `${plain.slice(0, chars - 1)}…` : plain
+}
+
+/** CARD 3a: one conversation as her cloud's index names it, for the page's list (never the page's own state). */
+export interface ThreadCloudRow {
+  readonly id: string
+  readonly path: string
+  readonly bytes: number
+  readonly activeAt: number | null
+  /** The index's own title (her writer sends one with `x-thread-meta`); null before it has. */
+  readonly title: string | null
+  /** Bytes of the journal this browser holds for it; null when it holds none. */
+  readonly local: number | null
+  /** Over the size a reader pulls, so it is listed here and not read (card 3b opens it). */
+  readonly long: boolean
+}
+
+/** The rows message: the channel the state uses, a kind of its own, so `parseThreadSyncState` never sees it. */
+export interface ThreadCloudRowsMessage {
+  readonly v: 1
+  readonly kind: 'rows'
+  readonly at: number
+  readonly mode: ThreadSyncMode
+  readonly rows: readonly ThreadCloudRow[]
+  readonly worker?: string
+}
+
+/** What this browser holds for one path, in bytes: null when it holds no journal there. Never a write, never a guess. */
+function localBytes(store: ThreadStore, path: string): number | null {
+  try {
+    if (!store.existsSync(path)) return null
+    const stat = store.statSync(path) as { isFile(): boolean; size?: number | bigint }
+    if (!stat.isFile() || stat.size === undefined) return null
+    return Number(stat.size)
+  } catch {
+    return null
+  }
+}
+
+/** The SESSION id in one `/dsh/home/sessions/<project>/<id>/session.vN.jsonl` path, decoded; null for every other path. */
+export function sessionOf(path: string): string | null {
+  const parts = path.split('/')
+  if (parts.length < 4) return null
+  if (!/^session\.v\d+\.jsonl$/u.test(parts[parts.length - 1] ?? '')) return null
+  // Her private folder is refused by `x6/thread-reader.ts` and is never listed here either.
+  if ((parts[parts.length - 3] ?? '').toLowerCase().includes('private')) return null
+  const raw = parts[parts.length - 2] ?? ''
+  if (raw === '' || raw === '.' || raw === '..') return null
+  // `encodeSegment` (session-persistence-jsonl `format.ts`) escapes anything outside [A-Za-z0-9._-] as `~XXXX`.
+  const id = raw.replace(/~([0-9A-F]{4})/gu, (_all: string, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+  return id === '' ? null : id
+}
+
+/**
+ * CARD 3a: the page's list of every conversation her index holds, built from the index rows themselves rather than
+ * from the journals this browser happens to hold. `local` is this browser's own byte count for the same path, so the
+ * lane can mark an older copy here without deleting it.
+ *
+ * `ad872eb2`: `id` is the SESSION id read from the path, never the thread id (`entry.id` is sha256 of the path).
+ * The lane joins on a SessionId; joining on the thread id marked every conversation here "only in this browser" and
+ * every index row cloud-only.
+ *
+ * `825b17e5`: a row whose path this build cannot name (the legacy `messages.jsonl` layout) is carried with an
+ * EMPTY id rather than dropped: the page then knows a row exists that it cannot match, so it withholds the one claim it
+ * must never make wrongly ("only in this browser") instead of making it on partial evidence.
+ */
+export function cloudRows(entries: readonly ThreadIndexEntry[], limits: ThreadSyncLimits, store: ThreadStore): ThreadCloudRow[] {
+  const rows: ThreadCloudRow[] = []
+  for (const entry of entries) {
+    const session = sessionOf(entry.path)
+    rows.push({
+      id: session ?? '',
+      path: entry.path,
+      bytes: entry.bytes,
+      activeAt: entry.activeAt ?? entry.updatedAt ?? null,
+      title: entry.title ?? null,
+      local: localBytes(store, entry.path),
+      long: entry.bytes > limits.readerMaxThreadBytes,
+    })
+  }
+  return rows
+}
+
+/** How much of the end of an appended span the meta scan reads, and how many rows of it it looks at. */
+const META_SCAN_BYTES = 65536
+const META_SCAN_ROWS = 400
+/** The wire's own bounds (thread-log.mjs `metaHeader`): base64url without padding, 4,096 characters at most. */
+const META_HEADER_MAX = 4096
+const META_TITLE_CHARS = 120
+const META_PREVIEW_CHARS = 120
+
+const isRecordLike = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value)
+const squashText = (value: string): string => value.replace(/\s+/gu, ' ').trim()
+
+/** His or her words in one row, joined; null when the row carries none. */
+function rowText(data: Record<string, unknown>): string | null {
+  const message = isRecordLike(data.message) ? data.message : data
+  if (!Array.isArray(message.content)) return null
+  const parts: string[] = []
+  for (const block of message.content) {
+    if (isRecordLike(block) && block.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+  }
+  return parts.length === 0 ? null : squashText(parts.join(' '))
+}
+
+/**
+ * CARD 3a: the `x-thread-meta` header for one append, read from the span being appended — the newest `session/title`
+ * in it and the newest words, so her cloud's index can name and time a conversation nobody here has pulled. The wire is
+ * the edge's (`deploy/cloudflare/src/thread-log.mjs` `metaHeader`): base64url without padding of
+ * `{title?, preview?, activeAt}`, those keys only, 4,096 characters at most. The scan is the last 64 KiB of the span
+ * and 400 rows, so an append of hundreds of MiB costs what a small one does. A span with neither sends only `activeAt`
+ * and her cloud keeps whatever title it has; anything unexpected in the encoding sends no header at all.
+ * @param body - The journal bytes this append sends.
+ * @param at - The time this append is written (the row's `activeAt`).
+ * @returns The headers to add, or an empty object.
+ */
+export function threadMetaHeader(body: Uint8Array, at: number): Record<string, string> {
+  let title: string | null = null
+  let preview: string | null = null
+  let newest: number | null = null
+  try {
+    const lines = new TextDecoder().decode(body.subarray(Math.max(0, body.byteLength - META_SCAN_BYTES))).split('\n')
+    // A window that does not start at the span's beginning may cut its first line: one odd line is skipped, not fatal.
+    let looked = 0
+    for (let index = lines.length - 1; index >= 0 && looked < META_SCAN_ROWS; index -= 1, looked += 1) {
+      const line = lines[index] ?? ''
+      if (line.length < 2 || !line.startsWith('{"type":"')) continue
+      let row: unknown
+      try { row = JSON.parse(line) } catch { continue }
+      if (!isRecordLike(row) || typeof row.type !== 'string' || !isRecordLike(row.data)) continue
+      // Her own row time is the honest `activeAt`: a span sent now can have been written long ago (a backfill), and
+      // calling that conversation active now would put "Active just now" on one nobody touched.
+      if (newest === null && typeof row.time === 'number' && Number.isSafeInteger(row.time) && row.time > 0) newest = row.time
+      if (row.type === 'session/title') {
+        if (title === null && typeof row.data.title === 'string') title = squashText(row.data.title).slice(0, META_TITLE_CHARS) || null
+      } else if (preview === null && (row.type === 'assistant/message' || row.type === 'user/message')) {
+        const words = rowText(row.data)
+        if (words !== null && words !== '') preview = words.slice(0, META_PREVIEW_CHARS)
+      }
+      if (title !== null && preview !== null) break
+    }
+  } catch {
+    return {}
+  }
+  try {
+    const meta: Record<string, string | number> = { activeAt: newest === null ? at : Math.min(at, newest) }
+    if (title !== null) meta.title = title
+    if (preview !== null) meta.preview = preview
+    let binary = ''
+    for (const byte of new TextEncoder().encode(JSON.stringify(meta))) binary += String.fromCharCode(byte)
+    const encoded = btoa(binary).replace(/\+/gu, '-').replace(/\//gu, '_').replace(/=+$/u, '')
+    return encoded.length > META_HEADER_MAX ? {} : { 'x-thread-meta': encoded }
+  } catch {
+    return {}
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------------
 // Footers and the channel.
 // ---------------------------------------------------------------------------------------------------------------------
@@ -500,7 +681,7 @@ const clock = (ms: number): string => {
 }
 
 /**
- * The reader's footer after a pull (BRIEF-SYNC shared facts), 200 characters at most. `longThreads` are above the size
+ * The reader's footer after a pull (shared facts), 200 characters at most. `longThreads` are above the size
  * a reader pulls; `unread` were wanted and not shown this load (a failed check, the time or the memory budget). When
  * all that stay are long the sentence says "long"; when any is not, it counts them all plainly.
  */
@@ -537,13 +718,22 @@ export interface ThreadSyncSelfState {
   mode: ThreadSyncMode | null
   role: ThreadSyncRole | null
   sent: number
+  /** HER SENDER (Card 1.5): the journal bytes her cloud accepted from this browser this page load (APPLIED only, so a
+   * lower bound in the same sense as `sent`). The daily byte allowance is in bytes, and this is the only counter the
+   * lane and `x6_self_state` can show for it. */
+  bytes: number
+  /** Whole lines the planner has counted as unsent this load: exact for every conversation it has looked at, and 0 for
+   * one it never reached, so it is never on its own the predicate for "everything is in her cloud". */
   pending: number
+  /** CARD 1.5: bytes on disk that no acknowledgement covers, measured from file sizes and the receipts. THIS answers "is
+   * anything still only in this browser"; `pending` is the planner's line count. */
+  pendingBytes: number
   lastOkAtMs: number | null
   lastError: string | null
 }
 
 /** This worker's thread sync facts; thread-writer.ts updates `sent`, `pending`, `lastOkAtMs`, `lastError` and `role`. */
-export const threadSyncState: ThreadSyncSelfState = { mode: null, role: null, sent: 0, pending: 0, lastOkAtMs: null, lastError: null }
+export const threadSyncState: ThreadSyncSelfState = { mode: null, role: null, sent: 0, bytes: 0, pending: 0, pendingBytes: 0, lastOkAtMs: null, lastError: null }
 
 /** A copy of the facts, for `x6_self_state` (never the live object). */
 export const threadSyncSelfState = (): ThreadSyncSelfState => ({ ...threadSyncState })
@@ -630,21 +820,41 @@ export async function bootThreadSync(options: ThreadSyncBootOptions): Promise<Th
   const worker = typeof options.pageId === 'string' && PAGE_ID.test(options.pageId) ? options.pageId : null
   let latest: ThreadSyncStateMessage | null = null
   let channel: ThreadSyncChannel | null = null
-  const publish = (mode: ThreadSyncMode, footer: string, as: ThreadSyncRole = role): void => {
-    latest = { v: 1, kind: 'state', at: now(), mode, role: as, footer: footer.slice(0, limits.footerChars), ...(worker === null ? {} : { worker }) }
+  const answer = (event: { data: unknown }): void => {
+    const data = event.data
+    // Review SHOULD 1: only this page's own ask is answered (its id, or no id from a page that gave none), so another
+    // tab's ask never makes this page re-set the browser-wide reader mark.
+    if (!isRecord(data) || data.v !== 1 || data.kind !== 'ask' || data.worker !== (worker ?? undefined)) return
+    try {
+      if (latest !== null) channel?.postMessage(latest)
+    } catch { /* the page is gone */ }
+  }
+  const send = (message: ThreadSyncStateMessage): void => {
     try {
       channel ??= (options.channel ?? defaultChannel)()
       if (channel === null) return
-      channel.onmessage ??= (event) => {
-        const data = event.data
-        // Review SHOULD 1: only this page's own ask is answered (its id, or no id from a page that gave none), so another
-        // tab's ask never makes this page re-set the browser-wide reader mark.
-        if (isRecord(data) && data.v === 1 && data.kind === 'ask' && latest !== null && data.worker === (worker ?? undefined)) {
-          try { channel?.postMessage(latest) } catch { /* the page is gone */ }
-        }
-      }
-      channel.postMessage(latest)
+      channel.onmessage ??= answer
+      channel.postMessage(message)
     } catch { /* no channel in this engine: the footer stays in the worker */ }
+  }
+  /**
+   * CARD 3a: `rows` ride INSIDE the state message, beside `footer`, for two reasons the closed spec and the boot both
+   * insist on: a reader's boot posts exactly one state before the pull and one after it, and a page's own ask is
+   * answered with ONE message. A second message kind would be a second post to count and one a page can miss.
+   */
+  const publish = (mode: ThreadSyncMode, footer: string, as: ThreadSyncRole = role, rows?: readonly ThreadCloudRow[]): void => {
+    const message: ThreadSyncStateMessage & { rows?: readonly ThreadCloudRow[] } = {
+      v: 1,
+      kind: 'state',
+      at: now(),
+      mode,
+      role: as,
+      footer: footer.slice(0, limits.footerChars),
+      ...(worker === null ? {} : { worker }),
+      ...(rows === undefined ? {} : { rows }),
+    }
+    latest = message
+    send(message)
   }
   // MUST 2: the page hears that it is a reader before the first call, so its own controls (and the mark the edge reads)
   // refuse at once, not after the pull.
@@ -674,7 +884,12 @@ export async function bootThreadSync(options: ThreadSyncBootOptions): Promise<Th
       // MUST 4: a fresh read is claimed only when her index was read whole and a conversation was verified from it.
       const footer = pullIsFresh(report) ? readerPulledFooter(now(), page.holder, report.long, unreadThreads(report)) : READER_OLDER_FOOTER
       threadReader.footer = footer
-      publish(mode, footer)
+      // CARD 3a: the list facts ride in this state message, and only when her index was read WHOLE (`next` null and no
+      // stop): a first page out of several would make the lane call a conversation "only in this browser" that her index
+      // lists further on, which is the one claim this card must never make wrongly. Without a list the lane draws what
+      // it drew before.
+      const whole = page.next === null && !report.incomplete
+      publish(mode, footer, undefined, whole ? cloudRows(page.threads, limits, options.vfs) : undefined)
       return { mode, report }
     } catch (error) {
       log(`thread-sync: ${error instanceof Error ? error.message : String(error)}`)

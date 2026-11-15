@@ -792,6 +792,30 @@ export interface HeadStagedRecord {
    * (aumlok/organ-set.ts recomputes it from the staged bytes and offers only when the two agree). Absent or null otherwise.
    */
   readonly organSet?: Readonly<Record<string, unknown>> | null
+  /** HEAD's removal body (`aukora.head-organ-remove.v1`) when the Pearl only removes ONE ordinary organ
+   * (aumlok/organ-set.ts recomputes it and offers only when the two agree). Absent otherwise. */
+  readonly organRemove?: Readonly<Record<string, unknown>> | null
+  /** The closed code of a refusal HEAD's `lastPublishOutcome` names for THIS candidate (absent otherwise). */
+  readonly lastRefusal?: string
+}
+
+/**
+ * HEAD holds an ORDINARY change that needs nothing from the owner. HEAD's own record
+ * calls it class 1 and T1, it is neither an organ set nor an organ removal (those wait for his Touch ID on their card), and
+ * HEAD's last publish outcome names no refusal of it. The held card's words (SovereigntySurface `headPromotionStateOf`), the
+ * Sovereignty waiting count and heading, the chat Fingerprint card and the Notices row all decide by this function.
+ * @param record - HEAD's parsed staged record.
+ * @returns whether nothing is needed from him for it.
+ */
+export function heldOrdinaryNothingNeeded(record: Pick<HeadStagedRecord, 'governanceClass' | 'tier' | 'organSet' | 'organRemove' | 'lastRefusal'>): boolean {
+  return record.governanceClass === 1 && record.tier === 'T1' && record.organSet == null && record.organRemove == null
+    && record.lastRefusal === undefined
+}
+
+/** The closed code HEAD's last publish outcome gives for `ballId`, when it is a refusal of that candidate (else null). */
+function lastRefusalOf(outcome: unknown, ballId: string): string | null {
+  return isRecord(outcome) && outcome.ok === false && outcome.candidateBallId === ballId
+    && typeof outcome.code === 'string' && /^[A-Z][A-Z0-9_]{2,80}$/u.test(outcome.code) ? outcome.code : null
 }
 
 /**
@@ -878,6 +902,8 @@ export async function parseHeadStaged(body: unknown): Promise<HeadStagedRead> {
       ? staged.stagedAt : null,
     promotion: stagedPromotionOf(staged.envelope),
     organSet: isRecord(staged.organSet) ? staged.organSet : null,
+    ...(isRecord(staged.organRemove) ? { organRemove: staged.organRemove } : {}),
+    ...((code => code === null ? {} : { lastRefusal: code })(lastRefusalOf(body.lastPublishOutcome, staged.ballId))),
   }, ...published }
 }
 
@@ -968,6 +994,45 @@ export async function stageOnHead(staged: StagedPromotion, signal: AbortSignal, 
   const code = typeof answer?.code === 'string' ? answer.code : null
   if (status >= 400 && status < 500 && code !== null) return { kind: 'refused', code }
   return { kind: 'unclear', detail: status === 0 ? 'HEAD did not answer' : `HEAD answered ${String(status)}${code === null ? '' : ` ${code}`}` }
+}
+
+/** HEAD's route that takes back the one staged head candidate (head-do.mjs `withdrawStaged`). */
+export const HEAD_STAGE_WITHDRAW_PATH = '/_head/stage-withdraw'
+export type DeclineOutcome =
+  | { readonly kind: 'declined' }
+  /** HEAD already published this Pearl (review B-M1): nothing was taken back; it is live. */
+  | { readonly kind: 'published' }
+  | { readonly kind: 'refused'; readonly code: string }
+  | { readonly kind: 'unclear'; readonly detail: string }
+/**
+ * DECLINE: the owner takes back the Pearl HEAD holds for him, by its exact ballId (body exactly `{ ballId }`).
+ * No passkey: it only removes the request (HEAD, its bytes, the budget and any approval stay as they are). Nothing staged
+ * any more is also an answer that the card can go.
+ * @param ballId - the 64-hex ballId the card shows.
+ * @returns declined, HEAD's closed refusal code, or unclear.
+ */
+export async function declineStagedHead(ballId: string, signal?: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch)
+  : Promise<DeclineOutcome> {
+  if (!/^[0-9a-f]{64}$/u.test(ballId)) return { kind: 'refused', code: 'STAGE_WITHDRAW_INVALID' }
+  let status = 0
+  let answer: Record<string, unknown> | null = null
+  try {
+    const response = await fetchImpl(HEAD_STAGE_WITHDRAW_PATH, {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ballId }), ...(signal === undefined ? {} : { signal }),
+    })
+    status = response.status
+    try { const parsed: unknown = JSON.parse(await response.text()); answer = isRecord(parsed) ? parsed : null } catch { answer = null }
+  } catch { status = 0 }
+  if (status === 200 && answer?.ok === true) return { kind: 'declined' }
+  const code = typeof answer?.code === 'string' && /^[A-Z][A-Z0-9_]{2,80}$/u.test(answer.code) ? answer.code : null
+  if (status === 409 && code === 'ALREADY_PUBLISHED' && answer?.ballId === ballId) return { kind: 'published' }
+  if (status >= 400 && status < 500 && code !== null) return { kind: 'refused', code }
+  return { kind: 'unclear', detail: status === 0 ? 'HEAD did not answer' : `HEAD answered ${String(status)}${code === null ? '' : ` ${code}`}` }
+}
+/** The card's words when a Decline finds the Pearl already live. */
+export function declinedButPublishedWords(ballId: string): string {
+  return `HEAD already took it: Pearl ${ballId.slice(0, 12)} is live, so nothing was taken back. Refresh reads the new head.`
 }
 
 /**

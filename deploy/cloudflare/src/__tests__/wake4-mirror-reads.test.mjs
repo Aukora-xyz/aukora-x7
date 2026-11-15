@@ -18,7 +18,15 @@ const SECRET = 'synthetic-provider-value-wake4'
 const GH = 'ghp_FIXTUREnotarealvalue0123456789abcd'
 const REPO = 'https://api.github.com/repos/your_org_x/your-node'
 const HANDOFF_PATH = CLOUD_WAKE_PATHS[0]
-const HANDOFF = readFileSync(new URL('../../../../mirror/home/auma/HANDOFF.md', import.meta.url))
+// Her notes are a LIVING file and she may rewrite them short (which once turned
+// main's own baseline red). The long-notes cases need a file far over the bound whatever she
+// keeps: her real notes stay the NEWEST part, and when they are shorter than the cases need, plain older lines are put
+// in front of them. Nothing asserted below changes.
+const REAL_HANDOFF = readFileSync(new URL('../../../../mirror/home/auma/HANDOFF.md', import.meta.url))
+const LONG_NOTES_BYTES = 48 * 1024
+const HANDOFF = REAL_HANDOFF.length > LONG_NOTES_BYTES ? REAL_HANDOFF : Buffer.concat([
+  Buffer.from(Array.from({ length: Math.ceil(LONG_NOTES_BYTES / 64) }, (_, index) => `- earlier note ${String(index).padStart(5, '0')}: an older line of her notes, kept above the newest part\n`).join('')),
+  REAL_HANDOFF])
 const BODY_TEXT = 'MIRROR-BODY-TEXT-never-forward'
 const sha = n => String(n).repeat(40).slice(0, 40)
 const utf8 = new TextDecoder('utf-8', { fatal: true })
@@ -159,8 +167,8 @@ function assertNewestPart(answer, bytes) {
 }
 
 test('(a) her real HANDOFF.md (many times the 4,096-byte bound): readMirrorText answers the newest part, listMyBranches runs, the step SUCCEEDS', async t => {
-  // Lead, 2026-11-14: her notes are a LIVING file (every home sync changes them; they were 52,349 bytes when this was
-  // written and 53,648 one sync later). The case needs a file far over the bound, not one exact size.
+  // Her notes are a LIVING file (every home sync changes them; they were 52,349 bytes when this was
+  // written and 53,648 one sync later). The case needs a file far over the bound, not one exact size (see HANDOFF above).
   assert.ok(HANDOFF.length > 10 * CLOUD_WAKE_LIMITS.textBytes, String(HANDOFF.length))
   const f = await fixture(t, { answers: [deepseekTools(readHandoff(0, 'call_00_read'), dsCall(1, 'call_01_br', 'listMyBranches')), deepseekSay('I read my notes and my branch.')] })
   const out = await f.step()
@@ -318,8 +326,11 @@ test('(e) through the step: a secret line in her long notes is a tool refusal (m
   assert.equal(JSON.stringify(f.transcript()).includes('synthetic-wake4-pass'), false)
 })
 
-test('(f) appendWakeCheckpoint refused by the mirror is a tool refusal with mirrorCode, not a dead step', async t => {
-  // The checkpoint file is full (128 rows): the mirror answers MIRROR_WAKE_CHECKPOINT_FULL (507).
+// HEAD no longer writes a wake checkpoint into her versioned home, so the
+// mirror's own refusals of one (full, writer live, a failed fetch) are asserted at the mirror (cloud-wake-bounds,
+// mirror-world-mount); here HEAD refuses first, with mirrorCode MIRROR_WAKE_CHECKPOINT_PAUSED, and never calls the mirror.
+test('(f) appendWakeCheckpoint (here with a full checkpoint file) is a tool refusal with mirrorCode, not a dead step', async t => {
+  // The checkpoint file is full (128 rows); the honest wake: HEAD refuses before the mirror could answer MIRROR_WAKE_CHECKPOINT_FULL (507).
   const row = index => JSON.stringify({ schema: 'aukora.cloud-wake-checkpoint.v1', id: index.toString(16).padStart(64, '0'), at: 1000,
     head: { ballId: BALL, epoch: 2 }, evidence: [{ tool: 'inspectHeadWish', digest: 'd'.repeat(64) }] })
   const full = Buffer.from(Array.from({ length: 128 }, (_, index) => row(index)).join('\n') + '\n')
@@ -330,20 +341,21 @@ test('(f) appendWakeCheckpoint refused by the mirror is a tool refusal with mirr
   ] })
   const out = await f.step()
   assert.equal(out.status, 'success', JSON.stringify(out))
-  assert.deepEqual(out.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_full' }])
-  assert.deepEqual(f.toolAnswers().call_01_cp, { ok: false, code: 'CLOUD_WAKE_CHECKPOINT_UNAVAILABLE', mirrorCode: 'MIRROR_WAKE_CHECKPOINT_FULL' })
+  assert.deepEqual(out.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_paused' }])
+  assert.deepEqual(f.toolAnswers().call_01_cp, { ok: false, code: 'CLOUD_WAKE_CHECKPOINT_UNAVAILABLE', mirrorCode: 'MIRROR_WAKE_CHECKPOINT_PAUSED' })
   assert.equal(f.toolAnswers().call_02_br.ok, true)
-  assert.deepEqual(f.mirrorCalls, ['/_mirror/wake-checkpoint'])
+  assert.deepEqual(f.mirrorCalls, [])
   assert.equal((await f.wish()).stepsCompleted, 1)
 })
 
-test('(f) a checkpoint whose mirror fetch throws fails the step and names tool appendWakeCheckpoint', async t => {
+test('(f) a checkpoint never reaches a mirror whose fetch throws: the step goes on (the honest wake; a mirror transport failure is (d) above)', async t => {
   const f = await fixture(t, { intercept: async () => { throw new Error(BODY_TEXT) },
-    answers: [deepseekTools(dsCall(0, 'call_00_look', 'inspectHeadWish'), dsCall(1, 'call_01_cp', 'appendWakeCheckpoint'))] })
+    answers: [deepseekTools(dsCall(0, 'call_00_look', 'inspectHeadWish'), dsCall(1, 'call_01_cp', 'appendWakeCheckpoint')), deepseekSay('Looked; no checkpoint.')] })
   const out = await f.step()
-  assert.equal(out.status, 'failed')
-  assert.deepEqual([out.cause, out.where, out.code, out.tool], ['internal', 'tool', 'cloud_wake_transport_failed', 'appendWakeCheckpoint'])
-  assert.equal((await f.wish()).stepFailures.at(-1).tool, 'appendWakeCheckpoint')
+  assert.equal(out.status, 'success', JSON.stringify(out))
+  assert.deepEqual(out.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_paused' }])
+  assert.deepEqual(f.mirrorCalls, [])
+  assert.equal((await f.wish()).stepFailures, undefined)
 })
 
 // ---- Review (A to E) ----
@@ -424,15 +436,18 @@ for (const [label, sockets] of [['an announced tab (its peer row an hour old)', 
   })
 }
 
-test('(B) with no tab (or only a socket of another seed) the checkpoint is written as before and the fence moves', async t => {
+// Until an earlier commit this case WROTE the checkpoint and the fence moved to 2, past her
+// closed tab's base, which stranded the tab. Now it is refused like the open-tab case and the fence stays.
+test('(B) with no tab (or only a socket of another seed) the checkpoint is NOT written either and the fence does not move', async t => {
   for (const sockets of [[], [socket(OTHER, { peerId: 'old', kind: 'browser-tab', lastSeenAt: 1 })]]) {
-    const f = await fixture(t, { sockets, answers: [lookThenCheckpoint(), deepseekSay('Looked and checkpointed.')] })
+    const f = await fixture(t, { sockets, answers: [lookThenCheckpoint(), deepseekSay('Looked; no checkpoint.')] })
     const out = await f.step()
     assert.equal(out.status, 'success', JSON.stringify(out))
-    assert.equal(Object.hasOwn(out, 'toolRefusals'), false)
-    assert.equal(f.toolAnswers().call_01_cp.ok, true)
-    assert.deepEqual(f.mirrorCalls, ['/_mirror/wake-checkpoint'])
-    assert.equal((await f.mirrorStore.storage.get(FENCE)).revision, 2)
+    assert.deepEqual(out.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_paused' }])
+    assert.deepEqual(f.toolAnswers().call_01_cp, { ok: false, code: 'CLOUD_WAKE_CHECKPOINT_UNAVAILABLE', mirrorCode: 'MIRROR_WAKE_CHECKPOINT_PAUSED' })
+    assert.deepEqual(f.mirrorCalls, [])
+    assert.deepEqual(await f.mirrorStore.storage.get(FENCE), { lineageId: LINEAGE, revision: 1 })
+    assert.equal((await f.wish()).stepsCompleted, 1)
   }
 })
 

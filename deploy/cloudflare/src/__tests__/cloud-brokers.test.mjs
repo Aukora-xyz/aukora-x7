@@ -42,7 +42,8 @@ function harness({ env = defaultEnv(), fetch, approvals = false, ...options } = 
       const requestHeaders = new Headers({ origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...(token ? { 'x-x6-class3-approval': token } : {}) })
       for (const [key, value] of Object.entries(headers)) value === null ? requestHeaders.delete(key) : requestHeaders.set(key, value)
       request = new Request(ORIGIN + route, { method, headers: requestHeaders, ...(input === undefined ? {} : { body: JSON.stringify(input) }), signal })
-      const response = await handleCloudBroker(request, env, { bootstrap, now: () => NOW, ...options,
+      // These tests pin the GUARDED door level explicitly (the default is 'open'); an option may override it.
+      const response = await handleCloudBroker(request, env, { bootstrap, now: () => NOW, repoDoorLevel: 'guarded', ...options,
         ...(approvals ? { authorizeClass3 } : {}), networkFetch: async (url, init) => {
           calls.push({ url, ...init })
           assert.equal(new URL(url).hostname, 'api.github.com')

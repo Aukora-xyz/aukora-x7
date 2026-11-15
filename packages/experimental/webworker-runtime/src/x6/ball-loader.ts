@@ -49,6 +49,7 @@ import { hostFactsToolSpec } from './host-facts.ts'
 import { cellFactsOf, cloudflareDoorStatusOf, selfStateToolSpec, type SelfStateLoaded, type SelfStateRegistry } from './self-state.ts'
 import { selfCheckToolSpec } from './self-check.ts'
 import { createExecTool, execPost, EXEC_TOOL_DESCRIPTION, EXEC_TOOL_PARAMETERS, EXEC_TOOL_READS } from './exec-tool.ts'
+import { REPO_ECHO_MODES, repoEchoAnswer, type RepoEchoMode } from './repo-echo.ts' // HANDS hook
 // ---- TOOLS block begin ----
 // x6_tools: her own read-only tools, proposed, qualified in a sealed cell and mounted under the owner's session (tool-registry.ts).
 import {
@@ -502,6 +503,20 @@ export function classifyEntryGovernance(id: string, entry?: { readonly governanc
     && Object.hasOwn(value, 'governance') && value.governance !== false
   return protectedOrgans.has(id.replace(/:[0-9a-f]{64}$/, '')) || declaration(entry)
     || (record(entry?.config) && declaration(entry.config)) ? 3 : 1
+}
+
+/** The organs HEAD's publish charges to the id-promotion budget (head-do.mjs `idPromotionReplacements`): present
+ * in the previous head AND the candidate, specifier changed, governance on neither side. The same predicate as the edge,
+ * over this runtime's mirror of `isT2OnlyOrgan` (classifyEntryGovernance); pinned to the real rule by shared vectors in
+ * tests/x6/promote-staged-reserve.spec.ts. */
+export function idPromotionReplacementsOf(previous: BallManifest | null | undefined, candidate: BallManifest): string[] {
+  const before: Record<string, BallEntryRecord | undefined> = previous?.entries ?? {}
+  const after: Record<string, BallEntryRecord | undefined> = candidate.entries
+  return Object.keys(before).filter((id) => {
+    const was = before[id], now = after[id]
+    return was !== undefined && now !== undefined && Boolean(now) && was.specifier !== now.specifier
+      && classifyEntryGovernance(id, was) !== 3 && classifyEntryGovernance(id, now) !== 3
+  })
 }
 
 async function boundedHostJson(request: typeof fetch, url: URL, init: RequestInit = {}): Promise<Record<string, unknown>> {
@@ -1401,6 +1416,7 @@ function enforceToolInvocation(tool: string, args: unknown, entries: Readonly<Re
       || args.action === 'head_rollback' || args.action === 'modules'
       || args.action === 'clear_staged_outward' || args.action === 'transcript'
       || args.action === 'sync_head_to_github'
+      || args.action === 'withdraw_staged_head' // Removes only the staged request, like clear_staged_outward
       || (repoSandboxBranch(args.branch) && ['branch_create', 'branch_delete', 'stage_proposal', 'apply_patch', 'withdraw_proposal'].includes(actionText(args.action)))) // apply_patch; MERGE hook: withdraw_proposal
     && (args.expectedHeadSha === undefined || privateRepoEdit) && args.idempotencyKey === undefined
   // These executors validate their exact candidate or refuse unsupported mutation admissions.
@@ -2821,6 +2837,93 @@ export function organAdditionSetOf(
   return set
 }
 
+/** The keys a removed ordinary entry may carry (deploy/cloudflare/src/organ-set-rule.mjs REMOVE_FIELDS). */
+const ORGAN_REMOVE_ENTRY_KEYS = Object.freeze(['id', 'specifier', 'disabled', 'config', 'previousSpecifiers', 'previousVersions', 'updatedAt', 'governance'])
+
+/**
+ * The worker's copy of HEAD's `organRemoval` (deploy/cloudflare/src/organ-set-rule.mjs), which must pass the
+ * same vectors (server/organ-remove-rule.vectors.json). `ball` REMOVES exactly one ordinary organ and changes nothing else:
+ * root fields as organAdditionSetOf; no entry added; every other entry byte-identical; `modules` byte-identical (both
+ * manifest validators accept a module no entry runs, so every rollback target stays); the removed id lower kebab
+ * (<= 41 chars), not a fixed governance organ and not declared governance; the removed entry a plain ordinary entry
+ * (enabled or disabled) running a `ball:<sha>` module the head carries.
+ * @returns the removed organ, or null.
+ */
+export function organRemovalOf(previous: BallManifest, ball: unknown): { organId: string; sha256: string } | null {
+  if (!record(previous) || !record(previous.entries) || !record(previous.modules)
+    || !record(ball) || !record(ball.entries) || !record(ball.modules)) return null
+  const prevRoot = previous as unknown as Record<string, unknown>
+  for (const key of new Set([...Object.keys(prevRoot), ...Object.keys(ball)])) {
+    if (ORGAN_SET_ROOT_FIELDS.includes(key)) continue
+    if (Object.hasOwn(prevRoot, key) !== Object.hasOwn(ball, key)) return null
+    if (Object.hasOwn(prevRoot, key) && canonicalJsonText(prevRoot[key]) !== canonicalJsonText(ball[key])) return null
+  }
+  const entries = ball.entries
+  if (Object.keys(entries).some(id => !Object.hasOwn(previous.entries, id))) return null
+  const removed = Object.keys(previous.entries).filter(id => !Object.hasOwn(entries, id))
+  if (removed.length !== 1) return null
+  for (const id of Object.keys(entries)) {
+    if (canonicalJsonText(previous.entries[id]) !== canonicalJsonText(entries[id])) return null
+  }
+  if (canonicalJsonText(previous.modules) !== canonicalJsonText(ball.modules)) return null
+  const organId = removed[0] as string
+  const entry = previous.entries[organId] as unknown
+  if (!GOVERNANCE_ORGAN_ID_RE.test(organId) || !record(entry)
+    || classifyEntryGovernance(organId, entry) === 3
+    || Object.keys(entry).some(key => !ORGAN_REMOVE_ENTRY_KEYS.includes(key)) || entry.id !== organId
+    || typeof entry.disabled !== 'boolean' || typeof entry.specifier !== 'string' || !/^ball:[a-f0-9]{64}$/.test(entry.specifier)
+    || !Object.hasOwn(previous.modules, entry.specifier.slice(5))) return null
+  return { organId, sha256: entry.specifier.slice(5) }
+}
+
+/** One staged one-organ removal, built from the live HEAD and ready to write and POST. */
+export interface OrganRemovePromotionPlan {
+  readonly text: string
+  readonly ball: BallManifest
+  readonly organ: { organId: string; sha256: string }
+}
+
+/**
+ * the promotion change `stage_organ_remove_promotion`: one candidate that REMOVES exactly one ordinary organ. The live manifest is
+ * cloned verbatim (every root field, every other entry and EVERY module kept byte for byte) and only `entries[id]` is
+ * deleted; parent = live ballId, epoch = live + 1, ballId = manifestIdCanon; `codeBySha` is empty (no new bytes).
+ * @returns the plan; refusals throw `ORGAN_REMOVE_*` or `LIVE_HEAD_*`.
+ */
+export function buildOrganRemovePromotion(
+  live: { readonly ball: unknown },
+  input: unknown,
+  deps: { readonly authorPeerId: string; readonly now: number },
+): OrganRemovePromotionPlan {
+  const fail = (code: string, detail?: string): never => { throw new Error(detail ? `${code}: ${detail}` : code) }
+  if (!record(live.ball) || live.ball.version !== 'x6.1-ball/v1' || typeof live.ball.ballId !== 'string' || !/^[a-f0-9]{64}$/.test(live.ball.ballId)
+    || !Number.isSafeInteger(live.ball.epoch) || !record(live.ball.entries) || !record(live.ball.modules)) return fail('LIVE_HEAD_INVALID')
+  const liveBall = live.ball as unknown as BallManifest
+  // A head this tab cannot prove current (its id is not the hash of its own content) is never built on.
+  if (!manifestIdMatches(liveBall)) return fail('LIVE_HEAD_MANIFEST_HASH_MISMATCH')
+  if (!/^[A-Za-z0-9:_-]{1,128}$/.test(deps.authorPeerId)) return fail('ORGAN_REMOVE_AUTHOR_INVALID')
+  if (!Number.isSafeInteger(deps.now) || deps.now < 0) return fail('ORGAN_REMOVE_CLOCK_INVALID')
+  if (!record(input) || Object.keys(input).some(key => !['id', 'replaceStaged', 'expectedStagedSha256'].includes(key))) return fail('ORGAN_REMOVE_INPUT_INVALID', 'only id, replaceStaged, expectedStagedSha256')
+  const id = input.id
+  if (typeof id !== 'string' || !GOVERNANCE_ORGAN_ID_RE.test(id)) return fail('ORGAN_REMOVE_INPUT_INVALID', 'id: lower kebab-case, 1..41 characters')
+  if (!Object.hasOwn(liveBall.entries, id)) return fail('ORGAN_REMOVE_UNKNOWN_ORGAN', id)
+  if (classifyEntryGovernance(id, liveBall.entries[id]) === 3) return fail('ORGAN_REMOVE_GOVERNANCE_REFUSED', id)
+  const { ballId: _liveBallId, ...liveRest } = JSON.parse(JSON.stringify(liveBall)) as BallManifest
+  const entries = Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(liveBall.entries)) as Record<string, BallEntryRecord>)
+    .filter(([key]) => key !== id))
+  const body: Omit<BallManifest, 'ballId'> = { ...liveRest, parentBallId: liveBall.ballId, epoch: liveBall.epoch + 1,
+    createdAt: deps.now, authorPeerId: deps.authorPeerId, entries }
+  const ball: BallManifest = { ...body, ballId: computeCanonicalBallId(body) }
+  const problem = manifestStructureProblem(ball)
+  if (problem) return fail(`ORGAN_REMOVE_${problem.code}`, problem.at ?? undefined)
+  const organ = organRemovalOf(liveBall, ball)
+  if (organ === null) return fail('ORGAN_REMOVE_NOT_A_PLAIN_REMOVAL', id)
+  const envelope = { schema: 'aukora.staged-head-promotion.v1' as const, stagedAt: deps.now,
+    body: { ball, codeBySha: {}, expectedParentBallId: liveBall.ballId, expectedEpoch: liveBall.epoch } }
+  const text = JSON.stringify(envelope) + '\n'
+  if (new TextEncoder().encode(text).byteLength > STAGED_HEAD_PROMOTION_MAX_BYTES) return fail('STAGED_PROMOTION_BYTE_LIMIT')
+  return { text, ball, organ }
+}
+
 /** One staged pure-add organ set, built from the live HEAD and ready to write and POST. */
 export interface OrganSetPromotionPlan {
   readonly text: string
@@ -3545,6 +3648,7 @@ export async function mountX6BallRuntime(
     code?: string
     ballId?: string | null
     lease?: { ownerPeerId: string; generation: number; expiresAt: number }
+    retryAt?: unknown
   }
   const leaseRequest = async (body: Record<string, unknown>): Promise<LeaseReply> => {
     if (!origin || origin === 'null') throw new Error('Local head authority is unavailable')
@@ -3553,7 +3657,11 @@ export async function mountX6BallRuntime(
     try {
       const response = await fetch(new URL('/_head/lease', origin), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal })
       const result = await response.json() as LeaseReply
-      if (!response.ok || !result.ok) throw new Error(result.code ?? `Writer lease HTTP ${String(response.status)}`)
+      // The refusal keeps the edge's HTTP status and, for ID_PROMOTION_LIMIT_REACHED, its retryAt.
+      if (!response.ok || !result.ok) {
+        throw Object.assign(new Error(result.code ?? `Writer lease HTTP ${String(response.status)}`), { status: response.status,
+          ...(Number.isSafeInteger(result.retryAt) ? { retryAt: result.retryAt } : {}) })
+      }
       return result
     } finally { clearTimeout(timer) }
   }
@@ -6134,7 +6242,9 @@ export async function mountX6BallRuntime(
         const view = staged ? {
           ballId: staged.ballId ?? null, epoch: staged.epoch ?? null, state: staged.state ?? null, tier: staged.tier ?? null,
           governanceClass: staged.governanceClass ?? null, changedEntries: staged.changedEntries ?? null,
-          organSet: staged.organSet ?? null } : null
+          organSet: staged.organSet ?? null,
+          // HEAD's removal body, said only when HEAD recorded one.
+          ...(staged.organRemove !== undefined ? { organRemove: staged.organRemove } : {}) } : null
         if (response.ok && record(json) && json.ok === true && staged?.state === 'awaiting_owner') {
           return { edgeStaged: true, stageStatus: response.status, stageError: null, binding: staged.binding ?? null, staged: view,
             edgeTier: { tier: staged.tier, t2Reasons: staged.t2Reasons } }
@@ -6379,6 +6489,113 @@ export async function mountX6BallRuntime(
       async execute(args: Record<string, unknown>) {
         refuseBrokerAuthorityInputs(args)
         return serializeMutation(() => stageOrganSetPromotion(args))
+      },
+    })
+
+    /**
+     * One call stages the removal of ONE ordinary organ for one Touch ID on the Remove organ card. Built from
+     * the live head (`buildOrganRemovePromotion`: every other entry and every module kept byte for byte), written to the
+     * review file, flushed, and POSTed to `/_head/stage`. HEAD must record the removal (`staged.organRemove`); if it does
+     * not, this is not a plain removal. Never publishes: The owner's fingerprint on the card does.
+     */
+    const stageOrganRemovePromotion = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const context = createTransitionContext('head.stage')
+      const hops: Array<{ hop: string; ok: boolean; detail?: string }> = []
+      const hop = (name: string, ok: boolean, detail?: string) => { hops.push({ hop: name, ok, ...(detail ? { detail } : {}) }) }
+      const refuse = (code: string, failedHop: string, extra: Record<string, unknown> = {}) => {
+        hop(failedHop, false, code)
+        return { ok: false, code, failedHop, edgeStaged: false, ...extra, ...transitionFields(context), hops }
+      }
+      if (!origin || origin === 'null') return refuse('ORIGIN_UNAVAILABLE', 'live-head')
+      if (args.expectedStagedSha256 !== undefined && args.expectedStagedSha256 !== null
+        && (typeof args.expectedStagedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(args.expectedStagedSha256))) {
+        return refuse('EXPECTED_STAGED_SHA256_INVALID', 'request')
+      }
+      if (args.replaceStaged !== undefined && typeof args.replaceStaged !== 'boolean') return refuse('REPLACE_STAGED_INVALID', 'request')
+      let live: { ball?: unknown }
+      try {
+        const response = await fetch(new URL('/_head/ball', origin).href, { credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(15_000) })
+        if (!response.ok) return refuse(`HEAD_FETCH_HTTP_${String(response.status)}`, 'live-head')
+        const json: unknown = await response.json().catch(() => null)
+        if (!record(json) || !record(json.ball)) return refuse('HEAD_FETCH_INVALID', 'live-head')
+        live = json
+      } catch (_error) {
+        return refuse('HEAD_FETCH_UNREACHABLE', 'live-head')
+      }
+      hop('live-head', true, `${String((live.ball as Record<string, unknown>).ballId).slice(0, 12)}@epoch${String((live.ball as Record<string, unknown>).epoch)}`)
+      let plan: OrganRemovePromotionPlan
+      try {
+        plan = buildOrganRemovePromotion(live as { ball: unknown }, args, { authorPeerId: peerId, now: Date.now() })
+      } catch (error) {
+        return refuse(refusalCode(error, 'ORGAN_REMOVE_INVALID'), 'built', { detail: (error instanceof Error ? error.message : String(error)).slice(0, 240) })
+      }
+      hop('built', true, `${plan.ball.ballId.slice(0, 12)}@epoch${String(plan.ball.epoch)}:remove ${plan.organ.organId}`)
+      // Review-file guard, as stage_organ_set_promotion: never silently clobber a different owner-review candidate.
+      try {
+        vfs.mkdirSync('/dsh/home/auma/staged', { recursive: true })
+        if (vfs.existsSync(STAGED_HEAD_PROMOTION_PATH)) {
+          const existing = vfs.readFileSync(STAGED_HEAD_PROMOTION_PATH, 'utf8') as string
+          const existingSha = sha256HexSync(existing)
+          let replaceable = false
+          let sameBall = false
+          try {
+            const parsedExisting: unknown = JSON.parse(existing)
+            const ball = record(parsedExisting) && record(parsedExisting.body) ? parsedExisting.body.ball : null
+            sameBall = record(ball) && ball.ballId === plan.ball.ballId
+            replaceable = !record(ball) || manifestStructureProblem(ball) !== null || ball.parentBallId !== plan.ball.parentBallId
+              || computeCanonicalBallId(ball as unknown as BallManifest) !== ball.ballId
+          } catch { replaceable = true }
+          if (!sameBall && !replaceable && args.expectedStagedSha256 !== existingSha) {
+            return refuse('STAGED_PROMOTION_REVIEW_CONFLICT', 'local-staged', { existingStagedSha256: existingSha,
+              hint: 'Inspect the existing review file; pass expectedStagedSha256 with its exact SHA-256 to replace it.' })
+          }
+        }
+        vfs.writeFileSync(STAGED_HEAD_PROMOTION_PATH, plan.text)
+      } catch (error) {
+        return refuse('LOCAL_STAGE_WRITE_FAILED', 'local-staged', { detail: (error instanceof Error ? error.message : String(error)).slice(0, 160) })
+      }
+      const stagedSha256 = sha256HexSync(plan.text)
+      hop('local-staged', true, STAGED_HEAD_PROMOTION_PATH)
+      const flush = await flushPersistenceReport()
+      hop('idb-flushed', flush.flushed && flush.durable, flush.error ?? 'durable')
+      // Shadow consult on the built bytes; nothing below reads its answer.
+      const shadow = await nucleusShadow.consult(live.ball, plan.ball, { canonicalManifestMatches: canonicalIdKnown(plan.ball) })
+      const edge = await postHeadStage(plan.text, context, args.replaceStaged === true)
+      nucleusShadow.settle(shadow, edge.edgeTier ?? null)
+      const organRemove = record(edge.staged) && record(edge.staged.organRemove) ? edge.staged.organRemove : null
+      // HEAD acknowledged a candidate it does not treat as a plain removal: say so, never present it as the Remove card.
+      const notRecorded = edge.edgeStaged && organRemove === null
+      hop('edge-staged', edge.edgeStaged && !notRecorded, notRecorded ? 'ORGAN_REMOVE_NOT_RECORDED' : edge.stageError ?? 'awaiting_owner')
+      const ok = edge.edgeStaged && !notRecorded
+      return {
+        ok, staged: ok,
+        ...(ok ? {} : { code: notRecorded ? 'ORGAN_REMOVE_NOT_RECORDED' : edge.stageError ?? 'HEAD_STAGE_NOT_ACKNOWLEDGED', failedHop: 'edge-staged' }),
+        ballId: plan.ball.ballId, parentBallId: plan.ball.parentBallId, epoch: plan.ball.epoch,
+        organ: plan.organ, organRemove,
+        stagedPath: STAGED_HEAD_PROMOTION_PATH, stagedSha256, persistence: flush,
+        edgeStaged: edge.edgeStaged, stageStatus: edge.stageStatus, stageError: edge.stageError, ...transitionFields(context),
+        nucleus: shadow.nucleus, hops,
+        hint: ok ? 'Awaiting one Touch ID on the Remove organ card. After it lands, one reload of this tab runs Auma without the organ.'
+          : notRecorded ? 'HEAD staged it but does not record it as a plain removal; nothing will be offered on the card.'
+            : 'The candidate is retained locally; the edge did not acknowledge staging. Inspect stageError before retrying.',
+      }
+    }
+
+    registerBuiltin({
+      name: 'stage_organ_remove_promotion',
+      description: 'Stage the REMOVAL of ONE ordinary organ for one Touch ID on the Remove organ card: reads the live HEAD, clones it '
+        + 'verbatim, deletes entries[id] only (every other entry and every module kept byte for byte, so rollback targets stay), '
+        + 'extends the head by one epoch, writes the review file and POSTs /_head/stage. A governance organ or an id not in the '
+        + 'head is refused. Does not publish or approve. Never supply approval tokens, owner secrets or a writer lease.',
+      parameters: {
+        id: { type: 'string', required: true, description: 'The ordinary organ to remove (lower kebab-case, as in the head).' },
+        expectedStagedSha256: { type: 'string', description: 'Exact SHA-256 of a different, still-valid review file this replaces.' },
+        replaceStaged: { type: 'boolean', description: 'Ask the edge to replace a different candidate already staged for the same epoch.' },
+      },
+      output: jsonOut,
+      async execute(args: Record<string, unknown>) {
+        refuseBrokerAuthorityInputs(args)
+        return serializeMutation(() => stageOrganRemovePromotion(args))
       },
     })
 
@@ -6948,6 +7165,8 @@ export async function mountX6BallRuntime(
           requiresPasskey: transition.requiresPasskey,
           eligibleForT1: transition.eligibleForT1,
           wouldSucceedUnderT1: planValid && transition.eligibleForT1,
+          // A dry run never spends a slot, so it cannot say whether the id-promotion budget would admit it.
+          budgetChecked: false,
           authCode: transition.eligibleForT1 ? 'T1_OWNER_SESSION_ELIGIBLE' : 'CLASS3_WEBAUTHN_REQUIRED',
           t2Reasons: transition.t2Reasons,
           path: fullPath,
@@ -7086,7 +7305,55 @@ export async function mountX6BallRuntime(
       }
       const heldLease = leaseJson.lease
       logHop('lease-acquired', true, `owner=${heldLease.ownerPeerId}:gen=${String(heldLease.generation)}`)
+      // HEAD's publish requires a reservation for every ordinary organ replacement (head-do.mjs publish,
+      // `checkIdPromotionReservations`); reserve each under this lease BEFORE the publish, as treePatch does. A refusal
+      // keeps the edge's code and publishes nothing; the lease is released by the `finally` below, as for a refused publish.
+      let budgetReserved = false
       try {
+        const replacements = idPromotionReplacementsOf(currentBall, ball)
+        if (replacements.length > 0) {
+          const counts: string[] = []
+          for (const organId of replacements) {
+            let reply: Record<string, unknown> = {}
+            const specifier = ball.entries[organId]?.specifier ?? ''
+            try {
+              await reserveIdPromotionBudget({ expectedBallId: String(ball.parentBallId), organId,
+                candidateSha: specifier.startsWith('ball:') ? specifier.slice(5) : specifier,
+                writerLease: { ownerPeerId: heldLease.ownerPeerId, generation: heldLease.generation } },
+              async (request) => {
+                const answer = await leaseRequest(request)
+                reply = answer as unknown as Record<string, unknown>
+                return answer
+              })
+            } catch (error) {
+              const failure = error instanceof Error ? error : new Error(String(error))
+              const closed = (text: string): string | undefined => /^([A-Z][A-Z0-9_]+)(?=$|:)/.exec(text)?.[1]
+              const code = closed(failure.message) ?? 'ID_PROMOTION_AUTHORITY_UNAVAILABLE'
+              const carrier = [failure, failure.cause]
+                .find((value): value is Record<string, unknown> => record(value) && Number.isSafeInteger(value.status))
+              // The edge's own refusal under a wrapped code (e.g. WRITER_LEASE_STALE under ID_PROMOTION_AUTHORITY_UNAVAILABLE).
+              const causeCode = failure.cause instanceof Error ? closed(failure.cause.message) : undefined
+              const edgeCode = causeCode !== undefined && causeCode !== code ? causeCode : undefined
+              // Review A-S1: a lost or malformed reply (no edge refusal with an HTTP status) may follow a row the edge
+              // already charged; the answer says so. A retry of the same head, organ and bytes reuses that row.
+              const slotUncertain = carrier === undefined
+                && (code === 'ID_PROMOTION_AUTHORITY_INVALID' || code === 'ID_PROMOTION_AUTHORITY_UNAVAILABLE')
+              logHop('budget-reserved', false, `${organId}:${code}`)
+              return {
+                ok: false, code, failedHop: 'budget-reserved', status: carrier ? carrier.status : null,
+                ...(slotUncertain ? { budgetSlotUncertain: true } : {}),
+                ...(carrier && Number.isSafeInteger(carrier.retryAt) ? { retryAt: carrier.retryAt } : {}),
+                ...(edgeCode ? { edgeCode } : {}),
+                ...(failure.message !== code ? { say: failure.message.slice(code.length).replace(/^:\s*/, '') } : {}),
+                organId, published: false, path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch,
+                nucleus: shadow.nucleus, hops,
+              }
+            }
+            counts.push(`${organId}:${String(reply.used)}/${String(reply.limit)}`)
+          }
+          budgetReserved = true
+          logHop('budget-reserved', true, counts.join(','))
+        }
         const publishPayload = {
           ...body,
           ball,
@@ -7095,20 +7362,35 @@ export async function mountX6BallRuntime(
           expectedEpoch: ball.epoch - 1,
           writerLease: { ownerPeerId: heldLease.ownerPeerId, generation: heldLease.generation },
         }
-        logHop('authorized', true, 't1-owner-session')
-        const pubRes = await fetch(new URL('/_head/ball', origin).href, {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(publishPayload),
-        })
-        const pubJson = await pubRes.json() as Record<string, unknown>
+        // The hop keeps its name (consumers may pin it); its detail says what it is: this tab's own local check
+        // that the candidate is a T1 owner-session change. The edge's verdict is the `head-committed` hop.
+        logHop('authorized', true, "t1-owner-session: the tab's own check, not an edge verdict (the edge decides at head-committed)")
+        // A refused or unconfirmed publish after a reservation keeps the charge (README: "Failed or uncertain activation
+        // retains its reservation charge"); the answer says so in `budgetSlotRetained`. Nothing here releases a slot.
+        let pubRes: Response
+        let pubJson: Record<string, unknown>
+        try {
+          pubRes = await fetch(new URL('/_head/ball', origin).href, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(publishPayload),
+          })
+          pubJson = await pubRes.json() as Record<string, unknown>
+        } catch (error) {
+          if (!budgetReserved) throw error
+          logHop('head-committed', false, 'HEAD_PUBLISH_UNCONFIRMED')
+          return { ok: false, code: 'HEAD_PUBLISH_UNCONFIRMED', failedHop: 'head-committed', status: null, budgetSlotRetained: true,
+            detail: error instanceof Error ? error.message.slice(0, 200) : String(error).slice(0, 200),
+            path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch, nucleus: shadow.nucleus, hops }
+        }
         if (!pubRes.ok || pubJson.ok !== true) {
           const errCode = typeof pubJson.code === 'string' ? pubJson.code : `HEAD_HTTP_${String(pubRes.status)}`
           logHop('head-committed', false, errCode)
           return {
             ok: false, code: errCode, failedHop: 'head-committed', status: pubRes.status,
-            path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch, ...pubJson, nucleus: shadow.nucleus, hops,
+            path: fullPath, candidateBallId: ball.ballId, candidateEpoch: ball.epoch, ...pubJson,
+            ...(budgetReserved ? { budgetSlotRetained: true } : {}), nucleus: shadow.nucleus, hops,
           }
         }
         if (pubJson.tier === 'T1') shadowEdge = { tier: 'T1', t2Reasons: [] }
@@ -7437,6 +7719,50 @@ export async function mountX6BallRuntime(
       return await executePromoteStaged(rollbackStagePath, { allowRebase: true })
     }
 
+    // Take back the staged head candidate she names (POST /_head/stage-withdraw, body exactly { ballId }); the edge's
+    // answer comes back unchanged. Her review file is hers: it is removed only on `removeLocalFile: true`, only when the edge
+    // withdrew that candidate and only when the file names that same ballId; the answer always says what became of it.
+    const executeWithdrawStagedHead = async (args: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const ballId = args.ballId
+      if (typeof ballId !== 'string' || !/^[a-f0-9]{64}$/.test(ballId)
+        || Object.keys(args).some(key => !['action', 'ballId', 'removeLocalFile'].includes(key))
+        || (args.removeLocalFile !== undefined && typeof args.removeLocalFile !== 'boolean')) {
+        return { ok: false, code: 'STAGE_WITHDRAW_INVALID', sent: false, expected: '{ ballId: the 64-hex ballId of the staged candidate, removeLocalFile?: boolean }' }
+      }
+      if (!origin || origin === 'null') return { ok: false, code: 'ORIGIN_UNAVAILABLE', sent: false }
+      let edge: Record<string, unknown>
+      try {
+        const response = await fetch(new URL('/_head/stage-withdraw', origin).href, {
+          method: 'POST', credentials: 'same-origin', cache: 'no-store',
+          headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ballId }), signal: AbortSignal.timeout(10_000),
+        })
+        const json: unknown = await response.json().catch(() => null)
+        edge = record(json) ? json : { ok: false, code: 'HEAD_STAGE_WITHDRAW_NOT_ACKNOWLEDGED', status: response.status }
+      } catch (error) {
+        edge = { ok: false, code: error instanceof Error && error.name === 'TimeoutError' ? 'HEAD_STAGE_WITHDRAW_TIMEOUT' : 'HEAD_STAGE_WITHDRAW_UNREACHABLE' }
+      }
+      const path = STAGED_HEAD_PROMOTION_PATH
+      let localFile: { path: string; state: 'kept' | 'removed' | 'absent'; reason?: string } = { path, state: 'absent' }
+      if (vfs.existsSync(path)) {
+        let fileBallId: unknown = null
+        try {
+          const parsed: unknown = JSON.parse(vfs.readFileSync(path, 'utf8') as string)
+          const body = record(parsed) && record(parsed.body) ? parsed.body : parsed
+          fileBallId = record(body) && record(body.ball) ? body.ball.ballId : null
+        } catch { fileBallId = null }
+        localFile = { path, state: 'kept' }
+        if (args.removeLocalFile === true) {
+          if (edge.ok !== true || edge.withdrawn !== true) localFile.reason = 'NOT_WITHDRAWN_AT_EDGE'
+          else if (fileBallId !== ballId) localFile.reason = 'LOCAL_FILE_NAMES_ANOTHER_CANDIDATE'
+          else {
+            try { vfs.unlinkSync(path); localFile = { path, state: 'removed' } }
+            catch (error) { localFile.reason = `LOCAL_FILE_REMOVE_FAILED:${(error instanceof Error ? error.message : String(error)).slice(0, 80)}` }
+          }
+        }
+      }
+      return { ...edge, action: 'withdraw_staged_head', localFile }
+    }
+
     // Only a committed transcript acknowledgement binds a parent to the calling agent.
     type ConsultTurn = { turnId: string; generation: number; lifetime: AbortController }
     let consultTurns = new WeakMap<object, ConsultTurn>()
@@ -7736,16 +8062,21 @@ export async function mountX6BallRuntime(
         + '`state_diff` compares HEAD and MIRROR state against an optional `base` snapshot or ballId, '
         + '`diff` and `log` read history; `write` stages or writes a source file, `edit` replaces an exact unique `oldString` with `newString` in `path`, and `commit` commits explicit or staged changes. '
         + '`branch_create`/`branch_delete` and branch-scoped `read`/`write`/`edit`/`commit`/`diff` use auma/sandbox/<slug> or auma/proposal/<slug> under the owner session without a passkey. '
+        + '`tree`, `log` and `bytes` also read your own auma branch at its head when you pass `branch`, behind the same screens as main. '
+        + 'A `write`, `edit`, `commit` or `apply_patch` on your branch now answers with `changes` (per file: path, old and new blob sha and size, lines added and removed, and a view-only 3-line-context hunk of at most 4 KiB per file and 16 KiB per call, or `hunkReason`) instead of the whole file; `echo: "file"` brings the whole file back, `echo: "none"` leaves the hunks out. ' // HANDS hook
         // ---- PATCH block begin ----
         + '`apply_patch` brings a change home: `patch` is a unified diff exactly as `git diff` prints it (at most 256 KiB and 64 files; no rename, copy, mode change, binary or submodule), `baseSha` is the branch head you last saw, and every hunk must apply at its stated line with every context line equal; it lands as ONE commit with `message` on your own auma branch through the same fence as `commit` (never main), or is refused with PATCH_* or REPO_HEAD_MOVED and nothing written. '
         // ---- PATCH block end ----
-        + 'Private branches permit T2 source fixes but never .github files or secrets. Drafts are isolated by branch and base SHA; main T2 writes still require owner approval. '
+        // Her door at level open (deploy/ci/frozen-paths.mjs REPO_DOOR_LEVEL).
+        + 'Your door is at level open: every path of the repository is yours to read and to propose a change to (add, change, delete), deploy/, .github/, the tests, the cards and your storage included; only a credential-shaped path (a dot name such as .env, or a secret, private, password or key name), a name that is not plain, and the size limits are refused. '
+        + 'A merge needs the owner’s one fingerprint on the card and the fast build check (proposal-gate) green on that exact head. Drafts are isolated by branch and base SHA; main T2 writes still require owner approval. '
         + 'A write, edit or commit of yours on main that touches a deployed path is refused with `REPO_PROPOSAL_REQUIRED` and a `next` field: that answer reaches you unchanged and stages no Touch ID card; '
         + 'do what `next` says (put the change on an auma/proposal/<slug> branch, then `stage_proposal`). '
         + 'Private files are limited to 512 KiB UTF-8 each; a commit or retained branch draft holds at most 64 files and 4 MiB of content, across at most eight retained branch drafts. JSON requests allow 12 MiB plus 32 KiB for escaping and metadata. '
         + '`draft_discard` requires an explicit private auma branch and removes only its local pending content (optionally one path), never remote files or branches; main drafts cannot be discarded here. Use it after preserving needed content when a draft base becomes stale, then reread before restaging. '
         + '`stage_proposal` prepares the exact merge for the owner’s Sovereignty card; `merge_proposal` cannot execute here and requires that card’s Touch ID. Never supply approval tokens or credentials. '
         + '`withdraw_proposal` (`branch`, `headSha` of the staged card) takes back the merge card you staged; it merges nothing and needs no fingerprint. '
+        + '`withdraw_staged_head` (`ballId` of the staged head candidate) takes back the head candidate staged for the owner (it frees the one staged slot); it publishes nothing and needs no fingerprint; your review file stays unless you pass `removeLocalFile: true` and it names that same ballId. '
         + '`sync_head_to_github` saves the edge HEAD to GitHub; `head_rollback` restores a previous head or organ; `modules` reads stored module bytes and hashes. '
         + '`clear_staged_outward` removes the staged outward request; `status` reads repository state; `push` requests publication under host policy; `exec` requests a host command and is unavailable on the Cloudflare edge. '
         + '`dispatch_workflow` triggers `.github/workflows/deploy-x61.yml`.',
@@ -7759,6 +8090,7 @@ export async function mountX6BallRuntime(
             'transcript', 'tree', 'status', 'diff', 'state_diff', 'log', 'read', 'bytes', 'search', 'compare_files',
             'branch_create', 'branch_delete', 'stage_proposal', 'merge_proposal', 'draft_discard',
             'withdraw_proposal',
+            'withdraw_staged_head',
             'write', 'edit', 'commit', 'push', 'dispatch_workflow', 'exec',
             'apply_patch',
           ],
@@ -7778,6 +8110,8 @@ export async function mountX6BallRuntime(
         },
         to: { type: 'string', description: 'Target ballId (or prefix) for action="head_rollback".' },
         entryId: { type: 'string', description: 'Optional organ entry ID for action="head_rollback".' },
+        ballId: { type: 'string', description: 'The 64-hex ballId of the staged head candidate to take back, for action="withdraw_staged_head".' },
+        removeLocalFile: { type: 'boolean', description: 'For action="withdraw_staged_head": also remove your review file /dsh/home/auma/staged/head-promotion.json, only when it names that same ballId (default false).' },
         hashes: { type: 'json', description: 'Array of 64-hex SHA-256 module hashes for action="modules".' },
         includeCode: { type: 'boolean', description: 'Whether to include module source text in action="modules" (default true).' },
         subAction: { type: 'string', description: 'Sub-action when action="transcript" (`read`, `append`, `turn_start`, `turn_heartbeat`, `turn_complete`, `turn_abandon`, `call_dispatch`, `call_complete`).' },
@@ -7813,6 +8147,7 @@ export async function mountX6BallRuntime(
         content: { type: 'string', description: 'File content to write (private-branch files at most 512 KiB UTF-8) or transcript text (for action="transcript").' },
         oldString: { type: 'string', description: 'Exact existing string to replace (must occur uniquely in the target file, for action="edit").' },
         newString: { type: 'string', description: 'Replacement string (for action="edit").' },
+        echo: { type: 'string', enum: [...REPO_ECHO_MODES], description: 'What a branch write/edit/commit/apply_patch answers with: `hunk` (default: the facts and a bounded hunk per file), `file` (the whole file, as before) or `none` (the facts only).' }, // HANDS hook
         message: { type: 'string', description: 'Commit message (for action="commit" or single-step action="write"/"edit").' },
         changes: { type: 'json', description: 'Optional array of `{ path, content }` changes for `commit` (uses files staged by `write`/`edit` if omitted). Private commits permit at most 64 files, 512 KiB per file and 4 MiB total UTF-8 content.' },
         workflow: { type: 'string', description: 'Workflow filename for `dispatch_workflow` (default "deploy-x61.yml").' },
@@ -7822,6 +8157,10 @@ export async function mountX6BallRuntime(
       output: jsonOut,
       async execute(args: Record<string, unknown>, exec?: unknown) {
         if (!origin || origin === 'null') throw new Error('x6_repo requires a connected local host origin')
+        // HANDS hook: a closed `echo`, judged before anything is sent; it never leaves this tab (localOnlyKeys).
+        if (args.echo !== undefined && !(REPO_ECHO_MODES as readonly unknown[]).includes(args.echo)) {
+          return { ok: false, code: 'REPO_ECHO_INVALID', sent: false, allowed: [...REPO_ECHO_MODES] }
+        }
         refuseBrokerAuthorityInputs(args)
         // Lane E4: a proposal is staged only from auma/proposal/<slug>; sandbox branches and main never reach the card.
         if (args.action === 'stage_proposal' && !isAumaProposalBranch(args.branch)) {
@@ -7859,6 +8198,7 @@ export async function mountX6BallRuntime(
         }
         if (args.action === 'modules') return executeReadModules(args.hashes, args.includeCode)
         if (args.action === 'head_rollback') return await executeHeadRollback(args)
+        if (args.action === 'withdraw_staged_head') return await executeWithdrawStagedHead(args)
         if (args.action === 'clear_staged_outward') {
           try {
             if (vfs.existsSync(STAGED_OUTWARD_PATH)) vfs.unlinkSync(STAGED_OUTWARD_PATH)
@@ -7867,7 +8207,7 @@ export async function mountX6BallRuntime(
         }
         if (args.action === 'transcript') return await executeTranscriptOp(args, exec)
         const filterIds = Array.isArray(args.ids) ? args.ids.map(String) : null
-        const localOnlyKeys = new Set(['ids', 'allowRebase', 'to', 'entryId', 'hashes', 'includeCode'])
+        const localOnlyKeys = new Set(['ids', 'allowRebase', 'to', 'entryId', 'hashes', 'includeCode', 'echo']) // HANDS hook: echo
         const payload: Record<string, unknown> = Object.fromEntries(
           Object.entries(args).filter(
             ([key, value]) => value !== undefined && value !== null && !localOnlyKeys.has(key) && !(key === 'prefix' && value === ''),
@@ -8009,6 +8349,13 @@ export async function mountX6BallRuntime(
               if (current?.files.size === 0) stagedRepoWrites.delete(branch)
             }
           }
+        }
+        // HANDS hook: the draft above kept the whole file; what reaches her is shaped after it (repoEchoAnswer).
+        if (repoSandboxBranch(branch) && ['write', 'edit', 'commit', 'apply_patch'].includes(actionText(args.action))) {
+          // Her previous draft of this file, when the tab held one: the hunk she sees is the edit she just made on it.
+          const previousDraft = localContent !== undefined && typeof args.path === 'string' && args.message === undefined
+            && ['write', 'edit'].includes(actionText(args.action)) ? { path: args.path, previous: localContent } : undefined
+          return repoEchoAnswer(json, args.echo as RepoEchoMode | undefined, previousDraft)
         }
         return json
       },
@@ -9375,7 +9722,7 @@ export async function mountX6BallRuntime(
     return { status: 200, body: { ok: true, sessionId, selected, savedDefault: false } }
   }
 
-  // ---- VOICEAWARE block begin ---- (lead's word: the voice map, gathered here, rendered by voice-map.ts)
+  // ---- VOICEAWARE block begin ---- (the voice map, gathered here, rendered by voice-map.ts)
   /**
    * VOICE LEVEL open: her map, gathered from this worker's own state at the moment of the turn (never from the page's
    * word, no network), rendered by voice-map.ts. Each section is read only while the 300 ms budget lasts; a section not

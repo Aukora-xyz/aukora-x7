@@ -15,9 +15,22 @@ import { fileURLToPath } from 'node:url'
 import { T2_ONLY_ORGANS } from '../../server/ball-transition.mjs'
 import {
   CLOSED_INSIDE_OPEN, DECISION_6_FILES, FROZEN_ABSENT_FILES, FROZEN_DIRECTORIES, FROZEN_FILES, FROZEN_NEXTS, FROZEN_ORGAN_FILES, FROZEN_ORGAN_IDS, FROZEN_PATH_NEXT,
-  FROZEN_TEST_DIRECTORIES, FROZEN_TEST_FILES, FROZEN_TEST_NEXT, FROZEN_TOOLS_NEXT, OPEN_NEW_PATHS, OPEN_PATHS, PATH_NOT_OPEN_NEXT, PATH_NOT_PLAIN_NEXT,
-  AUMA_EDGE_FOLDER, addedTestFiles, caseTwinPaths, protectedJobRemovals, frozenDiffRefusals, frozenPathNext, isFrozenRepoPath, isFrozenTestPath, isOpenRepoPath, isPlainRepoPath, proposalPathRefusal,
+  FROZEN_TEST_DIRECTORIES, FROZEN_TEST_FILES, FROZEN_TEST_NEXT, FROZEN_TOOLS_NEXT, OPEN_INSIDE_CLOSED, OPEN_NEW_PATHS, OPEN_PATHS, PATH_NOT_OPEN_NEXT, PATH_NOT_PLAIN_NEXT,
+  AUMA_EDGE_FOLDER, caseTwinPaths, globRegExp, isPlainRepoPath, REPO_DOOR_LEVEL, REPO_DOOR_LEVELS, SECRET_PATH_NEXT, PROPOSAL_PATH_NEXTS, isSecretShapedRepoPath,
 } from './frozen-paths.mjs'
+import * as fence from './frozen-paths.mjs'
+
+// The default level is now 'open'. Every test above the open-level tests at the end pins the GUARDED
+// level (the lists as they were), passed explicitly here, so each of its assertions holds unchanged.
+const GUARDED = 'guarded'
+const isFrozenRepoPath = path => fence.isFrozenRepoPath(path, GUARDED)
+const isFrozenTestPath = path => fence.isFrozenTestPath(path, GUARDED)
+const isOpenRepoPath = (path, status) => fence.isOpenRepoPath(path, status, GUARDED)
+const frozenPathNext = (path, test) => fence.frozenPathNext(path, test, GUARDED)
+const proposalPathRefusal = (path, status, options = {}) => fence.proposalPathRefusal(path, status, { ...options, level: GUARDED })
+const frozenDiffRefusals = (text, trees = {}) => fence.frozenDiffRefusals(text, { ...trees, level: GUARDED })
+const addedTestFiles = text => fence.addedTestFiles(text, GUARDED)
+const protectedJobRemovals = text => fence.protectedJobRemovals(text, GUARDED)
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const WORKFLOW = readFileSync(join(ROOT, '.github/workflows/proposal-checks.yml'), 'utf8')
@@ -151,7 +164,39 @@ test('only open paths; everything the outside review named is closed and frozen'
     'packages/experimental/webworker-runtime/src/x6/cord-run.ts', 'packages/experimental/webworker-runtime/src/x6/tool-registry.ts',
     'packages/experimental/webworker-runtime/src/x6/menger-run.ts', 'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
     'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts', 'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
+    // The judges' passkey and fingerprint-wait imports, the approval cards and the pins.
+    'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts', 'packages/client/ui-layout/src/client/spatial/apps/identity/webauthn.ts',
+    'packages/client/ui-layout/src/client/spatial/aumlok/aumlok-ceremony.ts', 'packages/client/ui-layout/src/client/spatial/portal/touch-id-timing.ts',
+    'packages/client/ui-layout/src/client/spatial/portal/OrganSetCell.tsx', 'packages/client/ui-layout/src/client/spatial/portal/NightGrantCell.tsx',
+    'packages/client/ui-layout/src/client/spatial/portal/OutwardApprovalCell.tsx', 'packages/client/ui-layout/src/client/spatial/portal/CodeDiffRow.tsx',
+    'packages/experimental/webworker-runtime/src/x6/scion-pins.ts', 'packages/experimental/webworker-runtime/src/x6/voice-organ-pins.ts',
+    // Independent read of an earlier commit: what those cards and the binding ceremony read.
+    'packages/client/ui-layout/src/client/spatial/aumlok/outward-class3.ts', 'packages/client/ui-layout/src/client/spatial/aumlok/night-grant.ts',
+    'packages/client/ui-layout/src/client/spatial/aumlok/organ-set.ts', 'packages/client/ui-layout/src/client/spatial/portal/organ-code-diff.ts',
+    'packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts', 'packages/client/ui-layout/src/client/spatial/aumlok/aumlok-root.ts',
+    // Her whole storage folder is closed by the one pattern again (moved on purpose
+    // from the seven named files and 'storage/*/**' of an earlier commit, which left a NEW file directly in the folder open).
     'packages/experimental/webworker-runtime/src/storage/**'])
+  // Her four thread sync files: open again by exact path only.
+  assert.deepEqual([...OPEN_INSIDE_CLOSED], ['packages/experimental/webworker-runtime/src/storage/thread-writer.ts', 'packages/experimental/webworker-runtime/src/storage/thread-sync.ts',
+    'packages/experimental/webworker-runtime/src/storage/thread-sync-plan.ts', 'packages/experimental/webworker-runtime/src/storage/thread-store-types.ts'])
+  for (const path of OPEN_INSIDE_CLOSED) {
+    // Exact paths, never patterns; each lifts a closed pattern (not a named closed entry) and is inside the open list.
+    assert.equal(/[*?[\]{}!]/.test(path), false, path)
+    assert.equal(CLOSED_INSIDE_OPEN.some(entry => entry.toLowerCase() === path.toLowerCase()), false, path)
+    assert.equal(isFrozenRepoPath(path), false, path)
+    assert.ok(OPEN_PATHS.some(pattern => pattern.endsWith('/**') && path.startsWith(pattern.slice(0, -2))), path)
+    // Review: the lift lifts exactly one closed entry, the storage folder, so a person who later
+    // closes one of the four by any other pattern is not overridden silently.
+    assert.deepEqual(CLOSED_INSIDE_OPEN.filter(entry => globRegExp(entry.toLowerCase()).test(path.toLowerCase())), ['packages/experimental/webworker-runtime/src/storage/**'], path)
+  }
+  // Every file CLOSED_INSIDE_OPEN names is closed in every status and spelling by that list alone (an entry
+  // with a capital matched nothing before: MandateCell.tsx was held only by FROZEN_FILES).
+  for (const entry of CLOSED_INSIDE_OPEN.filter(entry => !entry.includes('*'))) {
+    for (const path of [entry, entry.toLowerCase(), entry.toUpperCase().replace(/\.([A-Z]+)$/, (_, extension) => `.${extension.toLowerCase()}`)]) {
+      for (const status of ['added', 'modified', 'removed']) assert.equal(isOpenRepoPath(path, status), false, `${path} ${status}`)
+    }
+  }
   const named = ['package.json', 'deploy/package.json', 'deploy/cloudflare/package.json', 'deploy/cloudflare/src/package.json', 'deploy/cloudflare/src/__tests__/package.json',
     'scripts/coverage-exempt.ts', 'scripts/coverage-partitions.ts', 'scripts/parallelism.ts', 'scripts/pnpm-invocation.ts', 'packages/shell/pwsh-local/src/resolve.ts',
     'packages/util/http-proxy/src/policy.ts', 'tsconfig.base.json', 'vitest.config.ts', 'vitest.shared.ts', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']
@@ -194,7 +239,7 @@ test('only open paths; everything the outside review named is closed and frozen'
   // A case variant of a closed name or segment is closed too: a case-insensitive disk reads
   // Package.json as package.json, so the Mac and the Linux runner would disagree.
   for (const path of ['packages/client/ui-layout/src/Package.json', 'apps/web/src/TSConfig.json', 'apps/web/src/Node_Modules/x.js', 'apps/web/src/Vite.Config.ts',
-    'apps/web/src/VITEST.setup.ts', 'apps/web/src/.ENV', 'packages/experimental/webworker-runtime/src/Storage/a.ts', 'packages/experimental/webworker-runtime/src/X6/Wasm-Cells.ts']) {
+    'apps/web/src/VITEST.setup.ts', 'apps/web/src/.ENV', 'packages/experimental/webworker-runtime/src/Storage/Idb-Persist.ts', 'packages/experimental/webworker-runtime/src/X6/Wasm-Cells.ts']) {
     for (const status of ['added', 'modified', 'removed']) {
       assert.equal(isOpenRepoPath(path, status), false, `${path} ${status}`)
       assert.notEqual(proposalPathRefusal(path, status), null, `${path} ${status}`)
@@ -239,6 +284,190 @@ function specifiers(source) {
 }
 /** Where a relative specifier of `from` points, as a repository path without extension guessing (prefix compare). */
 const resolved = (from, specifier) => join(dirname(from), specifier).split('\\').join('/')
+
+test('her four thread sync files are open to her proposals by exact path; the rest of her storage folder is closed by default', () => {
+  const folder = 'packages/experimental/webworker-runtime/src/storage'
+  const thread = ['thread-store-types.ts', 'thread-sync-plan.ts', 'thread-sync.ts', 'thread-writer.ts'].map(name => `${folder}/${name}`)
+  const whole = ['active.ts', 'idb-persist.ts', 'image-gzip.ts', 'memory.ts', 'paths.ts', 'tar.ts', 'types.ts'].map(name => `${folder}/${name}`)
+  // Every file the folder has today is one of the four (open) or one of the seven whole-store files (closed); a file that
+  // lands there later is closed by the folder pattern until a person opens it by its exact path.
+  const today = tracked(folder).sort()
+  assert.deepEqual(today, [...thread, ...whole].sort())
+  for (const path of thread) {
+    assert.ok(today.includes(path), path)
+    for (const status of ['added', 'modified', 'removed']) assert.equal(proposalPathRefusal(path, status), null, `${path} ${status}`)
+  }
+  // Her whole-store code and the rest stay closed, in any case spelling, and any subfolder is closed by pattern.
+  for (const path of [...whole, `${folder}/IDB-Persist.ts`, `${folder}/Memory.ts`, `${folder}/sub/x.ts`, `${folder}/thread/x.ts`]) {
+    for (const status of ['added', 'modified', 'removed']) {
+      assert.equal(isOpenRepoPath(path, status), false, `${path} ${status}`)
+      assert.deepEqual(proposalPathRefusal(path, status), { code: 'REPO_PATH_NOT_OPEN', next: PATH_NOT_OPEN_NEXT }, `${path} ${status}`)
+    }
+  }
+  // A made-up NEW file directly in the folder, any name, is closed (it was open from
+  // an earlier commit until this pin: moved on purpose); so is a new file in a new subfolder, and a case variant of each of the four
+  // (the open match is exact and case-sensitive: a case-insensitive disk would make Thread-Writer.ts a second spelling).
+  const variants = thread.flatMap(path => {
+    const name = path.slice(folder.length + 1)
+    return [name.toUpperCase(), name[0].toUpperCase() + name.slice(1), name.replace(/(^|-)([a-z])/g, (_, dash, c) => dash + c.toUpperCase()), name.replace(/\.ts$/, '.TS')]
+      .map(spelling => `${folder}/${spelling}`)
+  })
+  assert.ok(variants.includes(`${folder}/Thread-Writer.ts`))
+  // Review: a PARENT-folder case variant of the four is closed too (the lift compares the whole raw path).
+  const parents = ['packages/experimental/webworker-runtime/src/Storage/thread-writer.ts', 'packages/experimental/webworker-runtime/src/STORAGE/thread-sync.ts',
+    'packages/experimental/webworker-runtime/Src/storage/thread-sync-plan.ts', 'Packages/experimental/webworker-runtime/src/storage/thread-store-types.ts']
+  for (const path of [`${folder}/brand-new-file.ts`, `${folder}/other.ts`, `${folder}/x/y.ts`, `${folder}/thread-writer/y.ts`, `${folder}/thread-writer.ts.bak`,
+    `${folder}/thread-writer.tsx`, `${folder}/thread-writer.js`, `${folder}/index.ts`, ...variants, ...parents]) {
+    for (const status of ['added', 'modified', 'removed']) {
+      assert.equal(isOpenRepoPath(path, status), false, `${path} ${status}`)
+      assert.deepEqual(proposalPathRefusal(path, status), { code: 'REPO_PATH_NOT_OPEN', next: PATH_NOT_OPEN_NEXT }, `${path} ${status}`)
+    }
+  }
+  // CI's diff judgement agrees: a new file there is refused, the four are free.
+  const z = entries => entries.map(([status, path]) => `${status}\u0000${path}\u0000`).join('')
+  assert.deepEqual(frozenDiffRefusals(z([['A', `${folder}/brand-new-file.ts`], ['M', `${folder}/thread-writer.ts`], ['A', `${folder}/x/y.ts`]])),
+    [`REPO_PATH_NOT_OPEN A ${folder}/brand-new-file.ts`, `REPO_PATH_NOT_OPEN A ${folder}/x/y.ts`])
+  // Everything else under her runtime keeps today's answer.
+  for (const path of ['packages/experimental/webworker-runtime/src/worker-host.ts', 'packages/experimental/webworker-runtime/src/x6/self-state.ts',
+    'packages/experimental/webworker-runtime/src/storage-other/x.ts', 'packages/experimental/webworker-runtime/src/x6/storage/x.ts']) {
+    for (const status of ['added', 'modified', 'removed']) assert.equal(proposalPathRefusal(path, status), null, `${path} ${status}`)
+  }
+})
+
+/**
+ * Where a relative import lands in the repository: the exact file, the file with a source extension (or a `.js` written
+ * for a `.ts`), or the folder's index. null when it lands on no tracked file.
+ */
+function resolveImport(from, specifier, files) {
+  const base = join(dirname(from), specifier.split('?')[0]).split('\\').join('/'), stem = base.replace(/\.(?:mjs|cjs|js|jsx)$/, '')
+  const candidates = [base]
+  for (const extension of ['.ts', '.tsx', '.mts', '.mjs', '.js', '.jsx', '.d.ts']) candidates.push(base + extension, stem + extension)
+  for (const extension of ['.ts', '.tsx', '.mjs', '.js']) candidates.push(`${base}/index${extension}`)
+  return candidates.find(candidate => files.has(candidate)) ?? null
+}
+
+/**
+ * Where a workspace package name lands (independent read of an earlier commit, S1): tsconfig.base.json `paths`, the facade tsc and
+ * vite-tsconfig-paths resolve the workspace's own `@deepseek-ai/*` names through (whole-line comments stripped; an exact
+ * key first, else the `*` key with the longest prefix). A repository path, or null for a name it does not map (third party).
+ */
+const TS_PATHS = JSON.parse(readFileSync(join(ROOT, 'tsconfig.base.json'), 'utf8').replace(/^\s*\/\/.*$/gm, '')).compilerOptions.paths
+function resolvePackage(specifier) {
+  const plain = target => target.replace(/^\.\//, '')
+  if (Object.hasOwn(TS_PATHS, specifier)) return plain(TS_PATHS[specifier][0])
+  let best = null
+  for (const [key, [target]] of Object.entries(TS_PATHS)) {
+    const star = key.indexOf('*')
+    if (star === -1) continue
+    const prefix = key.slice(0, star), suffix = key.slice(star + 1)
+    if (specifier.length < prefix.length + suffix.length || !specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue
+    if (best === null || prefix.length > best.prefix.length) best = { prefix, target: target.replace('*', specifier.slice(prefix.length, specifier.length - suffix.length)) }
+  }
+  return best === null ? null : plain(best.target)
+}
+
+const S = 'packages/client/ui-layout/src/client/spatial/', W = 'packages/experimental/webworker-runtime/src/'
+const full = short => short.startsWith('S:') ? S + short.slice(2) : short.startsWith('W:') ? W + short.slice(2) : short
+/**
+ * The reach of the frozen judges that is still OPEN to her proposals, pinned edge by edge (importer: what it
+ * imports). The whole transitive closure is about 60 files (ball-loader.ts alone imports 27 of her runtime files, among them
+ * self-state.ts and her thread sync) and takes in ordinary UI she edits (the primitives, WorkSurface.tsx, SovereigntySurface.tsx),
+ * so closing it is a person's decision, not the fence's: this list is what a person has not yet decided. It may only
+ * shrink. A new edge from any closed file to an open one fails the check below.
+ */
+const KNOWN_OPEN_REACH = {
+  'W:x6/ball-loader.ts': ['W:x6/retention-suite-boot.ts', 'W:x6/id-promotion-budget.ts', 'W:x6/head-socket-telemetry.ts', 'W:x6/skill-record.ts', 'W:x6/scion.ts',
+    'W:x6/scion-growth.ts', 'W:module-system/module-loader.ts', 'W:module-system/posix-path.ts', 'W:x6/wake-loop.ts', 'W:x6/write-set-inventory.ts',
+    'W:x6/capability-index.ts', 'W:x6/host-facts.ts', 'W:x6/self-state.ts', 'W:x6/self-check.ts', 'W:x6/exec-tool.ts', 'W:x6/repo-echo.ts', 'W:x6/nucleus-shadow.ts',
+    'W:idle-fetch.ts', 'W:x6/pentora-carry.ts', 'W:x6/pentora-epistemic-tool.ts', 'W:x6/browser-estate.ts', 'W:x6/thread-reader.ts', 'W:x6/voice-map.ts',
+    'W:x6/voice-marks.ts', 'W:x6/voice-read-only.ts', 'W:storage/thread-sync.ts', 'W:x6/transition-context.ts'],
+  'W:x6/cord-run.ts': ['W:x6/skill-record.ts'],
+  'W:x6/tool-registry.ts': ['W:module-system/module-loader.ts', 'W:x6/browser-estate.ts', 'W:x6/voice-read-only.ts'],
+  'S:portal/MandateCell.tsx': ['S:primitives/index.ts', 'S:portal/build-notice.ts'],
+  'S:portal/RepoProposalCell.tsx': ['S:primitives/index.ts', 'S:work/autonomy.ts', 'S:portal/notices.ts'],
+  'S:apps/identity/host.ts': ['S:x5/rpc.ts'],
+  'S:apps/identity/webauthn.ts': ['S:x5/rpc.ts'],
+  'S:aumlok/aumlok-ceremony.ts': ['S:aumlok/binding-bridge.ts'],
+  'S:portal/touch-id-timing.ts': ['S:portal/build-notice.ts'],
+  'S:portal/OrganSetCell.tsx': ['S:primitives/index.ts', 'S:portal/build-notice.ts'],
+  'S:portal/NightGrantCell.tsx': ['S:primitives/index.ts', 'S:portal/build-notice.ts'],
+  'S:portal/OutwardApprovalCell.tsx': ['S:aumlok/outward-sent.ts', 'S:primitives/index.ts', 'S:work/autonomy.ts', 'S:work/WorkSurface.tsx'],
+  'S:portal/CodeDiffRow.tsx': ['S:primitives/index.ts', 'S:work/WorkSurface.tsx', 'S:portal/SovereigntySurface.tsx'],
+  // Independent read of an earlier commit: the one open import of the six closed then; a type only (the injected reader's shape).
+  'S:aumlok/outward-class3.ts': ['S:work/WorkSurface.tsx'],
+  'W:storage/memory.ts': ['W:module-system/posix-path.ts', 'W:image-layout.ts'],
+  'W:storage/idb-persist.ts': ['W:module-system/module-loader.ts'],
+}
+
+test('what the frozen judges import is closed too, transitively; the open reach left is pinned edge by edge', () => {
+  const files = new Set(tracked())
+  const closed = path => proposalPathRefusal(path, 'modified') !== null
+  // The judges, as this file names them: the frozen list and its organ sources, the files closed inside the open list by
+  // name, and the deploy gate's own scripts. Tests are not judges (a frozen test may import open code it checks).
+  const judges = [...FROZEN_FILES, ...FROZEN_ORGAN_FILES, ...CLOSED_INSIDE_OPEN.filter(entry => !entry.includes('*')), ...tracked(...FROZEN_DIRECTORIES)]
+    .filter(path => SOURCE.test(path) && files.has(path) && !/\.(?:test|spec)\.[a-z]+$/.test(path))
+  assert.ok(judges.length > 60, String(judges.length))
+  // Walk every relative import (static, dynamic, require, type-only) from the judges through every CLOSED file it reaches:
+  // a closed import is a judge too, so its own imports are checked in turn. An import that lands on an open file is an edge.
+  // A workspace package name is judged the same way at the source file it maps to; a third-party name is skipped, and an
+  // @deepseek-ai/ name the map does not hold is an error (it would be a workspace import the walk cannot see).
+  const edges = [], unresolved = [], unmapped = [], byName = new Set(), seen = new Set(), queue = [...new Set(judges)]
+  while (queue.length > 0) {
+    const from = queue.shift()
+    if (seen.has(from)) continue
+    seen.add(from)
+    for (const specifier of specifiers(readFileSync(join(ROOT, from), 'utf8'))) {
+      let target
+      if (specifier.startsWith('.')) target = resolveImport(from, specifier, files)
+      else {
+        const mapped = resolvePackage(specifier)
+        if (mapped === null) { if (specifier.startsWith('@deepseek-ai/')) unmapped.push(`${from} -> ${specifier}`); continue }
+        target = resolveImport('package.json', mapped, files)
+        if (target !== null) byName.add(`${specifier} -> ${target}`)
+      }
+      if (target === null) { unresolved.push(`${from} -> ${specifier}`); continue }
+      if (!closed(target)) edges.push(`${from} -> ${target}`)
+      else if (SOURCE.test(target)) queue.push(target)
+    }
+  }
+  assert.deepEqual(unmapped, [])
+  // The workspace names closed files import today, as resolved, transitively (each lands on a closed file, so it is walked
+  // in turn). A new one fails here so a person sees it; an open target would fail as an edge below.
+  assert.deepEqual([...byName].sort(), ['@deepseek-ai/cordis -> vendor/cordis/src/index.ts', '@deepseek-ai/cosmokit -> vendor/cosmokit/src/index.ts',
+    '@deepseek-ai/dsh-attachment -> packages/attachment/attachment/src/index.ts', '@deepseek-ai/dsh-brand -> packages/util/brand/src/index.ts',
+    '@deepseek-ai/dsh-llm -> packages/llm/llm/src/index.ts', '@deepseek-ai/dsh-package-manifest -> packages/util/package-manifest/src/index.ts',
+    '@deepseek-ai/dsh-session/types -> packages/core/session/src/types.ts', '@deepseek-ai/dsh-timeout -> packages/util/timeout/src/index.ts',
+    '@deepseek-ai/dsh-typert-protocol -> packages/typert/protocol/src/index.ts', '@deepseek-ai/dsh-util-crypto -> packages/util/crypto/src/index.ts',
+    '@deepseek-ai/dsh-util-values -> packages/util/values/src/index.ts', '@deepseek-ai/schemastery -> vendor/schemastery/src/index.ts'])
+  for (const pair of byName) assert.equal(closed(pair.split(' -> ')[1]), true, pair)
+  const known = Object.entries(KNOWN_OPEN_REACH).flatMap(([from, targets]) => targets.map(target => `${full(from)} -> ${full(target)}`))
+  const found = [...new Set(edges)]
+  const added = found.filter(edge => !known.includes(edge)), gone = known.filter(edge => !found.includes(edge))
+  // Each violating edge is printed: a NEW one must be closed (or a person adds it above); a GONE one
+  // is removed from the list so it stays exact.
+  assert.deepEqual(added, [], `a frozen judge imports a file open to her proposals (importer -> imported):\n${added.join('\n')}`)
+  assert.deepEqual(gone, [], `pinned open reach that is no longer found; remove it from KNOWN_OPEN_REACH:\n${gone.join('\n')}`)
+  // the review's named edges are closed now, and nothing in the pinned reach is a pin or an approval card.
+  for (const target of ['S:apps/identity/host.ts', 'S:apps/identity/webauthn.ts', 'S:aumlok/aumlok-ceremony.ts', 'S:portal/touch-id-timing.ts', 'S:portal/OrganSetCell.tsx',
+    'S:portal/NightGrantCell.tsx', 'S:portal/OutwardApprovalCell.tsx', 'S:portal/CodeDiffRow.tsx', 'W:x6/scion-pins.ts', 'W:x6/voice-organ-pins.ts',
+    // Independent read of an earlier commit: what those cards and the binding ceremony take their words, terms, diff and key from.
+    'S:aumlok/outward-class3.ts', 'S:aumlok/night-grant.ts', 'S:aumlok/organ-set.ts', 'S:portal/organ-code-diff.ts', 'S:aumlok/head-promotion.ts', 'S:aumlok/aumlok-root.ts']) {
+    assert.ok(files.has(full(target)), target)
+    for (const status of ['added', 'modified', 'removed']) {
+      assert.deepEqual(proposalPathRefusal(full(target), status), { code: 'REPO_PATH_NOT_OPEN', next: PATH_NOT_OPEN_NEXT }, `${target} ${status}`)
+    }
+    assert.equal(known.some(edge => edge.endsWith(` -> ${full(target)}`)), false, target)
+  }
+  assert.equal(known.some(edge => /-pins\.ts$|Cell\.tsx$|CodeDiffRow\.tsx$/.test(edge)), false)
+  // What lands on no tracked file from the importer's folder: the build output the preview build reads (not in the repo), and
+  // the esbuild entry test-browser-json.mjs writes with resolveDir at the repository root; those five land at the root, on
+  // files closed by default (outside the open list), which is checked here.
+  const rooted = ['packages/core/tools/src/json-schema.ts', 'packages/core/tools/src/schema.ts', 'packages/ptc-runtime/ptc-runtime-node/src/json-wire.ts',
+    'packages/extensions/cordis-host-runner/src/guard.ts', 'packages/workflow/workflow-ptc/src/guest-source.ts']
+  assert.deepEqual(unresolved, ['server/build-preview.mjs -> ../packages/experimental/webworker-runtime/lib/index.js',
+    ...rooted.map(path => `deploy/ci/test-browser-json.mjs -> ./${path}`)])
+  for (const path of rooted) { assert.ok(files.has(path), path); assert.equal(closed(path), true, path) }
+})
 
 test('under deploy/** NOTHING is open except her relay tool, NEW files of her own folder and her new auma-*.test.mjs files', () => {
   const paths = tracked('deploy')
@@ -506,8 +735,9 @@ test('proposal-checks.yml: read-only, no secret, pinned actions, the fence first
   assert.match(checks, /main\\u0027s own baseline is red: /)
 })
 
-/** A throwaway repository: `main` holds this checkout's frozen-paths.mjs plus a few files; refs/remotes/origin/main points at it. */
-function repository() {
+/** A throwaway repository: `main` holds this checkout's frozen-paths.mjs plus a few files; refs/remotes/origin/main points at it.
+ * Main's copy carries the door level given (the guarded tests pin 'guarded'; the line must be there to set). */
+function repository(level = GUARDED) {
   const dir = mkdtempSync(join(tmpdir(), 'frozen-paths-')), temp = join(dir, '.runner-temp'), work = join(dir, 'work')
   mkdirSync(temp); mkdirSync(work)
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.invalid',
@@ -516,7 +746,9 @@ function repository() {
   const put = (path, text) => { mkdirSync(dirname(join(work, path)), { recursive: true }); writeFileSync(join(work, path), text) }
   git('init', '-q', '-b', 'main')
   mkdirSync(join(work, 'deploy/ci'), { recursive: true })
-  copyFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), join(work, 'deploy/ci/frozen-paths.mjs'))
+  const fenceSource = readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8'), levelLine = /^export const REPO_DOOR_LEVEL = '(?:open|guarded)'$/m
+  assert.match(fenceSource, levelLine)
+  writeFileSync(join(work, 'deploy/ci/frozen-paths.mjs'), fenceSource.replace(levelLine, `export const REPO_DOOR_LEVEL = '${level}'`))
   copyFileSync(join(ROOT, 'deploy/ci/retention.mjs'), join(work, 'deploy/ci/retention.mjs'))
   put('deploy/cloudflare/src/__tests__/old.test.mjs', 'old\n'); put('server/fixture.mjs', 'old\n'); put('deploy/cloudflare/src/fixture.mjs', 'old\n')
   put('deploy/cloudflare/src/crew-relay-tool.mjs', 'old\n')
@@ -626,4 +858,109 @@ test('the outside review\'s three spellings are red in every protected job: her 
       }
     } finally { repo.remove() }
   }
+})
+
+// ---- The door level ----
+const OPEN_CASES = ['deploy/cloudflare/src/worker.mjs', '.github/workflows/proposal-checks.yml', 'deploy/ci/frozen-paths.mjs',
+  'deploy/cloudflare/src/__tests__/repo-frozen-paths.test.mjs', 'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx',
+  'packages/experimental/webworker-runtime/src/storage/idb-persist.ts', 'packages/experimental/webworker-runtime/src/x6/ball-loader.ts',
+  'mirror/home/auma/seed/organs/seed-judge.js', 'mirror/home/auma/seed/receipts.v3.jsonl', 'package.json', 'pnpm-lock.yaml', 'server/build-preview.mjs',
+  'packages/experimental/webworker-runtime/src/x6/scion-pins.ts', 'packages/experimental/webworker-runtime/tests/x6/large-store-boot.spec.ts',
+  'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts', 'vitest.config.ts', 'AGENTS.md']
+
+test('one level line, default open; the stricter guarded level is kept built', () => {
+  assert.equal(REPO_DOOR_LEVEL, 'open')
+  assert.deepEqual([...REPO_DOOR_LEVELS], ['open', 'guarded'])
+  assert.equal(fence.doorLevel('open'), 'open')
+  for (const odd of ['guarded', 'Open', '', undefined, null, 'wide']) assert.equal(fence.doorLevel(odd), 'guarded', String(odd))
+  const source = readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8')
+  assert.equal(source.match(/^export const REPO_DOOR_LEVEL = /gm).length, 1)
+  assert.match(source, /The owner changes this line\./)
+  assert.ok(PROPOSAL_PATH_NEXTS.includes(SECRET_PATH_NEXT))
+  assert.doesNotMatch(SECRET_PATH_NEXT, /token/i)
+})
+
+test('at open every path is hers to add, change, delete or rename; at guarded the same paths answer as before', () => {
+  for (const path of OPEN_CASES) {
+    for (const status of ['added', 'modified', 'removed']) {
+      assert.equal(fence.proposalPathRefusal(path, status), null, `${path} ${status}`)
+      assert.equal(fence.proposalPathRefusal(path, status, { level: 'open' }), null, `${path} ${status}`)
+      assert.equal(fence.isOpenRepoPath(path, status, 'open'), true, path)
+    }
+    assert.equal(fence.isFrozenRepoPath(path, 'open'), false, path); assert.equal(fence.isFrozenTestPath(path, 'open'), false, path)
+    // The guarded level refuses each of them, unchanged.
+    assert.notEqual(fence.proposalPathRefusal(path, 'modified', { level: 'guarded' }), null, path)
+  }
+  const z = entries => entries.map(([status, path]) => `${status}\u0000${path}\u0000`).join('')
+  assert.deepEqual(fence.frozenDiffRefusals(z(OPEN_CASES.map(path => ['M', path]))), [])
+  assert.deepEqual(fence.frozenDiffRefusals(z([['D', 'deploy/cloudflare/src/__tests__/old.test.mjs'], ['A', 'deploy/ci/new.mjs']])), [])
+  assert.ok(frozenDiffRefusals(z(OPEN_CASES.map(path => ['M', path]))).length >= OPEN_CASES.length - 1)
+})
+
+test('at open a secret-shaped path, a path that is not plain or canonical, a case twin and an installed-package folder stay refused', () => {
+  for (const path of ['.env', 'server/.env', 'apps/web/src/.npmrc', 'deploy/.dev.vars', 'mirror/home/auma/private/x.md', 'server/owner-key.mjs', 'docs/keys/a.md',
+    'deploy/cloudflare/src/secret.mjs', 'scripts/credentials.json', 'apps/web/src/id_ed25519', 'server/password.txt', 'apps/vault/x.ts', '.GitHub/workflows/x.yml']) {
+    assert.equal(isSecretShapedRepoPath(path), true, path)
+    for (const status of ['added', 'modified', 'removed']) assert.deepEqual(fence.proposalPathRefusal(path, status), { code: 'REPO_PATH_NOT_OPEN', next: SECRET_PATH_NEXT }, path)
+  }
+  assert.deepEqual(fence.proposalPathRefusal('apps/web/node_modules/x.js', 'added'), { code: 'REPO_PATH_NOT_OPEN', next: PATH_NOT_OPEN_NEXT })
+  for (const path of ['deploy//ci/x.mjs', 'deploy/../x', 'deploy/./x', 'deploy/ci./x', 'deploy/%2e/x', 'deploy\\x', '/deploy/x', 'deploy/cloudflare/src/\u017figned-action.mjs',
+    'docs/auma/cafe\u0301.md', ' deploy/x', '', null, 7]) {
+    assert.equal(fence.proposalPathRefusal(path, 'added')?.code, 'REPO_PATH_NOT_PLAIN', JSON.stringify(path))
+  }
+  assert.equal(fence.proposalPathRefusal('deploy/cloudflare/src/Worker.mjs', 'added', { twin: true })?.code, 'REPO_PATH_NOT_PLAIN')
+  for (const path of ['.github/workflows/x.yml', '.github/CODEOWNERS', 'deploy/cloudflare/src/passkey-devices.mjs', 'apps/web/src/spatial-tokens.css']) {
+    assert.equal(isSecretShapedRepoPath(path), path.endsWith('spatial-tokens.css'), path)
+  }
+})
+
+test('the CI fence at open (main says open): her change to the workflows, the fence, a test and the edge passes; a credential file and a twin are refused', () => {
+  const cases = [
+    ['the workflows, the fence, an edge module and a test main has', repo => {
+      repo.put('.github/workflows/x.yml', 'on: push\n'); repo.put('deploy/ci/frozen-paths.mjs', 'export const frozenDiffRefusals = () => []\n')
+      repo.put('deploy/cloudflare/src/fixture.mjs', 'new\n'); repo.put('deploy/cloudflare/src/__tests__/old.test.mjs', 'changed\n'); repo.put('server/fixture.mjs', 'new\n')
+    }, 0, []],
+    ['a delete of a test main has', repo => repo.git('rm', '-q', 'deploy/cloudflare/src/__tests__/old.test.mjs'), 0, []],
+    ['a credential file', repo => repo.put('server/.env', 'X=1\n'), 1, ['REPO_PATH_NOT_OPEN A server/.env']],
+    ['a case twin', repo => repo.indexOnly('deploy/cloudflare/src/Crew-Relay-Tool.mjs', 'x\n'), 1, ['REPO_PATH_NOT_PLAIN A deploy/cloudflare/src/Crew-Relay-Tool.mjs']],
+  ]
+  for (const [name, change, status, refused] of cases) {
+    const repo = repository('open')
+    try {
+      change(repo); if (!repo.skipAdd) repo.git('add', '-A'); repo.git('commit', '-q', '-m', name)
+      const result = repo.judge()
+      assert.equal(result.status, status, `${name}: ${result.stdout}${result.stderr}`)
+      for (const line of refused) assert.ok(result.stdout.includes(line), `${name}: ${result.stdout}`)
+      // The level step reads main's copy the fence step wrote: open here, guarded for a guarded main.
+      if (status === 0) {
+        const level = spawnSync('bash', ['-c', stepScript(WORKFLOW, "Main's door level")], { cwd: repo.work, env: { ...process.env, RUNNER_TEMP: join(repo.work, '..', '.runner-temp'), GITHUB_OUTPUT: join(repo.work, '..', '.runner-temp', 'out') }, encoding: 'utf8' })
+        assert.equal(level.status, 0, level.stderr); assert.match(level.stdout, /door level: open/)
+        assert.match(readFileSync(join(repo.work, '..', '.runner-temp', 'out'), 'utf8'), /^level=open$/m)
+      }
+    } finally { repo.remove() }
+  }
+  const guarded = repository('guarded')
+  try {
+    guarded.put('server/fixture.mjs', 'new\n'); guarded.git('add', '-A'); guarded.git('commit', '-q', '-m', 'guarded')
+    assert.equal(guarded.judge().status, 1)
+    guarded.git('reset', '-q', '--hard', 'refs/remotes/origin/main'); guarded.put('deploy/cloudflare/src/crew-relay-tool.mjs', 'new\n'); guarded.git('add', '-A'); guarded.git('commit', '-q', '-m', 'open file')
+    assert.equal(guarded.judge().status, 0)
+    const level = spawnSync('bash', ['-c', stepScript(WORKFLOW, "Main's door level")], { cwd: guarded.work, env: { ...process.env, RUNNER_TEMP: join(guarded.work, '..', '.runner-temp'), GITHUB_OUTPUT: join(guarded.work, '..', '.runner-temp', 'out') }, encoding: 'utf8' })
+    assert.equal(level.status, 0, level.stderr); assert.match(level.stdout, /door level: guarded/)
+  } finally { guarded.remove() }
+})
+
+test('proposal-checks.yml at open runs the fence alone and checks needs only it; at guarded every job, as before', () => {
+  const fenceJob = jobText(WORKFLOW, 'fence')
+  assert.match(fenceJob, /outputs:\n {6}main: \$\{\{ steps\.main\.outputs\.sha \}\}\n {6}level: \$\{\{ steps\.level\.outputs\.level \}\}\n/)
+  assert.deepEqual(stepNames(fenceJob), ['Checkout the pushed proposal commit', FENCE_STEP, "Main's commit for the other jobs", "Main's door level"])
+  for (const name of ['baseline', 'new-node-tests', 'new-vitest-tests']) {
+    assert.match(jobText(WORKFLOW, name), /\n {4}needs: fence\n {4}if: \$\{\{ needs\.fence\.outputs\.level != 'open' \}\}\n/, name)
+  }
+  // edge, ui and boot need the baseline, so they are skipped with it.
+  for (const name of ['edge', 'ui', 'boot']) assert.match(jobText(WORKFLOW, name), /\n {4}needs: \[fence, baseline\]\n/, name)
+  const checks = jobText(WORKFLOW, 'checks')
+  assert.match(checks, /LEVEL: \$\{\{ needs\.fence\.outputs\.level \}\}/)
+  assert.match(checks, /const required = process\.env\.LEVEL === "open" \? \{ fence: "FENCE" \}\n\s+: \{ fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" \}/)
+  assert.match(stepScript(WORKFLOW, "Main's door level"), /fence\.REPO_DOOR_LEVEL === "open" \? "open" : "guarded"/)
 })

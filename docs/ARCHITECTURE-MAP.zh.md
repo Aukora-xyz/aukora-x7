@@ -111,12 +111,12 @@ flowchart TD
 - 节点密钥，由七个词封存的根派生，仅在绑定的通行密钥断言之后才释放（`spatial/aumlok/aumlok-root.ts`）。收据检查点密钥是她的 home 中的一个 JWK 文件（`seed-receipts.js`）。
 - 挂载本地变更。本地 `tree_patch` 在边缘回答之前就挂载，所以标签页可以运行边缘拒绝过的 organ；选定哪个 ball 仍由边缘决定。
 
-**模型被信任做什么。** 没有任何许可权。模型在标签页内写文本和工具调用。它不持有供应商密钥（门让宿主添加只有宿主持有的密钥，`model-doors.ts`），不能批准，它的输出要到达 head，只能经过与其他提案相同的边缘检查。在随附的设置 `WAKE_ACTS_ENABLED = "0"` 下，云端唤醒的模型轮次有只读工具，以及两个追加内容的工具：一个向她的愿望追加一条用她自己的话写的笔记，一个向她 home 中的一个检查点文件追加一个固定格式的检查点；它不写任何代码，也不暂存、不批准、不发布任何东西（`cloud-wake-tools.mjs`、`head-do.mjs`）。设为 `"1"`，并且只对指名了所有者一份有效授权的愿望，还会提供六个行动工具：创建她的一个分支、向一个分支提交、对一个分支应用补丁、在一个分支上启动一个运行器任务、暂存一张提案卡片，以及发表一条 Linear 评论。这六个工具都不批准、不合并，也不发布 head。语音轮次从不授权智能体（`voice-director.mjs`）。
+**模型被信任做什么。** 没有任何许可权。模型在标签页内写文本和工具调用。它不持有供应商密钥（门让宿主添加只有宿主持有的密钥，`model-doors.ts`），不能批准，它的输出要到达 head，只能经过与其他提案相同的边缘检查。在没有提供行动的情况下，云端唤醒的模型轮次有只读工具，以及一个追加内容的工具：向她的愿望追加一条用她自己的话写的笔记（另一个工具，向她 home 中的一个文件追加一个固定格式的检查点，已暂停，不再提供，`CLOUD_WAKE_CHECKPOINT_PAUSED`）；它不写任何代码，也不暂存、不批准、不发布任何东西（`cloud-wake-tools.mjs`、`head-do.mjs`）。随附的设置是 `WAKE_ACTS_ENABLED = "1"`：对指名了所有者一份有效授权的愿望，还会提供六个行动工具：创建她的一个分支、向一个分支提交、对一个分支应用补丁、在一个分支上启动一个运行器任务、暂存一张提案卡片，以及发表一条 Linear 评论。这六个工具都不批准、不合并，也不发布 head。语音轮次从不授权智能体（`voice-director.mjs`）。
 
 **委托许可存在于哪里。**
 - 夜间授权（`night-grant.mjs`、`night-grant.test.mjs`）：一次通行密钥批准；至多 12 小时（`NIGHT_GRANT_MAX_LIFETIME_MS`），至多使用 12 次（`NIGHT_GRANT_MAX_USES`），每次至多 8 个 organ（`NIGHT_GRANT_MAX_ORGANS_PER_USE`）；范围 `add-or-update-non-governance-organs`；针对当前 head 和 epoch 签发；可撤销；治理 id 从不涵盖。
 - 所有者登录会话：至多 8 小时（`aumlok.mjs` 中的 `AUMLOK_SIGNIN_LIMITS`），至多 8 个会话；它不是批准，但它确实允许上述单 organ 旁路：它的范围可以列出至多 128 个普通 organ，每次晋升改动一个（`server/ball-transition.mjs` 中的 `ownerSessionPermitsTransition`，`head-do.mjs` 中的 `effectiveOwnerSession`）。
-- 云端唤醒：每步 4 轮模型调用、8 次工具调用、30 秒（`CLOUD_WAKE_LIMITS`）。只有当 `WAKE_EXECUTOR_ENABLED` 为 `"1"` 时它才运行，随附的 `deploy/cloudflare/wrangler.toml` 设的就是这个值。它的工具读取，并向她的愿望追加一条笔记、向她的 home 追加一个检查点；只有当 `WAKE_ACTS_ENABLED` 为 `"1"` 且愿望指名了所有者的一份有效授权时，才提供行动工具。随附的文件设的是 `"0"`。
+- 云端唤醒：每步 4 轮模型调用、8 次工具调用、30 秒（`CLOUD_WAKE_LIMITS`）。只有当 `WAKE_EXECUTOR_ENABLED` 为 `"1"` 时它才运行，随附的 `deploy/cloudflare/wrangler.toml` 设的就是这个值。它的工具读取，并向她的愿望追加一条笔记（向她的 home 追加检查点已暂停）；只有当 `WAKE_ACTS_ENABLED` 为 `"1"` 且愿望指名了所有者的一份有效授权时，才提供行动工具。随附的文件设的是 `"1"`。
 
 **绝不能混淆的事。**
 - 模型不是所有者。
@@ -130,4 +130,4 @@ flowchart TD
 
 ## 每一层来自哪里
 
-本检出的大部分是继承来的。`packages/` 的大部分是 DeepSeek Harness 运行时（MIT，[LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)），organ 所构建于其上的插件框架是 Cordis，随源码放在 `vendor/` 中。Aukora 自己的层集中在 `deploy/cloudflare/src/`（边缘）、`server/`、`mirror/home/auma/seed/`（organ 和 Pearl）、`packages/experimental/webworker-runtime/src/x6/`（加载器、scion 和 cell 加载器）、`packages/client/ui-layout/src/client/spatial/`（应用）和 `apps/web/public/cells/`（cell：二进制文件，其中六个旁边有 WAT 源码）中。按项目根据自己的、未公开的历史做过一次、尚无他人重复的一种统计（UNVERIFIED），非 vendor 文本行的 14.6% 和代码行的 18.1% 是 Aukora 自己的。方法、表格和没有源码的文件见 [SIZE-AND-ORIGIN.zh.md](SIZE-AND-ORIGIN.zh.md)。
+本检出的大部分是继承来的。`packages/` 的大部分是 DeepSeek Harness 运行时（MIT，[LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)），organ 所构建于其上的插件框架是 Cordis，随源码放在 `vendor/` 中。Aukora 自己的层集中在 `deploy/cloudflare/src/`（边缘）、`server/`、`mirror/home/auma/seed/`（organ 和 Pearl）、`packages/experimental/webworker-runtime/src/x6/`（加载器、scion 和 cell 加载器）、`packages/client/ui-layout/src/client/spatial/`（应用）和 `apps/web/public/cells/`（cell：二进制文件，其中六个旁边有 WAT 源码）中。按项目根据自己的、未公开的历史做过一次、尚无他人重复的一种统计（UNVERIFIED），非 vendor 文本行的 14.9% 和代码行的 18.5% 是 Aukora 自己的。方法、表格和没有源码的文件见 [SIZE-AND-ORIGIN.zh.md](SIZE-AND-ORIGIN.zh.md)。

@@ -44,7 +44,8 @@ const gateCi = ({ runs = [gateRun()], jobs = GATE_JOBS.map(name => gateJob(name)
 /** Both workflows passed on the exact proposal head: merges need it (cloud-brokers mergeProposal reads CI before approval). */
 const PASSED_CI = gateCi()
 
-function fixture({ before = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'old\n' }, after = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'new\n' }, access = owner, hook, treeOverride, ci, storage, bootstrap = BOOTSTRAP, now = () => NOW, env: extraEnv = {} } = {}) {
+// The default door level is 'open'; these tests pin the GUARDED level explicitly (`level`).
+function fixture({ before = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'old\n' }, after = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'new\n' }, access = owner, hook, treeOverride, ci, storage, bootstrap = BOOTSTRAP, now = () => NOW, env: extraEnv = {}, level = 'guarded' } = {}) {
   const refs = new Map([['main', BASE], [BRANCH, HEAD]]), calls = [], tokens = new Map(), proposals = [], outcomes = []
   let staged = null, attempt = null, attemptOwner = null, consumed = 0, currentRequest
   const env = { GITHUB_TOKEN: 'synthetic-token-value', OWNER_EMAIL: EMAIL, PUBLIC_HOST: 'fixture.example', SOURCE_REVISION: BASE, ...extraEnv }
@@ -131,7 +132,7 @@ function fixture({ before = { 'deploy/cloudflare/src/crew-relay-tool.mjs': 'old\
     },
     async request(input, { route = '/_host/repo', token, signal } = {}) {
       currentRequest = new Request(ORIGIN + route, { method: 'POST', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...(token ? { 'x-x6-class3-approval': token } : {}) }, body: JSON.stringify(input), signal })
-      const response = await handleCloudBroker(currentRequest, env, { access, bootstrap, now, networkFetch, authorizeClass3: async value => {
+      const response = await handleCloudBroker(currentRequest, env, { access, bootstrap, now, networkFetch, ...(level === 'guarded' ? { repoDoorLevel: 'guarded' } : {}), authorizeClass3: async value => {
         const key = currentRequest.headers.get('x-x6-class3-approval'), approval = tokens.get(key)
         if (!approval || approval.binding.bodySha256 !== digest(canonicalJson(value))) return { ok: false }
         tokens.delete(key); consumed++; return approval
@@ -730,4 +731,154 @@ test('a private commit takes 64 files (was 16), not 65; the request bound is 12 
   const control = '\u0001'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes), heavy = fixture()
   const over = await heavy.request({ action: 'commit', branch: BRANCH, message: 'Escapes past the bound', changes: Array.from({ length: 8 }, (_v, i) => ({ path: `deploy/cloudflare/src/auma/heavy-${i}.mjs`, content: control })) })
   assert.equal(over.status, 413); assert.equal(over.value.code, 'BROKER_BODY_TOO_LARGE'); assert.equal(heavy.calls.some(call => call.method === 'POST'), false)
+})
+
+// ---- the branch reads block begin: `tree`, `log` and `bytes` read her own branch at its head ----
+const gitBlob = value => createHash('sha1').update(`blob ${Buffer.byteLength(value)}\0`).update(value).digest('hex')
+/** Main and her branch hold different files; trees and contents carry real git blob shas (so `bytes` can verify them),
+ * and the commit list answers per ref. A read that silently fell back to main would show main's files here. */
+function ownBranchReads({ main, branch, mainLog = [{ sha: BASE, commit: { message: 'main commit' }, parents: [{ sha: 'f'.repeat(40) }] }],
+  branchLog = [{ sha: HEAD, commit: { message: 'branch commit' }, parents: [{ sha: BASE }] }] }) {
+  const gitTree = (files, sha) => { const value = tree(files, sha); for (const item of value.tree) if (item.type === 'blob') item.sha = gitBlob(files[item.path]); return value }
+  return url => {
+    if (url.pathname === PREFIX + '/commits') {
+      const ref = url.searchParams.get('sha'), list = ref === 'main' ? mainLog : ref === BRANCH ? branchLog : null
+      if (!list) throw new Error('Unexpected log ref ' + ref)
+      return json(list.slice(0, Number(url.searchParams.get('per_page'))))
+    }
+    if (url.pathname === PREFIX + '/git/trees/main' || url.pathname === PREFIX + '/git/trees/' + BASE_TREE) return json(gitTree(main, BASE_TREE))
+    if (url.pathname === PREFIX + '/git/trees/' + HEAD_TREE) return json(gitTree(branch, HEAD_TREE))
+    if (url.pathname.startsWith(PREFIX + '/contents/')) {
+      const path = decodeURIComponent(url.pathname.slice((PREFIX + '/contents/').length)), ref = url.searchParams.get('ref')
+      const files = ref === BASE ? main : ref === HEAD ? branch : null
+      if (!files) throw new Error('Unexpected contents ref ' + ref)
+      if (files[path] === undefined) return new Response('', { status: 404 })
+      return json({ type: 'file', path, sha: gitBlob(files[path]), encoding: 'base64', content: Buffer.from(files[path]).toString('base64') })
+    }
+    return undefined
+  }
+}
+const MAIN_FILES = { 'server/shared.mjs': 'export const on = "main"\n', 'server/only-on-main.mjs': 'main only\n' }
+const BRANCH_FILES = { 'server/shared.mjs': 'export const on = "branch"\n', 'server/only-on-branch.mjs': 'branch only\n', 'server/.env': 'hidden\n', 'server/private/x.mjs': 'closed\n' }
+
+test('tree, log and bytes on her own branch read THAT branch at its head and name the ref and commit', async () => {
+  const broker = fixture({ hook: ownBranchReads({ main: MAIN_FILES, branch: BRANCH_FILES }) })
+  const listed = await broker.request({ action: 'tree', branch: BRANCH, prefix: 'server' })
+  assert.equal(listed.status, 200, JSON.stringify(listed.value))
+  assert.deepEqual(listed.value.entries.map(entry => entry.path).sort(), ['server', 'server/only-on-branch.mjs', 'server/shared.mjs'])
+  assert.equal(listed.value.branch, BRANCH); assert.equal(listed.value.commitSha, HEAD); assert.equal(listed.value.treeSha, HEAD_TREE)
+  assert.ok(broker.calls.some(call => call.url.endsWith('/commits/' + encodeURIComponent(BRANCH))))
+  // The same call without a branch still answers main, exactly as before.
+  const mainTree = await broker.request({ action: 'tree', prefix: 'server' })
+  assert.deepEqual(mainTree.value.entries.map(entry => entry.path).sort(), ['server', 'server/only-on-main.mjs', 'server/shared.mjs']); assert.equal(mainTree.value.branch, 'main')
+
+  const sliced = await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/only-on-branch.mjs', offset: 0, length: 6 })
+  assert.equal(sliced.status, 200, JSON.stringify(sliced.value))
+  assert.equal(Buffer.from(sliced.value.bytes).toString(), 'branch'); assert.equal(sliced.value.totalBytes, Buffer.byteLength(BRANCH_FILES['server/only-on-branch.mjs']))
+  assert.equal(sliced.value.source, 'github-branch'); assert.equal(sliced.value.branch, BRANCH); assert.equal(sliced.value.commitSha, HEAD)
+  assert.equal(sliced.value.blobSha, gitBlob(BRANCH_FILES['server/only-on-branch.mjs']))
+  const shared = await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/shared.mjs', offset: 19, length: 6 })
+  assert.equal(Buffer.from(shared.value.bytes).toString(), 'branch')
+  // A file only main has is not on her branch; main's own bytes answer is unchanged.
+  assert.equal((await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/only-on-main.mjs' })).value.code, 'BROKER_NOT_FOUND')
+  const mainBytes = await broker.request({ action: 'bytes', path: 'server/shared.mjs', offset: 19, length: 4 })
+  assert.equal(Buffer.from(mainBytes.value.bytes).toString(), 'main'); assert.equal(mainBytes.value.source, 'github-main'); assert.equal(mainBytes.value.branch, undefined)
+
+  const log = await broker.request({ action: 'log', branch: BRANCH, limit: 5 })
+  assert.equal(log.status, 200, JSON.stringify(log.value))
+  assert.deepEqual(log.value.commits.map(commit => commit.sha), [HEAD]); assert.equal(log.value.branch, BRANCH); assert.equal(log.value.headSha, HEAD)
+  assert.match(log.value.stdout, /branch commit/)
+  const mainLog = await broker.request({ action: 'log', limit: 5 })
+  assert.deepEqual(mainLog.value.commits.map(commit => commit.sha), [BASE]); assert.equal(mainLog.value.branch, undefined)
+  assert.equal(broker.calls.some(call => call.method === 'POST'), false)
+})
+
+test('tree, log and bytes refuse every ref that is not main or her own branch, before any provider read', async () => {
+  for (const action of ['tree', 'log', 'bytes']) {
+    for (const branch of ['feature/not-hers', 'auma/other/thing', 'auma/proposal/x', 'auma/proposal/Upper', 'auma/proposal/a..b', 'refs/heads/main', HEAD, '', null, 7]) {
+      const broker = fixture(), result = await broker.request({ action, branch, ...(action === 'bytes' ? { path: 'server/shared.mjs' } : {}) })
+      assert.equal(result.status, 403, `${action} ${branch}`); assert.equal(result.value.code, 'REPO_BRANCH_REFUSED', `${action} ${branch}`)
+      assert.equal(broker.calls.length, 0)
+    }
+  }
+})
+
+test('on her branch, bytes and tree withhold exactly what read on that branch withholds', async () => {
+  const secretShape = 'const k = "ghp_' + 'a'.repeat(30) + '"\n'
+  for (const content of [secretShape, 'synthetic-token-value\n', '-----BEGIN PRIVATE KEY-----\n']) {
+    const broker = fixture({ hook: ownBranchReads({ main: MAIN_FILES, branch: { ...BRANCH_FILES, 'server/leak.mjs': content } }) })
+    const read = await broker.request({ action: 'read', branch: BRANCH, path: 'server/leak.mjs' })
+    const bytes = await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/leak.mjs', length: 4 })
+    assert.equal(read.value.code, 'BROKER_PRIVATE_CONTENT_REFUSED'); assert.equal(bytes.status, read.status); assert.equal(bytes.value.code, read.value.code)
+    assert.equal(bytes.value.bytes, undefined); assert.equal(bytes.value.sha256, undefined)
+  }
+  const broker = fixture({ hook: ownBranchReads({ main: MAIN_FILES, branch: BRANCH_FILES }) })
+  // Hidden and closed paths: never listed by tree, refused by bytes as by read.
+  const listed = await broker.request({ action: 'tree', branch: BRANCH })
+  assert.equal(listed.status, 200); assert.equal(listed.value.entries.some(entry => /\.env$|private/.test(entry.path)), false)
+  for (const path of ['server/.env', 'server/private/x.mjs']) {
+    const read = await broker.request({ action: 'read', branch: BRANCH, path }), bytes = await broker.request({ action: 'bytes', branch: BRANCH, path })
+    assert.equal(read.status, 403); assert.equal(bytes.status, 403); assert.equal(bytes.value.code, 'REPO_PATH_REFUSED')
+  }
+  // A secret-shaped NAME on her branch: read refuses it, and the tree that would list it is refused whole.
+  const named = 'server/ghp_' + 'b'.repeat(30) + '.mjs'
+  const nameBroker = fixture({ hook: ownBranchReads({ main: MAIN_FILES, branch: { ...BRANCH_FILES, [named]: 'x\n' } }) })
+  assert.equal((await nameBroker.request({ action: 'read', branch: BRANCH, path: named })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+  assert.equal((await nameBroker.request({ action: 'tree', branch: BRANCH })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+  // Main's pinned cell wasm (judged at merge) is binary-readable by bytes on main only; on her branch it is screened as read screens it.
+  const wasm = 'apps/web/public/cells/fixture.wasm', cell = Buffer.from([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0])
+  const cells = fixture({ hook: ownBranchReads({ main: { [wasm]: cell }, branch: { [wasm]: cell } }) })
+  assert.equal((await cells.request({ action: 'bytes', path: wasm, length: 4 })).status, 200)
+  const branchRead = await cells.request({ action: 'read', branch: BRANCH, path: wasm }), branchBytes = await cells.request({ action: 'bytes', branch: BRANCH, path: wasm, length: 4 })
+  assert.notEqual(branchRead.status, 200); assert.equal(branchBytes.status, branchRead.status); assert.equal(branchBytes.value.code, branchRead.value.code)
+  // bytes keeps its own offset and length bounds on her branch.
+  for (const range of [{ offset: -1 }, { length: 0 }, { length: 4097 }, { offset: 1.5 }]) {
+    assert.equal((await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/shared.mjs', ...range })).value.code, 'REPO_BYTE_RANGE_INVALID')
+  }
+  assert.equal((await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/shared.mjs', offset: 1000 })).value.code, 'REPO_BYTE_RANGE_INVALID')
+  // Unknown fields stay refused.
+  assert.equal((await broker.request({ action: 'tree', branch: BRANCH, depth: 2 })).value.code, 'BROKER_QUERY_INVALID')
+  assert.equal((await broker.request({ action: 'bytes', branch: BRANCH, path: 'server/shared.mjs', ownerSession: true })).value.code, 'BROKER_QUERY_INVALID')
+})
+
+test('every other non-branch action stays refused on her branch; search keeps its own ref rule', async () => {
+  for (const input of [{ action: 'state_diff' }, { action: 'status' }, { action: 'push' }, { action: 'selftest' }, { action: 'diagnostics' }]) {
+    const broker = fixture(), result = await broker.request({ ...input, branch: BRANCH })
+    assert.equal(result.status, 403, input.action); assert.equal(result.value.code, 'REPO_BRANCH_REFUSED', input.action); assert.equal(broker.calls.length, 0)
+  }
+  const broker = fixture(), search = await broker.request({ action: 'search', branch: 'feature/not-hers', query: 'needle' })
+  assert.equal(search.status, 403); assert.equal(search.value.code, 'REPO_BRANCH_REFUSED'); assert.equal(broker.calls.length, 0)
+})
+// ---- the branch reads block end ----
+
+// ---- Her reads at level open ----
+test('at open: a search of deploy/cloudflare/src withholds a file with only a credential\'s shape and goes on; a configured secret value still refuses it whole', async () => {
+  const fake = 'const fixture = "gh' + 'p_' + 'a'.repeat(24) + '"\nneedle in a fixture\n'
+  const after = { 'deploy/cloudflare/src/a.mjs': 'needle in source\n', 'deploy/cloudflare/src/__tests__/fx.test.mjs': fake, 'deploy/cloudflare/src/z.mjs': 'needle again\n' }
+  const open = await fixture({ after, level: 'open' }).request({ action: 'search', branch: BRANCH, query: 'needle', prefix: 'deploy/cloudflare/src' })
+  assert.equal(open.status, 200, JSON.stringify(open.value))
+  assert.deepEqual(open.value.matches.map(match => match.path), ['deploy/cloudflare/src/a.mjs', 'deploy/cloudflare/src/z.mjs'])
+  assert.equal(open.value.withheld, 1); assert.deepEqual(open.value.skippedPaths, [{ path: 'deploy/cloudflare/src/__tests__/fx.test.mjs', reason: 'withheld' }])
+  assert.equal(JSON.stringify(open.value).includes('gh' + 'p_'), false)
+  // The guarded level answers as before: the first such file refuses the whole search.
+  assert.equal((await fixture({ after }).request({ action: 'search', branch: BRANCH, query: 'needle', prefix: 'deploy/cloudflare/src' })).value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+  // A configured secret's VALUE in any file refuses the whole answer at open too.
+  const valued = await fixture({ after: { ...after, 'deploy/cloudflare/src/y.mjs': 'synthetic-token-value\nneedle\n' }, level: 'open' }).request({ action: 'search', branch: BRANCH, query: 'needle' })
+  assert.equal(valued.value.code, 'BROKER_PRIVATE_CONTENT_REFUSED')
+})
+
+test('at open: the whole repository reads (identity code, files outside the source roots); a secret-shaped name stays refused', async () => {
+  const after = { 'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts': 'export const host = 1\n', 'native/system/x.c': 'int x;\n', 'vitest.config.ts': 'export default {}\n', 'server/.env': 'X=1\n' }
+  for (const path of ['packages/client/ui-layout/src/client/spatial/apps/identity/host.ts', 'native/system/x.c', 'vitest.config.ts']) {
+    const read = await fixture({ after, level: 'open' }).request({ action: 'read', branch: BRANCH, path })
+    assert.equal(read.status, 200, `${path} ${JSON.stringify(read.value)}`); assert.equal(read.value.content, after[path])
+    assert.equal((await fixture({ after }).request({ action: 'read', branch: BRANCH, path })).status, 403, `guarded ${path}`)
+  }
+  const secret = await fixture({ after, level: 'open' }).request({ action: 'read', branch: BRANCH, path: 'server/.env' })
+  assert.equal(secret.status, 403); assert.equal(secret.value.code, 'REPO_PATH_REFUSED')
+  const listed = await fixture({ after, level: 'open' }).request({ action: 'tree', branch: BRANCH })
+  assert.equal(listed.status, 200, JSON.stringify(listed.value))
+  const paths = listed.value.entries.map(entry => entry.path)
+  for (const path of ['native/system/x.c', 'vitest.config.ts', 'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts']) assert.ok(paths.includes(path), path)
+  assert.equal(paths.some(path => path.includes('.env')), false)
 })

@@ -17,7 +17,7 @@ import { checkLease, edgeMayWrite, homeFreezeMode, leaseAction, leaseHeldAt, lea
 import { MIRROR_WAKE_CLIENT_ID, retireClientSlot, retiredClientAnswer, slotRetireMode } from './mirror-client-slots.mjs' // ANYBROWSER hook: slots are tombstoned, never lost (only under MIRROR_SLOT_RETIRE=retire)
 import { readTombstone } from './mirror-slot-tombstone.mjs' // ANYBROWSER hook
 import { noteWrote, recordHomePending, validHomeInput, worldStatus } from './world-home.mjs' // ANYBROWSER hook: when a browser last wrote; home pending
-import { threadCommit, threadLimits } from './thread-log.mjs' // ANYBROWSER hook: the thread log's MIRROR half
+import { threadCommit, threadLimits, threadPathAllowed } from './thread-log.mjs' // ANYBROWSER hook: the thread log's MIRROR half (its ONE path rule)
 import { threadSyncMode } from './thread-sync-mode.mjs' // THREAD_SYNC (off, pull, on), told to the client on the thread index only
 
 const BOOTSTRAP = 'mirror:bootstrap:v1'
@@ -56,6 +56,16 @@ const roots = ['/dsh/home', '/dsh/workspace']
  */
 export { MIRROR_SECRET_NAMES, MIRROR_SECRET_PREFIXES, MIRROR_SECRET_RULE_VERSION, MIRROR_SECRET_SUFFIX, secretShapedPart } from './mirror-secret-paths.mjs'
 const reply = (body, status = 200) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } })
+/**
+ * WITH THREAD SYNC `on`, A CONVERSATION JOURNAL IS THE THREAD LOG'S, NOT THE WHOLE-HOME COPY'S. A path
+ * the thread log's one rule takes (`threadPathAllowed`) is then never stored, counted or served by the mirror: an
+ * incoming entry for it is acknowledged and left to the thread log, a stored copy is hidden from every read and removed
+ * a bounded number per accepted save (THREAD_PRUNE). With the mode `off` or `pull` nothing here applies.
+ */
+const threadOwned = (sync, path) => sync === 'on' && threadPathAllowed(path)
+/** The most stored journal rows one accepted save removes: whole files only, at most `files` files and `chunks` chunk rows
+ * (512 rows of 96 KiB base64 = 48 MiB; one file is at most 342 rows, so every save removes at least one). */
+export const THREAD_PRUNE = Object.freeze({ files: 64, chunks: 512 })
 
 // Leave headroom below Durable Object's 128 KiB serialized per-value ceiling.
 const putValue = (tx, key, value) => {
@@ -325,23 +335,25 @@ export function applyMirrorEntries(current, entries) {
 
 // `hidden`, when given, adds the stored rows each read skipped (hiddenStoredPath): they are not served, but they still
 // occupy storage, so every write counts them toward the combined row limit (planMirrorEntries `hiddenRows`).
-const readResets = async (storage, hidden) => {
+const readResets = async (storage, hidden, sync = 'off') => {
   const rows = await storage.list({ prefix: RESET, limit: MIRROR_LIMITS.entries + 1 })
   if (rows.size > MIRROR_LIMITS.entries) fail('MIRROR_STORAGE_LIMIT', 503)
-  const paths = [...rows.values()].filter(path => !hiddenStoredPath(path))
+  const paths = [...rows.values()].filter(path => !hiddenStoredPath(path) && !threadOwned(sync, path))
   if (hidden) hidden.rows += rows.size - paths.length
   for (const path of paths) validateMirrorPath(path)
   return paths.sort()
 }
 
 // Metadata is bounded independently of payload bytes. No mutation reads file content.
-const readEntries = async (storage, hidden) => {
+// with `sync` on, a stored journal row is checked as every row is, then left out of the map; `hidden`
+// counts it (it still occupies storage until removed) and lists it as `hidden.threads` for the bounded removal.
+const readEntries = async (storage, hidden, sync = 'off') => {
   const rows = await storage.list({ prefix: ENTRY, limit: MIRROR_LIMITS.entries + 1 })
   if (rows.size > MIRROR_LIMITS.entries) fail('MIRROR_STORAGE_LIMIT', 503)
   let metadataBytes = 0
   const kept = [...rows.values()].filter(row => !hiddenStoredPath(row?.path))
   if (hidden) hidden.rows += rows.size - kept.length
-  return new Map(kept.map(({ path, ...value }) => {
+  const entries = new Map(kept.map(({ path, ...value }) => {
     // Payload belongs only in chunk rows; wire input is never valid persisted metadata.
     validateMirrorPath(path)
     metadataBytes += entryMetadataBytes(path, value)
@@ -353,6 +365,11 @@ const readEntries = async (storage, hidden) => {
     } else if (value.chunks !== undefined || value.bytes !== undefined || value.mtimeMs !== undefined) fail('MIRROR_ENTRY_METADATA_CORRUPT', 503)
     return [path, value]
   }))
+  if (sync !== 'on') return entries // Off and pull are main's read exactly
+  const threads = [...entries].filter(([path]) => threadOwned(sync, path))
+  for (const [path] of threads) entries.delete(path)
+  if (hidden) { hidden.rows += threads.length; hidden.threads = threads }
+  return entries
 }
 const pathKey = path => mirrorDigest(path)
 const removeChunks = async (tx, id, value) => {
@@ -527,7 +544,7 @@ export async function readMirrorWakeText(storage, { path, seedId, signal, env = 
  * Atomic fence advancement makes concurrent browser batches stale, not silently overwritten.
  * Checkpoint ids are retained in the file for replay refusal; capacity exhaustion never evicts history.
  */
-export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signal, now = Date.now() /* ANYBROWSER hook */, mode /* JOIN hook */, slots /* JOIN hook */ } = {}) {
+export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signal, now = Date.now() /* ANYBROWSER hook */, mode /* JOIN hook */, slots /* JOIN hook */, threadSync = 'off' } = {}) {
   if (!auraObject(input) || Object.keys(input).sort().join(',') !== 'at,evidence,head,id'
     || !auraHash(input.id) || !Number.isSafeInteger(input.at) || input.at < 0 || input.at > 8640000000000000
     || !auraObject(input.head) || Object.keys(input.head).sort().join(',') !== 'ballId,epoch' || !auraHash(input.head.ballId) || !auraCount(input.head.epoch)
@@ -566,7 +583,7 @@ export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signa
     const seq = (client?.seq ?? 0) + 1, receiptDigest = await mirrorDigest(payload)
     const prune = planMirrorReplayPrune(replay, clientId)
     const hidden = { rows: 0 }
-    const before = await readEntries(tx, hidden), resets = await readResets(tx, hidden)
+    const before = await readEntries(tx, hidden, threadSync), resets = await readResets(tx, hidden, threadSync) // Journals hidden, not counted
     const bytes = encoder.encode(nextText)
     const value = { kind: 'file', mode: 0o600, mtimeMs: input.at, b64: btoa(String.fromCharCode(...bytes)) }
     const { entries: after } = planMirrorEntries(before, [[CLOUD_WAKE_CHECKPOINT_PATH, value]], resets, { hiddenRows: hidden.rows })
@@ -589,9 +606,10 @@ export async function appendMirrorWakeCheckpoint(storage, input, { seedId, signa
  * @param {object} options Canonical VFS path, matching bootstrap seed and optional cancellation signal.
  * @returns {Promise<object>} At most 256 KiB decoded file bytes in base64, directory, absence, or durable deletion. Only absence permits fallback.
  */
-export async function readMirrorRepoFile(storage, { path, seedId, signal } = {}) {
+export async function readMirrorRepoFile(storage, { path, seedId, signal, threadSync = 'off' } = {}) {
   validateMirrorPath(path)
-  if (!cloudRepoMirrorPathAllowed(path)) fail('MIRROR_REPO_PATH_REFUSED', 403)
+  // A journal the thread log owns is never read from the mirror (refused, so nothing falls back to a copy).
+  if (!cloudRepoMirrorPathAllowed(path) || threadOwned(threadSync, path)) fail('MIRROR_REPO_PATH_REFUSED', 403)
   return storage.transaction(async tx => {
     const check = () => { signal?.throwIfAborted() }
     check()
@@ -659,17 +677,17 @@ const snapshotBytes = (entries, resetPaths, fence) => {
 
 // Metadata and tombstones select one revision. Each chunk read checks that same
 // revision inside its transaction; a concurrent write truncates, never tears, JSON.
-const snapshotResponse = async (storage, request, reserveSnapshot) => {
+const snapshotResponse = async (storage, request, reserveSnapshot, threadSync = 'off') => {
   const format = new URL(request.url).searchParams.get('snapshotFormat')
   const captured = await storage.transaction(async tx => {
     const fence = await readFence(tx)
     const etag = snapshotETag(fence)
     if (request.headers.has('if-match') && !matchesETag(request.headers.get('if-match'), etag)) fail('MIRROR_SNAPSHOT_PRECONDITION_FAILED', 412)
-    const resetPaths = await readResets(tx)
+    const resetPaths = await readResets(tx, undefined, threadSync)
     // Older readers ignore reset metadata and would resurrect packaged files.
     if (resetPaths.length && format !== SNAPSHOT_FORMAT) fail('MIRROR_SNAPSHOT_UPGRADE_REQUIRED', 409)
     if (matchesETag(request.headers.get('if-none-match'), etag, true)) return { etag, unchanged: true }
-    const stored = await readEntries(tx)
+    const stored = await readEntries(tx, undefined, threadSync) // A journal is never streamed while sync is on
     const expectedBytes = snapshotBytes(stored, resetPaths, fence)
     return { fence, etag, resetPaths, stored, expectedBytes }
   })
@@ -773,7 +791,7 @@ const snapshotResponse = async (storage, request, reserveSnapshot) => {
 }
 
 /** Atomically persist entries, global revision, bounded replay acknowledgments and client sequence. Stale output is retained separately, never rebased. */
-export async function publishMirror(storage, envelope, { now = Date.now(), mode, retire, homeFreeze } = {} /* ANYBROWSER hook */) {
+export async function publishMirror(storage, envelope, { now = Date.now(), mode, retire, homeFreeze, threadSync = 'off' } = {} /* ANYBROWSER hook */) {
   // JOIN hook: with no setting (`mode` observe, `retire` off, `homeFreeze` record) a home save performs
   // JOIN hook: EXACTLY main's storage operations and answers: no tombstone, lease or write-time row is read or written.
   // JOIN hook: Tombstones are read when slots can be retired or the lease is enforced; the lease only when enforced;
@@ -790,6 +808,14 @@ export async function publishMirror(storage, envelope, { now = Date.now(), mode,
   try { entries = publishableMirrorEntries(batch.entries) } catch (error) {
     if (error?.code !== 'INVALID_MIRROR_PATH') throw error
     pathRefusal = error
+  }
+  // With thread sync on, a journal entry (file, dir or gone) is validated as any entry is, then left to the
+  // thread log: never planned, stored or counted. The save is acknowledged whole (`applied` names every entry as sent).
+  let threadEntries = 0
+  if (threadSync === 'on' && entries) {
+    const mirrorOwned = entries.filter(([path]) => !threadOwned(threadSync, path))
+    threadEntries = entries.length - mirrorOwned.length
+    entries = mirrorOwned
   }
   return storage.transaction(async tx => {
     const current = await readFence(tx)
@@ -818,12 +844,26 @@ export async function publishMirror(storage, envelope, { now = Date.now(), mode,
     if (!head && replayState.clients.size >= MIRROR_LIMITS.clients && !(retire === 'retire' && await retireClientSlot(tx, replayState, { incomingClientId: batch.clientId, now: clock() }))) fail('MIRROR_CLIENT_LIMIT', 507) // ANYBROWSER hook
     const pruneKeys = planMirrorReplayPrune(replayState, batch.clientId)
     const hidden = { rows: 0 }
-    const before = await readEntries(tx, hidden)
-    const priorResets = await readResets(tx, hidden)
+    const before = await readEntries(tx, hidden, threadSync)
+    const priorResets = await readResets(tx, hidden, threadSync)
+    // The stored journals this save removes (THREAD_PRUNE, whole files in key order); the rest stay hidden.
+    const pruned = []
+    for (let chunks = 0; pruned.length < THREAD_PRUNE.files && pruned.length < (hidden.threads?.length ?? 0);) {
+      const [path, value] = hidden.threads[pruned.length]
+      chunks += value.chunks ?? 0
+      if (chunks > THREAD_PRUNE.chunks) break
+      pruned.push([path, value])
+    }
+    hidden.rows -= pruned.length
     const { entries: after, resets } = planMirrorEntries(before, entries, priorResets, { hiddenRows: hidden.rows })
     await enforceHistoryPrefixes(tx, before, after)
     const nextFence = { lineageId: current.lineageId, revision: current.revision + 1 }
     snapshotBytes(after, [...resets].sort(), nextFence)
+    for (const [path, value] of pruned) { // Only the mirror's own journal rows; never a thread log row
+      const id = await pathKey(path)
+      await removeChunks(tx, id, value)
+      await tx.delete(ENTRY + id)
+    }
     for (const [path, previous] of before) if (!after.has(path)) {
       const id = await pathKey(path)
       await removeChunks(tx, id, previous)
@@ -835,7 +875,8 @@ export async function publishMirror(storage, envelope, { now = Date.now(), mode,
     for (const path of resets) if (!previousResets.has(path)) await putValue(tx, RESET + await pathKey(path), path)
     // `applied` counts every entry of the batch as sent: an inert secret-shaped `gone` (publishableMirrorEntries) is applied
     // as the no-op it is, and the browser accepts only an acknowledgement that names its whole batch.
-    const receipt = { ok: true, ...protocolFields(nextFence), id: batch.id, clientId: batch.clientId, seq: batch.seq, digest, applied: batch.entries.length, acknowledgedAt: Date.now() }
+    const receipt = { ok: true, ...protocolFields(nextFence), id: batch.id, clientId: batch.clientId, seq: batch.seq, digest, applied: batch.entries.length, acknowledgedAt: Date.now(),
+      ...(threadSync === 'on' ? { threadEntries } : {}) } // How many entries were left to the thread log
     for (const receiptKey of pruneKeys) await tx.delete(receiptKey)
     await putValue(tx, FENCE, nextFence)
     await putValue(tx, key, receipt)
@@ -976,6 +1017,96 @@ export async function bootstrapMirror(storage, input) {
   fail('BOOTSTRAP_ACTION_INVALID')
 }
 
+// ---- REBASE block begin ----
+/**
+ * THE REBASE SWITCH: `MIRROR_REBASE`, a wrangler var. Exactly `report`, `apply` or `chrome-wins`
+ * names that mode; anything else (absent included) is `off`. The edge only TELLS the browser the mode on the changes
+ * route; the edge itself never writes anything for a reconcile in any mode.
+ */
+export const REBASE_MODES = Object.freeze(['off', 'report', 'apply', 'chrome-wins'])
+export const rebaseMode = env => (['report', 'apply', 'chrome-wins'].includes(env?.MIRROR_REBASE) ? env.MIRROR_REBASE : 'off')
+/** Fixed bounds of one changes answer: the paths it may list and the decoded file bytes it may serve. */
+export const MIRROR_CHANGES_LIMITS = Object.freeze({ paths: 10000, fileBytes: 16 * 1024 * 1024 })
+/** A wake version changes exactly one file, by construction (appendMirrorWakeCheckpoint writes nothing else). */
+const WAKE_VERSION_PATHS = Object.freeze([CLOUD_WAKE_CHECKPOINT_PATH])
+const CHANGES_SINCE = /^(0|[1-9][0-9]{0,15})$/
+/** The changes route's strict query: exactly `since` and `clientId`, each once, nothing else; null when it is wrong. */
+export function mirrorChangesQuery(url) {
+  const keys = [...url.searchParams.keys()]
+  if (url.hash || keys.length !== 2 || keys.slice().sort().join() !== 'clientId,since') return null
+  const since = url.searchParams.get('since'), clientId = url.searchParams.get('clientId')
+  if (!CHANGES_SINCE.test(since ?? '') || !Number.isSafeInteger(Number(since)) || !UUID.test(clientId ?? '')) return null
+  return { since: Number(since), clientId }
+}
+
+/** The current entry of one changed path at this revision, read inside the caller's transaction (no put, no delete). */
+async function changedEntry(tx, path, budget) {
+  if (hiddenStoredPath(path)) return { kind: 'withheld' }
+  const id = await pathKey(path), metadata = await tx.get(ENTRY + id)
+  if (metadata === undefined) {
+    let reset = false
+    for (let ancestor = path; ancestor && !reset; ancestor = ancestor.slice(0, ancestor.lastIndexOf('/'))) {
+      const marker = await tx.get(RESET + await pathKey(ancestor))
+      if (marker !== undefined) { if (marker !== ancestor) fail('MIRROR_RESET_CORRUPT', 503); reset = true }
+    }
+    return { kind: 'missing', reset }
+  }
+  if (!auraObject(metadata) || metadata.path !== path || !['file', 'dir'].includes(metadata.kind) || Object.hasOwn(metadata, 'b64')
+    || !Number.isInteger(metadata.mode) || metadata.mode < 0 || metadata.mode > 0o777) fail('MIRROR_ENTRY_METADATA_CORRUPT', 503)
+  if (metadata.kind === 'dir') return { kind: 'dir', mode: metadata.mode }
+  fileCharacters(metadata)
+  if (!Number.isFinite(metadata.mtimeMs) || metadata.mtimeMs < 0) fail('MIRROR_FILE_METADATA_CORRUPT', 503)
+  budget.bytes += metadata.bytes
+  if (budget.bytes > MIRROR_CHANGES_LIMITS.fileBytes) return null
+  let b64 = ''
+  for (let index = 0; index < metadata.chunks; index++) b64 += await storedChunk(tx, id, metadata, index)
+  return { kind: 'file', mode: metadata.mode, mtimeMs: metadata.mtimeMs, b64 }
+}
+
+/**
+ * GET /_mirror/changes?since=<rev>&clientId=<uuid>: read-only facts about every version after
+ * `since`, in ONE storage transaction with no put and no delete (a missing fence is refused, never initialized).
+ * Per version: its writer from the stored receipt (`wake`: the wake's fixed client id; `self`: the query's client id;
+ * `browser`: any other), sequence, digest, time, and the paths it changed where they are known by construction (a wake
+ * version: the checkpoint file only; every other version: null, because the cloud keeps no path log). `complete` is
+ * true only when there is exactly one receipt per version after `since`. `entries` holds the current entry of every
+ * KNOWN changed path within fixed bounds (never a path the secret-path rule hides: `withheld`), or null with `tooLarge`.
+ * `clientHeadSeq` is the query client's sequence head; `mode` is MIRROR_REBASE.
+ */
+async function changesResponse(storage, url, mode) {
+  const query = mirrorChangesQuery(url)
+  if (!query) fail('INVALID_MIRROR_CHANGES_QUERY')
+  return storage.transaction(async tx => {
+    const fence = await tx.get(FENCE)
+    if (!validCloudBase(fence)) fail(fence === undefined ? 'MIRROR_GLOBAL_FENCE_INITIALIZATION_REQUIRED' : 'MIRROR_GLOBAL_FENCE_CORRUPT', fence === undefined ? 409 : 503)
+    if (query.since > fence.revision) fail('MIRROR_CHANGES_SINCE_OUT_OF_RANGE', 409)
+    const replay = await readMirrorReplayState(tx, fence)
+    const byRevision = new Map(replay.ordered.filter(([, receipt]) => receipt.revision > query.since).map(([, receipt]) => [receipt.revision, receipt]))
+    let complete = true
+    for (let revision = query.since + 1; revision <= fence.revision; revision++) if (!byRevision.has(revision)) { complete = false; break }
+    const revisions = [...byRevision.values()].sort((a, b) => a.revision - b.revision).map(receipt => {
+      const writer = receipt.clientId === MIRROR_WAKE_CLIENT_ID ? 'wake' : receipt.clientId === query.clientId ? 'self' : 'browser'
+      return { revision: receipt.revision, writer, client: receipt.clientId.slice(0, 8), seq: receipt.seq, digest: receipt.digest,
+        acknowledgedAt: receipt.acknowledgedAt, applied: receipt.applied, paths: writer === 'wake' ? [...WAKE_VERSION_PATHS] : null }
+    })
+    const known = [...new Set(revisions.flatMap(item => item.paths ?? []))].sort()
+    let entries = null, tooLarge = false
+    if (known.length > MIRROR_CHANGES_LIMITS.paths) tooLarge = true
+    else {
+      entries = {}
+      const budget = { bytes: 0 }
+      for (const path of known) {
+        const entry = await changedEntry(tx, path, budget)
+        if (entry === null) { entries = null; tooLarge = true; break }
+        entries[path] = entry
+      }
+    }
+    return { ok: true, ...protocolFields(fence), since: query.since, complete, revisions, entries, ...(tooLarge ? { tooLarge: true } : {}),
+      clientHeadSeq: replay.clients.get(query.clientId)?.seq ?? 0, mode }
+  })
+}
+// ---- REBASE block end ----
+
 /** Internal route adapter. Callers authenticate and serialize mutations and metadata capture.
  * Snapshot chunks recheck their captured fence; mirrorCompletion tracks body termination,
  * not a write lock. Optional reserveSnapshot returns a release callback for reader capacity;
@@ -984,7 +1115,7 @@ export async function bootstrapMirror(storage, input) {
  * Synchronous throws and rejected delivery promises cannot undo the committed receipt.
  * Omitted onUpdated performs no notification. Clients must poll after disconnect or missed delivery.
  */
-export async function handleMirrorRequest(request, storage, { authorized = false, onUpdated, reserveSnapshot, writerLease = 'observe' /* ANYBROWSER hook */, homeFreeze = 'record' /* ANYBROWSER hook */, slotRetire = 'off' /* JOIN hook */ } = {}) {
+export async function handleMirrorRequest(request, storage, { authorized = false, onUpdated, reserveSnapshot, writerLease = 'observe' /* ANYBROWSER hook */, homeFreeze = 'record' /* ANYBROWSER hook */, slotRetire = 'off' /* JOIN hook */, rebaseMode: rebase = 'off', threadSync = 'off' } = {}) {
   if (!authorized) return reply({ ok: false, code: 'UNAUTHORIZED' }, 401)
   try {
     const url = new URL(request.url)
@@ -992,10 +1123,11 @@ export async function handleMirrorRequest(request, storage, { authorized = false
     if (path === '/_mirror/status' && url.search && url.search !== '?compact=1') return reply({ ok: false, code: 'INVALID_MIRROR_STATUS_QUERY' }, 400)
     if (path === '/_mirror/delta' && request.method === 'POST') {
       const envelope = await readEnvelope(request)
-      const result = await publishMirror(storage, envelope, { now: () => Date.now() /* JOIN hook: a clock */, mode: writerLease, retire: slotRetire, homeFreeze } /* ANYBROWSER hook */)
+      const result = await publishMirror(storage, envelope, { now: () => Date.now() /* JOIN hook: a clock */, mode: writerLease, retire: slotRetire, homeFreeze, threadSync } /* ANYBROWSER hook */)
       // The notice names only what changed: an entry the secret-path rule took as a no-op (publishableMirrorEntries)
-      // changed nothing and is never named, so a mixed batch still announces its ordinary paths.
-      const changed = result.ok && !result.replayed ? envelope.batch.entries.map(([path]) => path).filter(path => !hiddenStoredPath(path)) : []
+      // changed nothing and is never named, so a mixed batch still announces its ordinary paths. the thread log: nor is a
+      // journal left to the thread log.
+      const changed = result.ok && !result.replayed ? envelope.batch.entries.map(([path]) => path).filter(path => !hiddenStoredPath(path) && !threadOwned(threadSync, path)) : []
       if (changed.length && onUpdated) {
         try {
           void Promise.resolve(onUpdated(createMirrorUpdate(result, changed)))
@@ -1006,15 +1138,16 @@ export async function handleMirrorRequest(request, storage, { authorized = false
       return reply(result, result.status ?? 200)
     }
     if (path === '/_mirror/conflicts' && request.method === 'GET') return await conflictResponse(storage, url)
+    if (path === '/_mirror/changes' && request.method === 'GET') return reply(await changesResponse(storage, url, REBASE_MODES.includes(rebase) ? rebase : 'off')) // Read-only
     if (path === '/api/snapshot' && request.method === 'GET') {
-      return await snapshotResponse(storage, request, reserveSnapshot)
+      return await snapshotResponse(storage, request, reserveSnapshot, threadSync)
     }
     if (path === '/_mirror/status' && request.method === 'GET') {
       return reply(await storage.transaction(async tx => {
         const fence = await readFence(tx)
         if (url.searchParams.get('compact') === '1') return { ok: true, ...protocolFields(fence), runtime: 'cloudflare', snapshotFormat: SNAPSHOT_FORMAT, snapshotETag: snapshotETag(fence) }
-        const entries = [...await readEntries(tx)]
-        const resetPaths = await readResets(tx)
+        const entries = [...await readEntries(tx, undefined, threadSync)]
+        const resetPaths = await readResets(tx, undefined, threadSync)
         // ANYBROWSER hook: `clients` = browser slots in use (their sequence heads; the cap is `limits.clients`). Counted, never read.
         const clients = (await tx.list({ prefix: 'mirror:v2:head:', limit: MIRROR_LIMITS.clients + 1 })).size // ANYBROWSER hook
         // JOIN hook: main's answer at main's cost, byte for byte: no `world` field and no wave 3 read here.
@@ -1516,7 +1649,7 @@ export class MirrorDO {
               throw error
             }
           }
-          return reply(await appendMirrorWakeCheckpoint(this.storage, input, { seedId, signal: request.signal, mode: leaseMode(this.env) /* JOIN hook */, slots: slotRetireMode(this.env) /* JOIN hook */ }))
+          return reply(await appendMirrorWakeCheckpoint(this.storage, input, { seedId, signal: request.signal, mode: leaseMode(this.env) /* JOIN hook */, slots: slotRetireMode(this.env) /* JOIN hook */, threadSync: threadSyncMode(this.env) }))
         }
         if (path === '/_mirror/estate' && (request.method !== 'GET' || url.href.includes('?') || url.hash
           || request.body !== null || request.headers.has('transfer-encoding') || request.headers.has('content-length') && request.headers.get('content-length') !== '0')) return reply({ ok: false, code: 'ESTATE_REQUEST_INVALID' }, 400)
@@ -1529,7 +1662,7 @@ export class MirrorDO {
           if (!auraHash(request.headers.get('x-x6-bootstrap-seed'))) return reply({ ok: false, code: 'BOOTSTRAP_REQUIRED' }, 503)
           const input = await readBoundedBootstrapJson(request, 8192)
           if (!auraObject(input) || Object.keys(input).length !== 1 || !Object.hasOwn(input, 'path')) return reply({ ok: false, code: 'INVALID_MIRROR_REPO_REQUEST' }, 400)
-          return reply(await readMirrorRepoFile(this.storage, { path: input.path, seedId: request.headers.get('x-x6-bootstrap-seed'), signal: request.signal }))
+          return reply(await readMirrorRepoFile(this.storage, { path: input.path, seedId: request.headers.get('x-x6-bootstrap-seed'), signal: request.signal, threadSync: threadSyncMode(this.env) }))
         }
         if (path === '/_mirror/prediction-status' || path === '/_mirror/aura-inputs') {
           if (!/^[0-9a-f]{64}$/.test(request.headers.get('x-x6-bootstrap-seed') || '')) return reply({ ok: false, code: 'BOOTSTRAP_REQUIRED' }, 503)
@@ -1655,7 +1788,7 @@ export class MirrorDO {
             ...(rawFence === null ? {} : { checkFence: JSON.parse(rawFence) }) }))
         }
         if (path === '/_mirror/prediction-status') return reply({ ok: true, seedId: bootstrap.seedId, prediction: await readPredictionReceipts(this.storage) })
-        return await handleMirrorRequest(request, this.storage, { authorized: true, writerLease: leaseMode(this.env) /* ANYBROWSER hook */, homeFreeze: homeFreezeMode(this.env) /* ANYBROWSER hook */, slotRetire: slotRetireMode(this.env) /* JOIN hook */, reserveSnapshot: () => {
+        return await handleMirrorRequest(request, this.storage, { authorized: true, writerLease: leaseMode(this.env) /* ANYBROWSER hook */, homeFreeze: homeFreezeMode(this.env) /* ANYBROWSER hook */, slotRetire: slotRetireMode(this.env) /* JOIN hook */, rebaseMode: rebaseMode(this.env), threadSync: threadSyncMode(this.env), reserveSnapshot: () => {
           if (this.snapshotReaders >= MIRROR_LIMITS.snapshotReaders) fail('MIRROR_SNAPSHOT_BUSY', 503)
           this.snapshotReaders++
           return () => { this.snapshotReaders-- }

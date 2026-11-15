@@ -312,7 +312,8 @@ describe('the edge reads proven by deploy/cloudflare/src/__tests__/voice-edge-re
     for (const [name, args] of [
       ...['write', 'edit', 'commit', 'push', 'stage_proposal', 'merge_proposal', 'promote_staged', 'head_rollback', 'sync_head_to_github',
         'clear_staged_outward', 'dispatch_workflow', 'exec', 'branch_create', 'branch_delete', 'draft_discard', 'modules', 'transcript',
-        'diff', 'bytes', 'compare_files', 'state_diff', 'selftest', 'diagnostics', 'Read', ' status', 'reconcile_proposal', 'withdraw_proposal']
+        'diff', 'bytes', 'compare_files', 'state_diff', 'selftest', 'diagnostics', 'Read', ' status', 'reconcile_proposal', 'withdraw_proposal',
+        'withdraw_staged_head']
         .map(action => ['x6_repo', { action, path: 'docs/x.md', content: 'x' }] as const),
       ['x6_repo', {}], ['x6_repo', { action: ['read'] }], ['x6_github', { action: 'cli', args: ['issue', 'create'] }], ['x6_github', {}],
       ['x6_cloudflare', { action: 'wrangler', args: ['deploy'] }], ['x6_cloudflare', {}], ['x6_nostr', { action: 'provision' }],
@@ -845,6 +846,7 @@ describe('T7: every registered tool is listed or recorded as refused', () => {
         "self_undo",
         "stage_head_promotion",
         "stage_organ_promotion",
+        "stage_organ_remove_promotion",
         "stage_organ_set_promotion",
         "subagent",
         "tree_patch",

@@ -29,6 +29,7 @@ import { memoryVoiceMarkStore, VOICE_NOTE_STAGES } from '../../src/x6/voice-mark
 import { VOICE_ORGAN_PINS } from '../../src/x6/voice-organ-pins.ts'
 import { SPOKEN_PROVENANCE_PREFIX, VOICE_ORGAN_CHANGED_REFUSAL } from '../../src/x6/voice-read-only.ts'
 import { FakeSocket, headManifestIdCanon } from './e4-fixture.ts'
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 
 afterEach(() => { FakeSocket.instances.length = 0; vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -383,6 +384,9 @@ describe('an organ is judged by the bytes of its RUNNING fiber, not the head rec
     let published = a.ballId
     const host = await boot(head, (method, pathname, body) => {
       if (pathname === '/_head/lease' && method === 'POST') {
+        // HEAD requires a reservation before an ordinary replacement; the shared budget stand-in answers it.
+        const budget = idPromotionBudgetReply(body)
+        if (budget) return budget
         const request = body as { ownerPeerId: string }
         const lease = { ownerPeerId: request.ownerPeerId, generation: 1, expiresAt: Date.now() + 30_000 }
         return Response.json({ ok: true, ballId: published, lease })

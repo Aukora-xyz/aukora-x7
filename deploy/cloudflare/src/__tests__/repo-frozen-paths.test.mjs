@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import test from 'node:test'
-import { handleCloudBroker, PROPOSAL_CI_NEXT, PROPOSAL_CI_WORKFLOWS } from '../cloud-brokers.mjs'
+import { handleCloudBroker, PROPOSAL_CI_NEXT, PROPOSAL_CI_WORKFLOWS, PROPOSAL_GATE_CI_NEXT, proposalCiWorkflows, repoDoorLevel } from '../cloud-brokers.mjs'
 import { canonicalJson } from '../owner-grant-policy.mjs'
 import { canonicalJson as manifestJson } from '../../../../server/ball-transition.mjs'
 import { FROZEN_PATH_NEXT, FROZEN_TEST_NEXT, FROZEN_TOOLS_NEXT, PATH_NOT_OPEN_NEXT, PATH_NOT_PLAIN_NEXT, proposalPathRefusal } from '../../../ci/frozen-paths.mjs'
@@ -51,7 +51,9 @@ function ci({ gate = {}, checks = {} } = {}) {
   }
 }
 
-function fixture({ before = { [FREE]: 'old\n' }, after = { [FREE]: 'new\n' }, ciState, env: extraEnv = {}, access = owner, head } = {}) {
+// The default door level is 'open'; these tests pin the GUARDED level explicitly (`level`), the open
+// level has its own tests at the end of the file.
+function fixture({ before = { [FREE]: 'old\n' }, after = { [FREE]: 'new\n' }, ciState, env: extraEnv = {}, access = owner, head, level = 'guarded' } = {}) {
   const refs = new Map([['main', BASE], [BRANCH, HEAD]]), calls = [], tokens = new Map(), proposals = [], outcomes = []
   let staged = null, attempt = null, consumed = 0, authorizeCalls = 0, currentRequest
   const ciFetch = ci(ciState)
@@ -130,7 +132,7 @@ function fixture({ before = { [FREE]: 'old\n' }, after = { [FREE]: 'new\n' }, ci
     async request(input, { token } = {}) {
       currentRequest = new Request(ORIGIN + '/_host/repo', { method: 'POST', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...(token ? { 'x-x6-class3-approval': token } : {}) }, body: JSON.stringify(input) })
       // A merge never consumes through the Worker's consumer (HEAD does, in begin_merge): a call here is a failure.
-      const response = await handleCloudBroker(currentRequest, env, { access, bootstrap: BOOTSTRAP, now: () => NOW, networkFetch, authorizeClass3: async () => { assert.fail('the merge consumed outside HEAD') } })
+      const response = await handleCloudBroker(currentRequest, env, { access, bootstrap: BOOTSTRAP, now: () => NOW, networkFetch, ...(level === 'guarded' ? { repoDoorLevel: 'guarded' } : {}), authorizeClass3: async () => { assert.fail('the merge consumed outside HEAD') } })
       return { status: response.status, value: await response.json() }
     },
   }
@@ -452,4 +454,112 @@ test('at the edge closed is the default; the modules that decide approvals and b
   await refusedEverywhere(own, 'REPO_PATH_NOT_OPEN', PATH_NOT_OPEN_NEXT, { write: false, before: { [FREE]: 'old\n', [own]: 'old\n' }, after: { [FREE]: 'new\n' } })
   // A change to an auma-*.test.mjs main already has is refused like any test main has.
   await refusedEverywhere(spec, 'REPO_FROZEN_PATH_REFUSED', FROZEN_TEST_NEXT, { write: false, before: { [FREE]: 'old\n', [spec]: 'strict\n' }, after: { [FREE]: 'old\n', [spec]: 'weaker\n' } })
+})
+
+test('a NEW file in her storage folder is refused at write, stage and merge like her whole-store code; her four thread files pass', async () => {
+  const folder = 'packages/experimental/webworker-runtime/src/storage'
+  // Any new name directly in the folder, a new subfolder file, and a case variant of one of the four: the same code the edge
+  // gives every closed path, before anything reaches GitHub and before his passkey is asked for.
+  for (const path of [`${folder}/brand-new-file.ts`, `${folder}/x/y.ts`, `${folder}/Thread-Writer.ts`]) {
+    await refusedEverywhere(path, 'REPO_PATH_NOT_OPEN', PATH_NOT_OPEN_NEXT)
+  }
+  // Her whole-store code, as a change of a file main has.
+  const persist = `${folder}/idb-persist.ts`
+  await refusedEverywhere(persist, 'REPO_PATH_NOT_OPEN', PATH_NOT_OPEN_NEXT, { before: { [FREE]: 'old\n', [persist]: 'old\n' }, after: { [FREE]: 'old\n', [persist]: 'new\n' } })
+  // The four, by exact path: written, staged and merged.
+  const thread = ['thread-writer.ts', 'thread-sync.ts', 'thread-sync-plan.ts', 'thread-store-types.ts'].map(name => `${folder}/${name}`)
+  const before = Object.fromEntries(thread.map(path => [path, 'old\n'])), after = Object.fromEntries(thread.map(path => [path, 'new\n']))
+  const open = fixture({ before, after, ciState: {} })
+  for (const path of thread) assert.equal((await open.request({ action: 'write', branch: BRANCH, path, content: 'x\n' })).status, 200, path)
+  const staged = await stage(open)
+  assert.equal(staged.status, 200, JSON.stringify(staged.value))
+  assert.deepEqual(staged.value.proposal.changedFiles.map(file => file.path).sort(), [...thread].sort())
+  const merged = await open.request(staged.value.proposal.mergeBody, { token: open.grant(staged.value.proposal.mergeBody) })
+  assert.equal(merged.status, 200, JSON.stringify(merged.value)); assert.equal(open.consumed, 1)
+})
+
+// ---- Her repo door at level open ----
+const SIX = ['deploy/cloudflare/src/worker.mjs', '.github/workflows/proposal-checks.yml', 'deploy/ci/frozen-paths.mjs',
+  'deploy/cloudflare/src/__tests__/repo-frozen-paths.test.mjs', 'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx',
+  'packages/experimental/webworker-runtime/src/storage/idb-persist.ts']
+const openFixture = (options = {}) => fixture({ level: 'open', before: Object.fromEntries(SIX.map(path => [path, 'old\n'])), after: Object.fromEntries(SIX.map(path => [path, 'new\n'])), ...options })
+
+test('the edge reads the one level; a caller can only make it stricter; at open the merge waits for the gate workflow alone', () => {
+  assert.equal(repoDoorLevel({}), 'open'); assert.equal(repoDoorLevel(undefined), 'open')
+  assert.equal(repoDoorLevel({ repoDoorLevel: 'guarded' }), 'guarded'); assert.equal(repoDoorLevel({ repoDoorLevel: 'wide' }), 'open')
+  assert.deepEqual(proposalCiWorkflows('open').map(workflow => workflow.file), ['proposal-gate.yml'])
+  assert.deepEqual(proposalCiWorkflows('guarded').map(workflow => workflow.file), ['proposal-gate.yml', 'proposal-checks.yml'])
+  assert.doesNotMatch(PROPOSAL_GATE_CI_NEXT, /token/i)
+})
+
+test('at open: a write, edit and commit on her branch accept the workflows, the fence, the edge, a test, the card and her storage', async () => {
+  for (const path of SIX) {
+    for (const input of [
+      { action: 'write', branch: BRANCH, path, content: 'x\n', message: 'Change', expectedHeadSha: HEAD },
+      { action: 'edit', branch: BRANCH, path, oldString: 'new', newString: 'newer', message: 'Change' },
+      { action: 'commit', branch: BRANCH, message: 'Change', changes: [{ path, content: 'x\n' }] },
+    ]) {
+      const broker = openFixture(), result = await broker.request(input)
+      assert.equal(result.status, 200, `${path} ${input.action} ${JSON.stringify(result.value)}`); assert.equal(broker.refs.get(BRANCH), NEXT)
+    }
+  }
+})
+
+test('at open: a secret-shaped path and a path that is not plain stay refused at write, and nothing reaches GitHub', async () => {
+  for (const [path, code] of [['server/.env', 'REPO_PATH_REFUSED'], ['.npmrc', 'REPO_PATH_REFUSED'], ['deploy/cloudflare/src/owner-key.mjs', 'REPO_PATH_REFUSED'],
+    ['mirror/home/auma/private/x.md', 'REPO_PATH_REFUSED'], ['deploy//ci/x.mjs', 'REPO_PATH_REFUSED'], ['deploy/../x.mjs', 'REPO_PATH_REFUSED'],
+    ['deploy/cloudflare/src/ſigned-action.mjs', 'REPO_PATH_NOT_PLAIN']]) {
+    for (const input of [{ action: 'write', branch: BRANCH, path, content: 'x\n' }, { action: 'commit', branch: BRANCH, message: 'Change', changes: [{ path: FREE, content: 'x\n' }, { path, content: 'x\n' }] }]) {
+      const broker = openFixture(), result = await broker.request(input)
+      assert.equal(result.status === 200, false, path); assert.equal(result.value.code, code, `${path} ${JSON.stringify(result.value)}`); assert.equal(broker.github, 0, path)
+    }
+  }
+})
+
+test('at open: stage and merge accept a proposal changing all six, T2 files flagged; his passkey is still required; only the gate workflow is read', async () => {
+  const broker = openFixture({ ciState: { checks: { runs: [] } } }), staged = await stage(broker)
+  assert.equal(staged.status, 200, JSON.stringify(staged.value))
+  const proposal = staged.value.proposal
+  assert.equal(proposal.ciStatus, 'passed')
+  assert.deepEqual(proposal.changedFiles.map(file => file.path).sort(), [...SIX].sort())
+  for (const file of proposal.changedFiles) assert.equal(file.t2Protected, file.path.startsWith('deploy/') || file.path.startsWith('.github/'), file.path)
+  // No passkey: refused, nothing spent, main where it was.
+  const bare = await broker.request(proposal.mergeBody)
+  assert.equal(bare.status, 403); assert.equal(bare.value.code, 'CLASS3_WEBAUTHN_REQUIRED'); assert.equal(broker.consumed, 0); assert.equal(broker.refs.get('main'), BASE)
+  // A passkey for other terms is refused by HEAD; nothing merges.
+  const other = { ...proposal.mergeBody, treeSha: 'f'.repeat(40) }
+  const wrong = await broker.request(proposal.mergeBody, { token: broker.grant(other) })
+  assert.notEqual(wrong.status, 200); assert.equal(broker.consumed, 0); assert.equal(broker.refs.get('main'), BASE)
+  // His passkey on the exact base, head and tree: merged, one approval spent, the receipt written by HEAD's outcome.
+  const merged = await broker.request(proposal.mergeBody, { token: broker.grant(proposal.mergeBody) })
+  assert.equal(merged.status, 200, JSON.stringify(merged.value)); assert.equal(broker.refs.get('main'), HEAD); assert.equal(broker.consumed, 1)
+  assert.deepEqual(broker.outcomes, [{ status: 'succeeded', commitSha: HEAD }])
+  assert.equal(broker.calls.some(call => call.url.includes('/actions/workflows/proposal-checks.yml/')), false)
+  assert.equal(broker.calls.some(call => call.url.includes('/actions/workflows/proposal-gate.yml/runs')), true)
+})
+
+test('at open: the merge is refused, the approval unspent, when the gate workflow is red, pending or missing', async () => {
+  for (const [gate, ciStatus] of [[{ runs: [run(GATE, { conclusion: 'failure' })] }, 'failed'], [{ runs: [run(GATE, { status: 'in_progress', conclusion: null })] }, 'pending'],
+    [{ runs: [] }, 'none'], [{ jobs: [] }, 'failed']]) {
+    const broker = openFixture({ ciState: { gate, checks: { runs: [] } } })
+    assert.equal((await stage(broker)).value.proposal.ciStatus, ciStatus)
+    const result = await broker.request(mergeBody, { token: broker.grant(mergeBody) })
+    assert.equal(result.status, 409); assert.equal(result.value.code, 'REPO_PROPOSAL_CI_NOT_PASSED'); assert.equal(result.value.ciStatus, ciStatus)
+    assert.equal(result.value.next, PROPOSAL_GATE_CI_NEXT)
+    assert.equal(broker.authorizeCalls, 0); assert.equal(broker.consumed, 0); assert.equal(broker.refs.get('main'), BASE)
+  }
+  // At guarded the same green gate with no checks run is still pending (both workflows, as before).
+  const guarded = fixture({ ciState: { checks: { runs: [] } } })
+  assert.equal((await stage(guarded)).value.proposal.ciStatus, 'pending')
+})
+
+test('at open: a secret-shaped path or a case twin in the proposal is refused at stage and merge before the passkey', async () => {
+  for (const [extra, code] of [[{ 'server/.env': 'X=1\n' }, 'REPO_PROPOSAL_PATH_REFUSED'], [{ 'deploy/cloudflare/src/Worker.mjs': 'twin\n' }, 'REPO_PATH_NOT_PLAIN']]) {
+    const after = { ...Object.fromEntries(SIX.map(path => [path, 'new\n'])), ...extra }
+    const staging = openFixture({ after, ciState: {} }), staged = await stage(staging)
+    assert.equal(staged.status, 403, JSON.stringify(staged.value)); assert.equal(staged.value.code, code); assert.equal(staging.proposals.length, 0)
+    const merging = openFixture({ after, ciState: {} }), result = await merging.request(mergeBody, { token: merging.grant(mergeBody) })
+    assert.equal(result.status, 403); assert.equal(result.value.code, code)
+    assert.equal(merging.authorizeCalls, 0); assert.equal(merging.consumed, 0); assert.equal(merging.refs.get('main'), BASE)
+  }
 })

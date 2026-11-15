@@ -73,20 +73,23 @@ const answerCalls = (...tool_calls) => ({ content: null, tool_calls })
 test('cloud wake runs bounded tool protocol with exact transcripts and per-round budget', async t => {
   const f = await wakeFixture(t, [answerCalls(call('read', 'readMirrorText', { path: CLOUD_WAKE_PATHS[0] }), call('inspect', 'inspectHeadWish')),
     answerCalls(call('checkpoint', 'appendWakeCheckpoint')), { content: 'WISH_COMPLETED: observed epoch 2 and recorded checkpoint.' }])
-  assert.deepEqual(await f.run(), { status: 'success', toolCalls: 3, evidenceCount: 2 })
+  // The checkpoint call is answered CLOUD_WAKE_CHECKPOINT_UNAVAILABLE without
+  // calling the mirror (it would move her home's version past a closed tab's base); the step goes on.
+  assert.deepEqual(await f.run(), { status: 'success', toolCalls: 3, evidenceCount: 2,
+    toolRefusals: [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_paused' }] })
   assert.equal(f.requests.length, 3)
   // A step has 4 rounds now, so round 3 is still 'auto'. The 4th round's forced 'none', and a tool call returned
   // in it failing as tool_refused / cloud_wake_tool_limit, are asserted by the two "the wake" 4-round tests in
   // wake2-reasons.test.mjs (both fail if the forced round moves off the last one).
   assert.equal(f.requests[2].tool_choice, 'auto')
   assert.equal(CLOUD_WAKE_LIMITS.rounds, 4)
-  assert.deepEqual(f.mirrorCalls, ['/_mirror/wake-read', '/_mirror/wake-checkpoint'])
+  assert.deepEqual(f.mirrorCalls, ['/_mirror/wake-read'])
   assert.equal((await f.hs.storage.get('provider-budget:v1:deepseek')).requests, 3)
   assert.equal(await f.hs.storage.get('provider-budget:v1:anthropic'), undefined)
   assert.equal((await f.hs.storage.get('head:wish:active')).status, 'running')
   assert.equal((await f.hs.storage.get('head:wish:active')).lastEvidenceStatus, 'completion_proposed')
-  assert.equal((await f.ms.storage.get(FENCE)).revision, 2)
-  assert.ok(f.requests[2].messages.some(message => message.role === 'tool' && JSON.parse(message.content).path === CLOUD_WAKE_CHECKPOINT_PATH))
+  assert.equal((await f.ms.storage.get(FENCE)).revision, 1)
+  assert.ok(f.requests[2].messages.some(message => message.role === 'tool' && JSON.parse(message.content).mirrorCode === 'MIRROR_WAKE_CHECKPOINT_PAUSED'))
 })
 
 test('completion without tools cannot complete wishes; no-browser claims do not block', async t => {

@@ -8,7 +8,7 @@ import test from 'node:test'
 import { readFileSync } from 'node:fs'
 import {
   bootstrapMirror, bootstrapResetPaths, handleMirrorRequest, hiddenStoredPath, MIRROR_LIMITS, mirrorDigest, mirrorPathExcluded,
-  publishMirror, readMirrorRepoFile, secretShapedPart, validateMirrorPath,
+  publishMirror, readMirrorRepoFile, secretShapedPart, THREAD_PRUNE, validateMirrorPath,
 } from '../mirror-do.mjs'
 
 const FENCE = 'mirror:v2:global-fence', ENTRY = 'mirror:v2:entry:', CHUNK = 'mirror:v2:chunk:', RESET = 'mirror:v2:reset:'
@@ -620,4 +620,125 @@ test('job 5: an old snapshot validator gets 200 with the filtered bytes once the
   // The status route and the estate name the same tag; the cloud fence did not advance.
   assert.equal((await (await call(storage, '/_mirror/status?compact=1')).json()).snapshotETag, current)
   assert.deepEqual(storage.data.get(FENCE), fence)
+})
+
+// ---- With thread sync `on`, conversation journals are the thread log's, not the whole-home copy's ----
+const THREAD_ON = { threadSync: 'on' }
+const JOURNAL = id => `/dsh/home/sessions/proj/${id}/session.v4.jsonl`
+const SESSION_DIRS = ids => [['/dsh/home/sessions', { kind: 'dir', mode: 0o755 }], ['/dsh/home/sessions/proj', { kind: 'dir', mode: 0o755 }],
+  ...ids.map(id => [`/dsh/home/sessions/proj/${id}`, { kind: 'dir', mode: 0o755 }])]
+const callOn = (storage, path, init) => handleMirrorRequest(new Request(`https://x61.internal${path}`, init), storage, { authorized: true, ...THREAD_ON })
+const postOn = async (storage, body) => callOn(storage, '/_mirror/delta', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+const journalKeys = async (storage, ids) => {
+  const keys = []
+  for (const id of ids) {
+    const key = await mirrorDigest(JOURNAL(id))
+    keys.push(...[...storage.data.keys()].filter(name => name === ENTRY + key || name.startsWith(`${CHUNK}${key}:`)))
+  }
+  return keys
+}
+/** A journal the mirror stored before thread sync: metadata of `bytes` decoded bytes, its chunk rows as placeholders. */
+async function plantJournal(storage, path, bytes) {
+  const id = await mirrorDigest(path), chunks = Math.ceil(Math.ceil(bytes / 3) * 4 / (96 * 1024))
+  storage.data.set(ENTRY + id, { path, kind: 'file', mode: 0o644, mtimeMs: 1, chunks, bytes })
+  for (let index = 0; index < chunks; index += 1) storage.data.set(`${CHUNK}${id}:${index}`, 'x')
+  return chunks
+}
+
+test('with thread sync on, a save whose journals alone exceed snapshotBytes is acknowledged whole, journals unstored; off refuses it', async () => {
+  const big = { kind: 'file', mode: 0o644, mtimeMs: 2, b64: 'A'.repeat(32 * 1024 * 1024) } // 24 MiB decoded, the per-file ceiling
+  const entries = () => [['/dsh/home/auma', { kind: 'dir', mode: 0o755 }], [NOTE, file('hello\n')], ...SESSION_DIRS(['a', 'b', 'c', 'd']),
+    [JOURNAL('a'), big], [JOURNAL('b'), big], [JOURNAL('c'), big], [JOURNAL('d'), big]]
+  assert.ok(4 * big.b64.length > MIRROR_LIMITS.snapshotBytes)
+  // Mode off (and pull): main's answer, nothing written.
+  for (const threadSync of [undefined, 'off', 'pull']) {
+    const storage = new Storage(), before = structuredClone(storage.data)
+    await assert.rejects(publishMirror(storage, await envelope(storage, 1, entries()), { threadSync }), { code: 'MIRROR_SNAPSHOT_TOO_LARGE', status: 413 })
+    assert.deepEqual(storage.data, before)
+  }
+  const storage = new Storage()
+  const sent = await envelope(storage, 1, entries())
+  const ack = await publishMirror(storage, sent, THREAD_ON)
+  // Exactly what her tab checks (idb-persist.ts): ok, id, digest, applied = every entry sent, protocol, revision = base + 1.
+  assert.equal(ack.ok, true)
+  assert.equal(ack.id, sent.batch.id)
+  assert.equal(ack.digest, sent.digest)
+  assert.equal(ack.applied, sent.batch.entries.length)
+  assert.equal(ack.protocol, 'x61-cloud-mirror/v1')
+  assert.equal(ack.revision, 1)
+  assert.equal(ack.threadEntries, 4)
+  assert.deepEqual(await journalKeys(storage, ['a', 'b', 'c', 'd']), [])
+  storage.data.set(BOOTSTRAP, { phase: 'ready', seedId: SEED, lineageId: LINEAGE })
+  const snapshot = await callOn(storage, '/api/snapshot?snapshotFormat=x61-mirror-snapshot%2Fv2')
+  assert.equal(snapshot.status, 200)
+  assert.deepEqual(JSON.parse(await snapshot.text()).entries.map(([path]) => path),
+    ['/dsh/home/auma', NOTE, '/dsh/home/sessions', '/dsh/home/sessions/proj', '/dsh/home/sessions/proj/a', '/dsh/home/sessions/proj/b', '/dsh/home/sessions/proj/c', '/dsh/home/sessions/proj/d'])
+  // The same save again is its stored receipt (a lost acknowledgement), never a second revision.
+  assert.deepEqual(await publishMirror(storage, sent, THREAD_ON), { ...ack, replayed: true })
+})
+
+test('a mirror holding journals near the cap takes a save it used to refuse; its journals are hidden from every read and removed, bounded', async () => {
+  const ids = ['a', 'b', 'c'], bytes = 23.5 * 1024 * 1024
+  const seeded = async () => {
+    const storage = new Storage()
+    assert.equal((await publishMirror(storage, await envelope(storage, 1, [['/dsh/home/auma', { kind: 'dir', mode: 0o755 }], [NOTE, file('hello\n')], ...SESSION_DIRS(ids)]))).ok, true)
+    for (const id of ids) assert.equal(await plantJournal(storage, JOURNAL(id), bytes), 335)
+    storage.data.set(BOOTSTRAP, { phase: 'ready', seedId: SEED, lineageId: LINEAGE })
+    return storage
+  }
+  const save = async (storage, seq) => envelope(storage, seq, [[`/dsh/home/auma/notes-${seq}.md`, { kind: 'file', mode: 0o644, mtimeMs: 3, b64: 'B'.repeat(4 * 1024 * 1024) }]])
+  // Mode off: refused as tonight, nothing changes.
+  const off = await seeded(), offBefore = structuredClone(off.data)
+  const refused = await post(off, await save(off, 2))
+  assert.equal(refused.status, 413)
+  assert.equal((await refused.json()).code, 'MIRROR_SNAPSHOT_TOO_LARGE')
+  assert.deepEqual(off.data, offBefore)
+  // Mode on: accepted; one save removes whole journals up to THREAD_PRUNE (512 chunk rows: one 335-row journal).
+  const storage = await seeded()
+  assert.equal(THREAD_PRUNE.chunks, 512)
+  const keysBefore = (await journalKeys(storage, ids)).length
+  assert.equal(keysBefore, 3 * 336)
+  const first = await postOn(storage, await save(storage, 2))
+  assert.equal(first.status, 200)
+  const ack = await first.json()
+  assert.equal(ack.ok, true)
+  assert.equal(ack.applied, 1)
+  assert.equal(ack.threadEntries, 0)
+  assert.equal((await journalKeys(storage, ids)).length, 2 * 336)
+  // The two not yet removed are absent to every read: the snapshot stream, the status listing, the repo read.
+  const snapshot = JSON.parse(await (await callOn(storage, '/api/snapshot?snapshotFormat=x61-mirror-snapshot%2Fv2')).text())
+  assert.equal(snapshot.entries.some(([path]) => path.endsWith('.jsonl')), false)
+  assert.equal(snapshot.entries.some(([path]) => path === '/dsh/home/auma/notes-2.md'), true)
+  const status = await (await callOn(storage, '/_mirror/status')).json()
+  assert.equal(status.homeFiles.some(path => path.endsWith('.jsonl')), false)
+  await assert.rejects(readMirrorRepoFile(storage, { path: '/dsh/home/auma/session/messages.jsonl', seedId: SEED, ...THREAD_ON }), { code: 'MIRROR_REPO_PATH_REFUSED' })
+  assert.equal((await readMirrorRepoFile(storage, { path: '/dsh/home/auma/session/messages.jsonl', seedId: SEED })).kind, 'missing', 'off: main\'s read')
+  // Two more saves remove the rest; nothing else of hers is touched.
+  for (const seq of [3, 4]) assert.equal((await postOn(storage, await save(storage, seq))).status, 200)
+  assert.deepEqual(await journalKeys(storage, ids), [])
+  const after = JSON.parse(await (await callOn(storage, '/api/snapshot?snapshotFormat=x61-mirror-snapshot%2Fv2')).text())
+  assert.deepEqual(after.entries.map(([path]) => path).filter(path => path.startsWith('/dsh/home/auma')),
+    ['/dsh/home/auma', '/dsh/home/auma/note.md', '/dsh/home/auma/notes-2.md', '/dsh/home/auma/notes-3.md', '/dsh/home/auma/notes-4.md'])
+})
+
+test('with thread sync on, a `gone` for a journal is acknowledged and changes nothing but the fence', async () => {
+  const storage = new Storage()
+  assert.equal((await publishMirror(storage, await envelope(storage, 1, [['/dsh/home/auma', { kind: 'dir', mode: 0o755 }], ...SESSION_DIRS(['a'])]))).ok, true)
+  const rows = () => [...storage.data].filter(([key]) => key.startsWith(ENTRY) || key.startsWith(CHUNK) || key.startsWith(RESET))
+  const before = rows()
+  const sent = await envelope(storage, 2, [[JOURNAL('a'), { kind: 'gone' }], ['/dsh/home/auma/session/messages.jsonl', { kind: 'gone' }]])
+  const response = await postOn(storage, sent)
+  assert.equal(response.status, 200)
+  const ack = await response.json()
+  assert.equal(ack.applied, 2)
+  assert.equal(ack.threadEntries, 2)
+  assert.equal(ack.revision, 2)
+  assert.deepEqual(rows(), before)
+  assert.equal(storage.data.get(FENCE).revision, 2)
+  // Mode off: the same `gone` is main's deletion marker.
+  const off = new Storage()
+  assert.equal((await publishMirror(off, await envelope(off, 1, [['/dsh/home/auma', { kind: 'dir', mode: 0o755 }], ...SESSION_DIRS(['a'])]))).ok, true)
+  const offAck = await publishMirror(off, await envelope(off, 2, [[JOURNAL('a'), { kind: 'gone' }]]))
+  assert.equal(offAck.threadEntries, undefined)
+  assert.equal(off.data.get(RESET + await mirrorDigest(JOURNAL('a'))), JOURNAL('a'))
 })

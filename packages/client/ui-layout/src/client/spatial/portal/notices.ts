@@ -205,6 +205,25 @@ export function approvalNoticeEntries(facts: ApprovalFacts | null, openSovereign
   return entries
 }
 
+// A merge the owner's card merged on THIS page is no longer waiting; the approval readers read HEAD again at once,
+// instead of at the host's next push (which a page without its socket never gets) or the next minute's poll.
+const approvalRereads = new Set<() => void>()
+
+/** An approval card on this page settled what HEAD held (a merge landed): every approval reader reads HEAD again now. */
+export function approvalsChanged(): void {
+  for (const reread of [...approvalRereads]) reread()
+}
+
+/**
+ * Be told when an approval card on this page settled what HEAD held.
+ * @param reread - reads HEAD again.
+ * @returns stops telling.
+ */
+export function onApprovalsChanged(reread: () => void): () => void {
+  approvalRereads.add(reread)
+  return () => { approvalRereads.delete(reread) }
+}
+
 // ── The page's one list ────────────────────────────────────────────────────────────────────────────────────────────
 // WHOEVER READS, PUBLISHES. The frame reads while no app that reads for itself is open;
 // Work and Aura Coherence (the boot app) read while they are open. Each reader publishes what it found under its own

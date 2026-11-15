@@ -16,7 +16,7 @@
 - **只有所有者的 id。** 15 个只有 passkey 才能改动的名称：十个 organ 和五个 Wasm 单元，外加任何声明自己属于治理的条目。`server/ball-transition.mjs` 中的 `T2_ONLY_ORGANS`。测试：`deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`。
 - **对失败的证明只有一条规则。** 只有经过检查且确实错误的证明才能推动锁定，所以外人无法用垃圾数据把所有者锁在门外。`deploy/cloudflare/src/proof-failure-rule.mjs`；它的测试解析所有者身份相关的源文件，只要在其中别处调用了验证器或写入了预算就失败：`deploy/cloudflare/src/__tests__/proof-failure-rule.test.mjs`。
 
-委托的许可是指所有者交出一个有界的权威切片，绝不是权威本身。有四种形式（IMPLEMENTED）：最长 8 小时的所有者登录会话，它不是批准；夜间授权（night grant），一次 passkey 点按，允许在最多 12 小时、12 次使用、每次使用最多 8 个 organ 的范围内添加或替换普通 organ（`deploy/cloudflare/src/night-grant.mjs`，测试 `night-grant.test.mjs`）；一组最多八个普通 organ 的获批集合（`organ-set-rule.mjs`，测试 `organ-set.test.mjs`）；以及所有者的 Away mandate，一次针对精确条款的 passkey 点按，让她在没有标签页时做一份封闭清单中的可逆的事，每天有次数上限，最长 30 天（`deploy/cloudflare/src/owner-mandate.mjs`，测试 `owner-mandate.test.mjs`）。mandate 永远无法表达合并、部署、密钥、删除或 head 提升，而且只要 `WAKE_ACTS_ENABLED` 是 "0"，就没有任何东西使用它。四者都不覆盖只有所有者的 id。
+委托的许可是指所有者交出一个有界的权威切片，绝不是权威本身。有四种形式（IMPLEMENTED）：最长 8 小时的所有者登录会话，它不是批准；夜间授权（night grant），一次 passkey 点按，允许在最多 12 小时、12 次使用、每次使用最多 8 个 organ 的范围内添加或替换普通 organ（`deploy/cloudflare/src/night-grant.mjs`，测试 `night-grant.test.mjs`）；一组最多八个普通 organ 的获批集合（`organ-set-rule.mjs`，测试 `organ-set.test.mjs`）；以及所有者的 Away mandate，一次针对精确条款的 passkey 点按，让她在没有标签页时做一份封闭清单中的可逆的事，每天有次数上限，最长 30 天（`deploy/cloudflare/src/owner-mandate.mjs`，测试 `owner-mandate.test.mjs`）。mandate 永远无法表达合并、部署、密钥、删除或 head 提升，而且只有在 `WAKE_ACTS_ENABLED` 为 "1" 时唤醒才会使用它，随附的 `deploy/cloudflare/wrangler.toml` 设的就是这个值。四者都不覆盖只有所有者的 id。
 
 信任模型不完整之处（每一条都是这棵树中代码的工作方式；没有一条已修复）：
 
@@ -57,11 +57,11 @@
 
 ## 4. 阅读顺序，附以行数计的阅读预算
 
-**约 750 行。** 按顺序的路径：`README.md`（142），本页（161），`docs/DIRECTION.md`（178）和 `docs/WHAT-IS-BUILT.md`（266），然后是完整的论证（见下；它的行数不计入这个总数）。读完后你知道她能做什么、每个部分证明到了什么程度、它要去哪里，以及有意没有做的事。
+**约 750 行。** 按顺序的路径：`README.md`（149），本页（161），`docs/DIRECTION.md`（178）和 `docs/WHAT-IS-BUILT.md`（266），然后是完整的论证（见下；它的行数不计入这个总数）。读完后你知道她能做什么、每个部分证明到了什么程度、它要去哪里，以及有意没有做的事。
 
 **约 1,730 行。** 加上属于较早的一棵树的记录 `docs/RUN-RECORD.md`（56）、`docs/KNOWN-RED-TESTS.md`（71）、`docs/ARCHITECTURE-MAP.md`（133）、`docs/GLOSSARY.md`（23）、`server/ball-transition.mjs`（125）、`deploy/cloudflare/src/proof-failure-rule.mjs`（250）、`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`（232）和 `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`（88）。
 
-**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（4,317）、`cloud-brokers.mjs`（3,456）、`owner-mandate.mjs`（211）、`owner-grant-policy.mjs`（353）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（173）、`deploy/ci/frozen-paths.mjs`（439）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（1,263）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,060）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（9,577）按符号读，不要整个读。
+**一整天。** 加上 `deploy/cloudflare/src/aumlok.mjs`（1,806）、`head-do.mjs`（4,495）、`cloud-brokers.mjs`（3,604）、`owner-mandate.mjs`（211）、`owner-grant-policy.mjs`（366）、`night-grant.mjs`（127）、`deploy/cloudflare/README.md`（173）、`deploy/ci/frozen-paths.mjs`（537）、`mirror/home/auma/seed/organs/seed-cycle.js`（148）、`seed-pearl.js`（525）、`seed-receipts.js`（501）、`packages/experimental/webworker-runtime/src/x6/scion.ts`（179）、`wasm-cells.ts`（1,263）、`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`（1,125）、`deploy/cloudflare/src/recovery-restore.mjs`（485），然后是 `docs/SIZE-AND-ORIGIN.md`。`ball-loader.ts`（9,924）按符号读，不要整个读。
 
 **论证。** `docs/WHITEPAPER.md`（1156，只有英文）是本项目的完整论证，不是状态页。据作者报告，它的 Book V 和 Book VI 曾对照较早的一棵树核对过：读了代码，没有运行；它的数字与这棵树不一致时，以这棵树的页面为准。
 
@@ -104,7 +104,7 @@
 
 ## 7. 代码的每一部分来自哪里
 
-按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 14.6%，以及代码行的 18.1%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
+按本项目唯一的统计，由它自己的历史得出，而这段历史并未公开（UNVERIFIED）：这棵树非 vendor 文本行的 14.9%，以及代码行的 18.5%，是 Aukora 自己的。其余都是继承来的。细节和方法：`docs/SIZE-AND-ORIGIN.md`。
 
 - **Aukora 的一层：** `deploy/`（边缘端和部署门禁）、`server/`（本地宿主、ball 规则）、`mirror/`（创世 head 和 organ）、`packages/experimental/webworker-runtime/src/x6/`（loader、scion、单元）、`packages/client/ui-layout/src/client/spatial/`（应用），以及 `apps/web/public/` 的一部分。
 - **继承来的 DeepSeek Harness：** `packages/` 的大部分，外加 `python/`、`native/`、`benchmarks/`、`snapshots/`、`.agents/` 和 `.github/workflows/` 的大部分。MIT 声明在 `LICENSES/MIT-DeepSeek-Harness.txt`。Aukora 与 DeepSeek 没有隶属关系。
@@ -130,7 +130,7 @@
 
 重复下面这段，或比它更弱的话：
 
-> Aukora 是一个由个人拥有的 AI（Auma）的原型，她可以暂存对自己模块的修改，而一个独立的 Cloudflare 边缘端会检查所有者的 passkey，并在对她受保护部分的修改生效之前，把这次批准绑定到一次修改的精确字节。passkey 签名的是一个随机挑战，不是这些字节；绑定由边缘端持有。相关的代码和测试都在这棵树中，只是编译器和自建步骤没有测试，但唯一的运行证据是其作者在一台机器上的一次记录的运行（属于较早的一棵树）：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个已列在 docs/KNOWN-RED-TESTS.md 中，没有浏览器、没有部署、没有模型调用，也没有 passkey 仪式。这棵树没有记录任何端到端的、经所有者批准的自我修改，部署到全新账户的云端部署是 UNVERIFIED，也没有任何东西是 INDEPENDENTLY VERIFIED。按作者自己的报告，还没有任何一个没有标签页的唤醒步骤在他们的线上节点上完成过，在修复后的合并路径上还没有任何合并卡片被批准过，而她在没有标签页时的行动是关闭的（树中为 `WAKE_ACTS_ENABLED = "0"`）。这棵树是一个全新的 genesis，epoch 1，不含 Auma 自己的任何世界。30 个 Wasm 单元中的 24 个和 Dakini Code 包没有源码随附，pentora36.wasm 尚未授予许可，而且恢复整个已存储的快照可能让一次已被消耗的批准重新生效，树中有一个测试复现了这一点。packages/ 的大部分是继承来的 DeepSeek Harness 运行时，插件框架是 vendor/ 中的 Cordis，所以按一个未经验证的统计，Aukora 自己的一层只占文本的较小份额（具体数字见 `docs/SIZE-AND-ORIGIN.md`）。
+> Aukora 是一个由个人拥有的 AI（Auma）的原型，她可以暂存对自己模块的修改，而一个独立的 Cloudflare 边缘端会检查所有者的 passkey，并在对她受保护部分的修改生效之前，把这次批准绑定到一次修改的精确字节。passkey 签名的是一个随机挑战，不是这些字节；绑定由边缘端持有。相关的代码和测试都在这棵树中，只是编译器和自建步骤没有测试，但唯一的运行证据是其作者在一台机器上的一次记录的运行（属于较早的一棵树）：5,502 个测试用例，5,399 个通过，90 个失败，其中 89 个已列在 docs/KNOWN-RED-TESTS.md 中，没有浏览器、没有部署、没有模型调用，也没有 passkey 仪式。这棵树没有记录任何端到端的、经所有者批准的自我修改，部署到全新账户的云端部署是 UNVERIFIED，也没有任何东西是 INDEPENDENTLY VERIFIED。按作者自己的报告，她对存储的四项改动已经通过合并卡片被合并，每一项都由所有者用 passkey 批准；在他们的线上节点上没有标签页时运行过的唤醒步骤没有产生证据；她在没有标签页时的行动是打开的（树中为 `WAKE_ACTS_ENABLED = "1"`），但还没有已知的行动完成过。她的仓库门随附的级别是 `open`：她可以提议修改任何路径，包括她的裁判，只有所有者对那次精确合并的 passkey 才能让它生效。这棵树是一个全新的 genesis，epoch 1，不含 Auma 自己的任何世界。30 个 Wasm 单元中的 24 个和 Dakini Code 包没有源码随附，pentora36.wasm 尚未授予许可，而且恢复整个已存储的快照可能让一次已被消耗的批准重新生效，树中有一个测试复现了这一点。packages/ 的大部分是继承来的 DeepSeek Harness 运行时，插件框架是 vendor/ 中的 Cordis，所以按一个未经验证的统计，Aukora 自己的一层只占文本的较小份额（具体数字见 `docs/SIZE-AND-ORIGIN.md`）。
 
 ## 10. 已知失败与未决的安全问题
 

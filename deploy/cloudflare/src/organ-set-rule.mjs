@@ -2,7 +2,8 @@
  * THE ONE RULE for what an ordinary-organ change may contain, shared by HEAD's organ-set approval
  * (deploy/cloudflare/src/owner-grant-policy.mjs) and the night grant (night-grant.mjs). The Sovereignty card
  * (aumlok/organ-set.ts) and Auma's worker (ball-loader.ts organAdditionSetOf) keep TypeScript copies that must pass
- * the same vectors (organ-set-rule.vectors.json): a copy that drifts fails its own spec.
+ * the same vectors (organ-set-rule.vectors.json): a copy that drifts fails its own spec. `organRemoval` (one ordinary
+ * organ removed) is shared the same way through organ-remove-rule.vectors.json.
  * Pure, keyless, dependency-free apart from ball-transition.mjs.
  *
  * DECISIONS (every implementation follows them, and the vectors pin each one):
@@ -134,4 +135,38 @@ export function organAdditionSet(previous, candidate) {
   }
   if (!newModulesOwned(previous, candidate, added.map(id => candidate.entries[id].specifier))) return null
   return organs
+}
+
+/** The keys a removed ordinary entry may carry (every shape HEAD's own builders write for an ordinary organ). */
+const REMOVE_FIELDS = Object.freeze(['id', 'specifier', 'disabled', 'config', 'previousSpecifiers', 'previousVersions', 'updatedAt', 'governance'])
+
+/** The ONE ordinary organ a candidate REMOVES, when that is ALL it does; otherwise null. The mirror image of
+ * organAdditionSet for exactly one organ: root fields as organAdditionSet; exactly one published entry
+ * absent from the candidate and none added; every other entry byte-identical; the removed id lower kebab (ORGAN_ID_RE)
+ * and not governance by id or by declaration; the removed entry a plain ordinary entry (enabled or disabled) running a
+ * `ball:<sha>` module the head carries.
+ * MODULES: `candidate.modules` is byte-identical to `previous.modules`. Both manifest validators accept a module no entry
+ * runs (server/ball-manifest.mjs validateManifestStructure, which HEAD uses; ball-loader.ts manifestStructureProblem,
+ * the tab's port of it: each only requires that every referenced `ball:` module is present and that every module names
+ * itself), so nothing is dropped: every other organ's rollback targets stay byte-identical, and so does the removed
+ * organ's own module (a later add can run it again without new bytes).
+ * @returns {null|{organId: string, sha256: string}}
+ */
+export function organRemoval(previous, candidate) {
+  if (!plain(previous) || !plain(candidate) || !plain(previous.entries) || !plain(candidate.entries)
+    || !plain(previous.modules) || !plain(candidate.modules) || !rootFieldsUnchanged(previous, candidate)) return null
+  if (Object.keys(candidate.entries).some(id => !Object.hasOwn(previous.entries, id))) return null
+  const removed = Object.keys(previous.entries).filter(id => !Object.hasOwn(candidate.entries, id))
+  if (removed.length !== 1) return null
+  for (const id of Object.keys(candidate.entries)) {
+    if (canonicalJson(previous.entries[id]) !== canonicalJson(candidate.entries[id])) return null
+  }
+  if (canonicalJson(previous.modules) !== canonicalJson(candidate.modules)) return null
+  const [organId] = removed
+  const entry = previous.entries[organId]
+  if (!ORGAN_ID_RE.test(organId) || isT2OnlyOrgan(organId, entry, undefined) || !plain(entry)
+    || Object.keys(entry).some(key => !REMOVE_FIELDS.includes(key)) || entry.id !== organId
+    || typeof entry.disabled !== 'boolean' || typeof entry.specifier !== 'string' || !BALL.test(entry.specifier)
+    || !Object.hasOwn(previous.modules, entry.specifier.slice(5))) return null
+  return { organId, sha256: entry.specifier.slice(5) }
 }

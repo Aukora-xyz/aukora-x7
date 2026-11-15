@@ -27,7 +27,9 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--dsw-alias-label-primary, #0f1115);
-  background: var(--dsw-alias-bg-base, #fff);
+  /* Until the theme arrives, the canvas is the Spatial night (--aukora-background, spatial-tokens.css), as is the
+     boot page above it (apps/web/index.html asks for a dark canvas before this sheet): never a white frame. */
+  background: var(--dsw-alias-bg-base, rgb(11, 13, 24));
   /* Supporting browsers insert CJK/Latin spacing in inherited prose. */
   text-autospace: normal;
 }

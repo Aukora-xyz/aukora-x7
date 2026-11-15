@@ -151,6 +151,25 @@ describe('Wave 4 repository tool declarations and admission', () => {
   })
 })
 
+// `tree`, `log` and `bytes` with her own `branch` reach the edge, which reads that branch.
+describe('tree, log and bytes on her own branch', () => {
+  it('says so in one sentence, keeps them Class 0, and sends each with its branch to the edge unchanged', async () => {
+    const { repo, calls } = await mounted()
+    expect(repo.description).toContain('`tree`, `log` and `bytes` also read your own auma branch at its head when you pass `branch`, behind the same screens as main.')
+    const reads = [
+      { action: 'tree', branch: A, prefix: 'server' },
+      { action: 'log', branch: B, limit: 5 },
+      { action: 'bytes', branch: A, path: 'server/receipts.mjs', offset: 0, length: 64 },
+    ]
+    for (const args of reads) {
+      expect(classifyActionIrreversibility({ tool: 'x6_repo', ...args })).toBe(0)
+      expect(await repo.execute(args)).toEqual({ ok: true })
+    }
+    expect(calls.map(call => call.body)).toEqual(reads)
+    for (const { request } of calls) expect(request.headers.has('x-x6-class3-approval')).toBe(false)
+  })
+})
+
 // A staged merge card can be taken back; no fingerprint, nothing merged.
 describe('withdraw_proposal in x6_repo', () => {
   it('is advertised with the other actions, described in one sentence, the reversible class like stage_proposal, and sent with her owner session only', async () => {
@@ -374,5 +393,17 @@ describe('Wave 4 caller-owned branch drafts', () => {
     await repo.execute({ action: 'commit', message: 'Main remains' })
     expect(calls.at(-1)?.body.changes).toEqual([{ path: 'docs/note.md', content: 'main' }])
     await expect(repo.execute({ action: 'draft_discard', branch: '../../main' })).rejects.toThrow('REPO_DRAFT_DISCARD_INVALID')
+  })
+})
+
+// Her tool says the door is open, and what a merge still needs.
+describe('her repo door at level open', () => {
+  it('says every path is hers to read and propose, and that a merge needs his one fingerprint and the fast build check', async () => {
+    const { repo } = await mounted()
+    expect(repo.description).toContain('Your door is at level open: every path of the repository is yours to read and to propose a change to (add, change, delete), deploy/, .github/, the tests, the cards and your storage included;')
+    expect(repo.description).toContain('A merge needs the owner’s one fingerprint on the card and the fast build check (proposal-gate) green on that exact head.')
+    expect(repo.description).not.toContain('never .github files')
+    const door = repo.description.slice(repo.description.indexOf('Your door is at level open'), repo.description.indexOf('Drafts are isolated'))
+    expect(door.length).toBeGreaterThan(100); expect(door).not.toMatch(/token/iu)
   })
 })

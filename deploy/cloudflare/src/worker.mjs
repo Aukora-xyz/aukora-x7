@@ -30,6 +30,7 @@ export { MirrorDO } from './mirror-do.mjs'
 export { VoiceBridgeDO } from './voice-bridge-do.mjs' // The managed voice's one bridge object
 import { VOICE_BRIDGE_ROUTES, voiceBridgeProviderDoor, voiceBridgeTabDoor, voiceManagedOn } from './voice-bridge.mjs'
 import { bootstrapResetPaths, validateMirrorEntries, MIRROR_LIMITS, mirrorSnapshotPrefixBytes, mirrorSnapshotEntryBytes } from './mirror-do.mjs'
+import { mirrorChangesQuery } from './mirror-do.mjs' // The changes route's one query check
 // ANYBROWSER hook: the vault (hash-named pieces and checked rescue indexes in the private bucket) and the /rescue page.
 import { handleVaultRequest } from './vault.mjs' // ANYBROWSER hook
 import { rescuePageResponse, rescueBusyResponse, wantsRescueDocument } from './rescue-page.mjs' // ANYBROWSER hook
@@ -1723,6 +1724,12 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
       return diagnostics.observe(incoming, async () => {
       try {
         const url = new URL(incoming.url)
+        // Plain http on exactly her host (a browser that tries http first): a GET or HEAD is sent on to the same path and
+        // query over https, before anything else and with nothing but the Location. The target is built from PUBLIC_HOST,
+        // never from the request's Host. Every other method over http, and any other host, is refused as before.
+        if (url.protocol === 'http:' && env.PUBLIC_HOST && url.host === env.PUBLIC_HOST && (incoming.method === 'GET' || incoming.method === 'HEAD')) {
+          return new Response(null, { status: 308, headers: { location: `https://${env.PUBLIC_HOST}${url.pathname}${url.search}` } })
+        }
         if (url.protocol !== 'https:' || !env.PUBLIC_HOST || url.host !== env.PUBLIC_HOST) return json({ ok: false, code: 'HOST_REFUSED' }, 403)
         if (url.pathname === BUILD_ROUTE) return buildRevision(incoming, url, env)
         // NOSTR hook: signed out, read-only, cached; HEAD is asked at most once per isolate per minute while its reads settle
@@ -1892,6 +1899,12 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           if (url.hash || (url.search && url.search !== '?compact=1')) return json({ ok: false, code: 'INVALID_MIRROR_STATUS_QUERY' }, 400)
           if (incoming.body !== null || (incoming.headers.has('content-length') && incoming.headers.get('content-length') !== '0')) return json({ ok: false, code: 'MIRROR_STATUS_REQUEST_INVALID' }, 400)
         }
+        // The read-only changes route, an owner route: GET only, exactly `since` and `clientId`, no body.
+        if (url.pathname === '/_mirror/changes') {
+          if (incoming.method !== 'GET') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
+          if (mirrorChangesQuery(url) === null) return json({ ok: false, code: 'INVALID_MIRROR_CHANGES_QUERY' }, 400)
+          if (incoming.body !== null || (incoming.headers.has('content-length') && incoming.headers.get('content-length') !== '0')) return json({ ok: false, code: 'MIRROR_CHANGES_REQUEST_INVALID' }, 400)
+        }
         if (factsRoute) {
           if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           if (incoming.method !== 'GET') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
@@ -1904,6 +1917,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         const voiceControlRoute = url.pathname === '/_host/voice'
         const voiceDoorRoute = url.pathname === '/door/voice'
         const headStageOrPromoteRoute = url.pathname === '/_head/stage' || url.pathname === '/_head/promote'
+          || url.pathname === '/_head/stage-withdraw' // The staged candidate's withdrawal has /_head/stage's guards
         // AURA's night grant: owner-only and same-origin exactly like /_head/promote; its GET (status) needs the owner too.
         const nightGrantRoute = url.pathname === '/_head/night-grant' || url.pathname === '/_head/night-grant/promote'
         const transcriptRoute = url.pathname === '/_head/transcript'
@@ -2143,8 +2157,8 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         if (messagesRoute || statusRoute || factsRoute || wakeRoute) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId)
         if (url.pathname === NOSTR_ANCHOR_ROUTE) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access) // NOSTR hook
         if (mandateRoute) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
-        if (['/_head/ball', '/_head/lease', '/_head/status', '/_head/ws', '/_head/promotion-status', '/_head/transcript', '/_head/stage', '/_head/promote', '/_head/night-grant', '/_head/night-grant/promote'].includes(url.pathname)) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
-        if (['/_mirror/delta', '/_mirror/status', '/_mirror/memory-history', '/_mirror/conflicts', '/api/snapshot'].includes(url.pathname)) return await forward(request, env.MIRROR, 'MIRROR', bootstrap.head.seedId)
+        if (['/_head/ball', '/_head/lease', '/_head/status', '/_head/ws', '/_head/promotion-status', '/_head/transcript', '/_head/stage', '/_head/stage-withdraw', '/_head/promote', '/_head/night-grant', '/_head/night-grant/promote'].includes(url.pathname)) return await forward(request, env.HEAD, 'HEAD', bootstrap.head.seedId, access)
+        if (['/_mirror/delta', '/_mirror/status', '/_mirror/memory-history', '/_mirror/conflicts', '/_mirror/changes', '/api/snapshot'].includes(url.pathname)) return await forward(request, env.MIRROR, 'MIRROR', bootstrap.head.seedId)
         if (url.pathname === '/_mirror/export') {
           if (request.method !== 'GET' || url.search || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           const target = new URL('/api/snapshot?snapshotFormat=x61-mirror-snapshot/v2', url)

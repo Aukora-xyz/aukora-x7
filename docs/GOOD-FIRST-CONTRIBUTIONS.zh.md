@@ -60,7 +60,7 @@
 
 ## 9. 部署值只用一个来源
 
-- **缺口：** 占位符 `your-node`、`node.example.invalid` 和 `your_org_x/your-node` 除了写在 `deploy/cloudflare/wrangler.toml` 中，也写进了代码：`server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、2866 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行），以及更多（下面的 grep 会列出）。在全新账户中部署是 UNVERIFIED。
+- **缺口：** 占位符 `your-node`、`node.example.invalid` 和 `your_org_x/your-node` 除了写在 `deploy/cloudflare/wrangler.toml` 中，也写进了代码：`server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、3014 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行），以及更多（下面的 grep 会列出）。在全新账户中部署是 UNVERIFIED。
 - **完成标准：** 下面的 grep 所列出的每个非测试代码文件，都从同一个配置来源读取这些值。
 - **检查：** `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 只列出该配置、测试和文档，并且 `node --test deploy/ci/*.test.mjs` 没有失败（KNOWN-RED-TESTS.md 中那里没有列出任何失败）。
 

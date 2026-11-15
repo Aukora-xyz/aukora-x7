@@ -312,6 +312,11 @@ const THREAD_INDEX_READERS = new Set([
   'packages/experimental/webworker-runtime/tests/x6/thread-sync.spec.ts',
   'packages/experimental/webworker-runtime/tests/x6/thread-writer-fixture.ts',
   'packages/experimental/webworker-runtime/tests/x6/thread-writer.spec.ts',
+  // Her own writer specs name the route to stand in for her cloud's index (new spec files are
+  // the only way she can cover her sender: the existing ones are closed to her). A new spec is held aside while a
+  // proposal's suites run, so this list is only met after the merge: card 1's live spec made main's hosted baseline red.
+  'packages/experimental/webworker-runtime/tests/x6/thread-writer-live.spec.ts',
+  'packages/experimental/webworker-runtime/tests/x6/thread-writer-honest.spec.ts',
 ])
 
 test('thread sync: no caller under apps/ or packages/ reads her thread index except thread sync\'s own files', () => {

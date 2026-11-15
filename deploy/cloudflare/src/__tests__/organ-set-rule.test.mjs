@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 import { createHash } from 'node:crypto'
-import { organSetOf, organSetPromotionBody } from '../owner-grant-policy.mjs'
+import { organRemoval, organRemovePromotionBody, organSetOf, organSetPromotionBody, ORGAN_REMOVE_PATH, ORGAN_REMOVE_SCHEMA, ORGAN_SET_PATH } from '../owner-grant-policy.mjs'
 import { nightGrantCovers, NIGHT_GRANT_RECORD_SCHEMA, NIGHT_GRANT_SCHEMA, NIGHT_GRANT_SCOPE } from '../night-grant.mjs'
 
 const vectors = JSON.parse(readFileSync(new URL('../../../../server/organ-set-rule.vectors.json', import.meta.url), 'utf8'))
@@ -37,3 +37,36 @@ for (const item of vectors.cases) {
     if (cover.ok) assert.deepEqual(cover.organs.map(organ => organ.size), item.expect.map(organ => organ.bytes))
   })
 }
+
+// The one-organ removal rule against its own shared vectors (the card and the worker run the same file).
+const removeVectors = JSON.parse(readFileSync(new URL('../../../../server/organ-remove-rule.vectors.json', import.meta.url), 'utf8'))
+
+test('the removal vectors cover both verdicts and every case the brief names', () => {
+  for (const name of ['a plain removal', 'a removal of an organ with history', 'two removed', 'one removed plus one changed',
+    'one removed plus one added', 'a governance organ by id', 'a governance organ by declaration', 'a root field changed',
+    'a module of another organ dropped', 'a module added']) {
+    assert.ok(removeVectors.cases.some(item => item.name === name), name)
+  }
+  assert.ok(removeVectors.cases.some(item => item.expect !== null))
+  assert.ok(removeVectors.cases.some(item => item.expect === null))
+})
+
+for (const item of removeVectors.cases) {
+  test(`shared removal rule: ${item.name}`, () => {
+    const removal = organRemoval(removeVectors.previous, item.candidate)
+    assert.deepEqual(removal, item.expect)
+    if (removal !== null) {
+      assert.deepEqual(organRemovePromotionBody(item.candidate, removal), { schema: ORGAN_REMOVE_SCHEMA, ballId: item.candidate.ballId,
+        epoch: item.candidate.epoch, parentBallId: item.candidate.parentBallId, organ: item.expect })
+    }
+    // Never both: a removal is never an organ set, and the night grant still refuses every removal.
+    assert.equal(organSetOf(removeVectors.previous, item.candidate, () => 1), null)
+    const removalRecord = { ...record, terms: { ...record.terms, issuedAtHead: { ballId: removeVectors.previous.ballId, epoch: removeVectors.previous.epoch } } }
+    assert.equal(nightGrantCovers({ record: removalRecord, previous: removeVectors.previous, candidate: item.candidate, now, audience: ORIGIN, bytesOf: () => 1 }).ok, false)
+  })
+}
+
+test('the removal binds its own path and schema, never the organ set\'s', () => {
+  assert.notEqual(ORGAN_REMOVE_PATH, ORGAN_SET_PATH)
+  assert.notEqual(ORGAN_REMOVE_SCHEMA, 'aukora.head-organ-set.v1')
+})

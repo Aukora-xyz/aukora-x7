@@ -4,6 +4,7 @@
  * @module @deepseek-ai/dsh-client-web/src/boot-page
  */
 import type { LoaderEntryState } from './loader-status.ts'
+import { BOOT_MARK_DATA_URI } from './boot-mark.ts'
 import css from './boot-page.module.css'
 
 /** Create a div with one module class and optional text. */
@@ -181,9 +182,17 @@ export class BootPage {
     this.root = div(css.boot)
     this.root.dataset.dshBoot = ''
     this.card = div(css.card)
-    this.wordmark = div(css.wordmark, 'HARNESS')
+    this.wordmark = div(css.wordmark, 'AUKORA')
+    // The AUKORA trefoil turning slowly (boot-mark.ts: the same bytes the app shows as her mark), in place of a wheel.
     this.spinner = div(css.spinner)
     this.spinner.dataset.dshBootSpinner = ''
+    const mark = document.createElement('img')
+    mark.className = css.mark ?? ''
+    mark.src = BOOT_MARK_DATA_URI
+    mark.alt = ''
+    mark.setAttribute('aria-hidden', 'true')
+    mark.draggable = false
+    this.spinner.append(mark)
     this.hint = div(css.hint, 'Loading plugins…')
     this.card.append(this.wordmark, this.spinner, this.hint)
     this.root.append(this.card)
@@ -198,7 +207,7 @@ export class BootPage {
   }
 
   /**
-   * Set the number of loader entries represented by the progress arc.
+   * Set the number of loader entries the hint's "n/total" counts.
    * @param total - Complete boot roster size.
    */
   setTotal(total: number): void {
@@ -285,6 +294,7 @@ export class BootPage {
   private reloadButton(): HTMLButtonElement {
     const button = document.createElement('button')
     button.type = 'button'
+    button.className = css.reload ?? ''
     button.dataset.dshBootReload = ''
     button.textContent = 'Reload'
     button.addEventListener('click', () => { this.reload() })
@@ -336,14 +346,15 @@ export class BootPage {
     this.card.replaceChildren(this.wordmark, report)
   }
 
-  /** Grow the rotating arc monotonically as loader entries activate. */
+  /**
+   * Say plugin activation progress in the hint ("n/total"), monotonically as loader entries activate. The turning mark
+   * carries no progress of its own: the count under it is the progress.
+   */
   private updateProgress(): void {
     if (!this.observing) return
-    const ratio = this.total === 0 ? 0 : Math.min(this.active.size / this.total, 1)
     // Plugin activation progress, where the page has it (the client roster after the worker serves).
     if (this.total > 0 && (this.phase === undefined || this.phase === 'plugins' || this.phase === 'serving')) {
       this.hint.textContent = `Loading plugins… ${String(Math.min(this.active.size, this.total))}/${String(this.total)}`
     }
-    this.spinner.style.setProperty('--dsh-boot-arc', `${String(Math.round(72 + ratio * 216))}deg`)
   }
 }

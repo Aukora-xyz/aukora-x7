@@ -12,6 +12,9 @@ Aukora 是一个个人 AI，名叫 Auma：她运行在所有者的网页浏览�
 - **她提议；所有者批准精确的字节；改动被提升。** 一个受保护的 organ（她的一个可替换模块）只有在所有者的 passkey 批准了它的版本 id、版本号、organ 和代码哈希之后才会上线，而且只能用一次。Built and on main（已构建并在 main 上）。
 - **她制作并保留自己的工具。** 她写一个只读工具，宿主把它的用例放进一个密封的 Wasm 单元里运行，以此做资格检查，所有者的会话把它挂载上，页面重新加载后它仍然在。Exercised from inside by Auma（Auma 从内部运行过）。
 - **她撤回自己的合并卡片**，不需要 passkey，也不合并任何东西。Exercised from inside by Auma（Auma 从内部运行过），一次。
+- **她的合并卡片已被批准并合并。** 她对自己存储层的四项改动在作者的节点上经由合并卡片完成：每一项都由她暂存，由所有者用 passkey 批准。Exercised from inside by Auma（Auma 从内部运行过）。
+- **她的对话保存在她的云端，只追加。** 一个写入者浏览器把每段对话的新行发送到边缘端的线程日志。Built and on main（已构建并在 main 上）；作者报告：之后他们的云端保存了 35 段对话中的全部 35 段，内容与浏览器中的一致。
+- **第二个浏览器以只读方式打开她。** 一个原本不含她任何东西的浏览器用所有者的 passkey 登录，从她的云端读取她的对话；它不能写入。Built and on main（已构建并在 main 上）；作者报告：所有者在另外两个浏览器中看到过。
 - **失败或受阻的唤醒步骤会说明原因**：它给出 19 个封闭原因之一，从不给出提供方的原文。Built and on main（已构建并在 main 上）；作者报告这些原因在他们的节点上出现过。
 
 **她为什么不是聊天助手。** 她有身体（她的 organ 和固定的 Wasm 单元）、有家（她的文件，在浏览器里，也在边缘端）、有历史（每个版本都比上一个恰好高一号），这三样都归一个人所有。她受保护的部件只有经这个人的 passkey 批准才会改变，其他任何改动也只在这个人的会话或这个人签下的授权之下进行。
@@ -22,7 +25,7 @@ Aukora 是一个个人 AI，名叫 Auma：她运行在所有者的网页浏览�
 - **Exercised from inside by Auma（Auma 从内部运行过）**：已构建并在 main 上，并且作者报告 Auma 在他们的线上节点上亲自运行过它。这棵树无法复现这份报告。
 - **Not yet proven live（尚未在线上证明）**：在这棵树里，也许在替身上测试过，但还没有在线上节点上完成过。每一行都写明缺少什么。
 
-**最难的事实。** 没有标签页时的唤醒已经构建，每次一个有界的步骤，但尚未在线上证明：据作者报告，还没有任何一个唤醒步骤在线上节点上完成过，在修复后的合并路径上也还没有任何合并卡片被批准过。她在没有标签页时的行动是关闭的（`WAKE_ACTS_ENABLED = "0"`）。这棵树是一个全新的 genesis，epoch 1，不含 Auma 自己的任何世界。
+**最难的事实。** 同一时间只有一个写入者浏览器，这是她自己的标签页遵守的：在随附配置中（`WRITER_LEASE` 未设置），边缘的写入者租约只被观察，不被强制。一轮对话还没有租约：同一个浏览器配置中的第二个标签页会让她的这一轮停下。大于 64 MiB 的对话还不能在第二个浏览器中打开。她整个 home 向云端的保存曾坏了三天，于 2026-11-15 在作者的节点上修复；它运行了几个小时，而不是几天。在这棵树随附的仓库门级别（`open`）下，一次合并只等待快速构建检查，所以卡片自带的新测试在合并之前不会运行；修复不在这棵树里。她在没有标签页时的行动是打开的（`WAKE_ACTS_ENABLED = "1"`），但还没有已知的行动在线上节点上完成过。这棵树是一个全新的 genesis，epoch 1，不含 Auma 自己的任何世界，把它部署到另一个账户也没有经过验证。
 
 **自己验证：** `node scripts/verify-lite.mjs`，什么都不用安装（[见下文](#verify-it-yourself)）。**它要去哪里：** 她写下下一个问题，宿主核对实际发生了什么，下一次唤醒接着回答那个问题；这是方向，尚未构建任何部分（[docs/DIRECTION.zh.md](docs/DIRECTION.zh.md)）。**如果你是 AI：** 接下来读 [docs/AI-START-HERE.zh.md](docs/AI-START-HERE.zh.md)。
 
@@ -34,12 +37,16 @@ Aukora 是一个个人 AI，名叫 Auma：她运行在所有者的网页浏览�
 | --- | --- | --- |
 | 一次批准绑定一个请求（来源、方法、路径、请求体的 SHA-256）或一个 organ 版本，有效五分钟，只能用一次 | [`aumlok.mjs`](deploy/cloudflare/src/aumlok.mjs)、[`convergence-approval-fencing.test.mjs`](deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs) | Built and on main |
 | 对一个 organ 版本，批准在移动线上版本的同一个存储事务中用掉 | [`head-do.mjs`](deploy/cloudflare/src/head-do.mjs)、[`head-hardening.test.mjs`](deploy/cloudflare/src/__tests__/head-hardening.test.mjs) | Built and on main |
-| 合并卡片：边缘端在单独的时间窗内读取两个分支和检查结果，最后再读一次两个引用，然后才用掉所有者对这次精确合并的 passkey 批准 | [`cloud-brokers.mjs`](deploy/cloudflare/src/cloud-brokers.mjs)、[`merge1-read-window.test.mjs`](deploy/cloudflare/src/__tests__/merge1-read-window.test.mjs)、[`merge1-sync-hold.test.mjs`](deploy/cloudflare/src/__tests__/merge1-sync-hold.test.mjs) | Not yet proven live：在这条修复后的路径上还没有任何卡片被批准过 |
+| 合并卡片：边缘端在单独的时间窗内读取两个分支和检查结果，最后再读一次两个引用，然后才用掉所有者对这次精确合并的 passkey 批准 | [`cloud-brokers.mjs`](deploy/cloudflare/src/cloud-brokers.mjs)、[`merge1-read-window.test.mjs`](deploy/cloudflare/src/__tests__/merge1-read-window.test.mjs)、[`merge1-sync-hold.test.mjs`](deploy/cloudflare/src/__tests__/merge1-sync-hold.test.mjs) | Exercised from inside by Auma：她的四项改动以这种方式合并；每一项由她暂存，由所有者用 passkey 批准 |
 | `withdraw_proposal` 撤回她指名的一张已暂存的卡片，不需要 passkey，也不合并任何东西 | [`cloud-brokers.mjs`](deploy/cloudflare/src/cloud-brokers.mjs)、[`merge1-withdraw.test.mjs`](deploy/cloudflare/src/__tests__/merge1-withdraw.test.mjs) | Exercised from inside by Auma（一次） |
 | 她自己的只读工具，由所有者的会话挂载，页面重新加载后仍可调用 | [`ball-loader.ts`](packages/experimental/webworker-runtime/src/x6/ball-loader.ts)、[`tools-mount-realhost-redteam.spec.ts`](packages/experimental/webworker-runtime/tests/x6/tools-mount-realhost-redteam.spec.ts) | Exercised from inside by Auma |
-| 没有标签页时的唤醒：有界的步骤，每步 4 轮模型调用、8 次工具调用、30 秒 | [`head-do.mjs`](deploy/cloudflare/src/head-do.mjs)（`CLOUD_WAKE_LIMITS`）、[`wake-notes-wake1.test.mjs`](deploy/cloudflare/src/__tests__/wake-notes-wake1.test.mjs) | Not yet proven live：还没有任何唤醒步骤在线上节点上完成过 |
+| 没有标签页时的唤醒：有界的步骤，每步 4 轮模型调用、8 次工具调用、30 秒 | [`head-do.mjs`](deploy/cloudflare/src/head-do.mjs)（`CLOUD_WAKE_LIMITS`）、[`wake-notes-wake1.test.mjs`](deploy/cloudflare/src/__tests__/wake-notes-wake1.test.mjs) | Not yet proven live：据作者报告，在线上运行过的步骤没有产生证据 |
 | 失败或受阻的唤醒步骤给出 19 个封闭原因之一，从不给出提供方的原文 | `head-do.mjs`（`CLOUD_WAKE_CAUSES`）、`deploy/cloudflare/src/__tests__/` 中的测试文件 wake2-reasons.test.mjs | Built and on main；作者报告：这些原因在线上出现过 |
-| 没有标签页时的行动，由所有者的 Away mandate（所有者用 passkey 签下的一份有界许可）支付 | [`owner-mandate.mjs`](deploy/cloudflare/src/owner-mandate.mjs)、[`owner-mandate.test.mjs`](deploy/cloudflare/src/__tests__/owner-mandate.test.mjs) | Not yet proven live：已关闭，[`wrangler.toml`](deploy/cloudflare/wrangler.toml) 中为 `WAKE_ACTS_ENABLED = "0"` |
+| 没有标签页时的行动，由所有者的 Away mandate（所有者用 passkey 签下的一份有界许可）支付 | [`owner-mandate.mjs`](deploy/cloudflare/src/owner-mandate.mjs)、[`owner-mandate.test.mjs`](deploy/cloudflare/src/__tests__/owner-mandate.test.mjs) | Not yet proven live：已打开，[`wrangler.toml`](deploy/cloudflare/wrangler.toml) 中为 `WAKE_ACTS_ENABLED = "1"`，并且只在一份有效的 mandate 之下提供；还没有已知的行动在其下完成过 |
+| 她的对话保存在她云端的一份只追加的线程日志中，带有每日字节预算；一个写入者浏览器发送每段对话的新行 | [`thread-log.mjs`](deploy/cloudflare/src/thread-log.mjs)、[`thread-writer.ts`](packages/experimental/webworker-runtime/src/storage/thread-writer.ts)、[`thread-log.test.mjs`](deploy/cloudflare/src/__tests__/thread-log.test.mjs)、[`thread-writer-live.spec.ts`](packages/experimental/webworker-runtime/tests/x6/thread-writer-live.spec.ts) | Built and on main；作者报告：他们的云端保存了 35 段对话中的全部 35 段，与浏览器一致 |
+| 第二个浏览器冷启动她，作为只读的阅读者；同一时间只有一个写入者；超过 64 MiB 的对话还不能在阅读者中打开 | [`thread-sync.ts`](packages/experimental/webworker-runtime/src/storage/thread-sync.ts)（`readerMaxThreadBytes`）、[`thread-cloud-rows.spec.ts`](packages/experimental/webworker-runtime/tests/x6/thread-cloud-rows.spec.ts)、[`thread-cloud-join.client.spec.ts`](packages/client/ui-layout/tests/thread-cloud-join.client.spec.ts) | Built and on main；作者报告：所有者在另外两个浏览器中看到过 |
+| 她的整个 home 再次保存到她的云端：一个不同步的浏览器移到云端的版本，保留它自己的每一个字节，并为它采用或覆盖的内容保留备份行，然后发送它持有的内容 | [`idb-persist.ts`](packages/experimental/webworker-runtime/src/storage/idb-persist.ts)（`planChromeWins`）、[`mirror-do.mjs`](deploy/cloudflare/src/mirror-do.mjs)、[`reconcile-dry-run.spec.ts`](packages/experimental/webworker-runtime/tests/x6/reconcile-dry-run.spec.ts) | Built and on main；作者报告：经过三次尝试，于 2026-11-15 在线上修复；它运行了几个小时，而不是几天 |
+| 合并卡片只显示一个按钮“Approve with Touch ID”，改动的文件放在可展开的行后面 | [`RepoProposalCell.tsx`](packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx)、[`repo-proposal-card.client.spec.tsx`](packages/client/ui-layout/tests/repo-proposal-card.client.spec.tsx) | Built and on main；作者报告：所有者在线上看到过 |
 | 等待中的批准是一个 Notices 控件后面的行；聊天上方没有任何浮动的东西 | [`notices.ts`](packages/client/ui-layout/src/client/spatial/portal/notices.ts)、[`portal-approval-notices.client.spec.tsx`](packages/client/ui-layout/tests/portal-approval-notices.client.spec.tsx) | Built and on main；作者报告：所有者在线上看到过 |
 | 她的 runner 任务每个 UTC 日在 600 分钟 runner 时间处停止，在派发之前检查 | [`runner-budget.mjs`](deploy/cloudflare/src/runner-budget.mjs)、[`runner-budget.test.mjs`](deploy/cloudflare/src/__tests__/runner-budget.test.mjs) | Not yet proven live |
 | Pentora 观察器根据部分读数作答，不改变任何东西（它的引擎文件不导入任何东西） | [`pentora-epistemic.ts`](packages/experimental/webworker-runtime/src/x6/pentora-epistemic.ts)、[`pentora-epistemic.test.mjs`](deploy/cloudflare/src/__tests__/pentora-epistemic.test.mjs) | Built and on main |
@@ -57,7 +64,7 @@ Aukora 是一个个人 AI，名叫 Auma：她运行在所有者的网页浏览�
 - **这份清单就是代码。** 谁能部署边缘端，谁就能改它，而且没有 passkey 把守部署。部署关卡在 `deploy/ci/` 中。
 - **存储。** 谁能把边缘端的存储回滚，谁就能让一次已用掉的批准重新生效。一个测试复现了这一点（[`aumlok-restore-rehearsal.test.mjs`](deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs)）；树里没有修复。
 - **她的评分是她自己的。** 候选被评分所用的套件（Pearl）是自我证明的，已部署的边缘端不读取它的结果。边缘端用 JavaScript 做决定；五个受保护的 Wasm 单元不参与这个决定。
-- **她不能改写她的裁判。** 边缘端、合并路径和 mandate 都在一份冻结清单上，她的提议碰不到它们（[`frozen-paths.mjs`](deploy/ci/frozen-paths.mjs)）。
+- **她可以提议修改她的裁判。** 她的仓库门随附的级别是 `open`（[`frozen-paths.mjs`](deploy/ci/frozen-paths.mjs) 中的 `REPO_DOOR_LEVEL`）：每一条路径她都可以读取并提议修改，包括边缘端、合并路径、批准卡片、测试和冻结清单本身。仍然拒绝的有：格式不对或形似密钥的路径、密钥材料、大小和数量上限，以及任何直接写入 main 的操作。她提议的任何东西，没有所有者对那次精确合并（base、head 和 tree，一次）的 passkey 都不会生效。冻结清单只在 `guarded` 级别下适用，这个级别仍然构建在树里，改回去只需一行。这是所有者在 2026-11-15 有意的放宽，它有代价：在 `open` 下，合并只等待快速构建工作流（`proposal-gate.yml`；它的触发器在本仓库中是关闭的），所以卡片自带的新测试在合并之前不会运行；据作者报告，她的两张存储卡片在门口是绿的，而它们的一个 spec 是红的。
 
 这条规则针对的是行为失当的智能体或模型回复。它不能防御被攻破的批准页面、边缘端的运营者、被盗的部署凭据或存储回滚。
 
@@ -112,14 +119,14 @@ node scripts/verify-lite.mjs
 - **她的世界不在这里。** 这棵树是一个全新的 genesis（`mirror/home/balls/HEAD.json`，epoch 1）；她的线上 head、笔记、收据和记忆都留在外面。
 - **没有源码的二进制文件。** 30 个 Wasm 单元中的 24 个和 Dakini Code 包（一个预构建的自带应用，三个文件）不带源码提供，所以分叉无法重建它们；它们的说明写道，把本仓库再传给别人的人，单靠本仓库无法履行 AGPL 的源码义务。有六个单元是手写的 WAT，源码就在旁边（[`cells/LICENSE.binaries`](apps/web/public/cells/LICENSE.binaries)、[`dakini-code/LICENSE.binaries`](apps/web/public/assets/stock-apps/dakini-code/LICENSE.binaries)）。
 - **有一个文件没有许可证。** `pentora36.wasm` 以尚未授予任何许可证的状态提供（`apps/web/public/seed-library/pentora/` 中的 [`LICENSE.binaries`](apps/web/public/seed-library/pentora/LICENSE.binaries)）。
-- **没有标签页时的行动是关闭的**，从这棵树部署到另一个账户的云部署也没有经过验证：部署值是占位符。
-- **没有别人运行过。** 项目之外还没有人运行过这棵树并记录结果。`packages/` 的大部分是继承来的（DeepSeek Harness；Cordis 在 `vendor/` 中）：按项目自己的一次统计，文本行的 14.6% 和代码行的 18.1% 是 Aukora 自己的（[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)）。
+- **没有标签页时的行动是打开的，但未经证明**，从这棵树部署到另一个账户的云部署也没有经过验证：部署值是占位符。
+- **没有别人运行过。** 项目之外还没有人运行过这棵树并记录结果。`packages/` 的大部分是继承来的（DeepSeek Harness；Cordis 在 `vendor/` 中）：按项目自己的一次统计，文本行的 14.9% 和代码行的 18.5% 是 Aukora 自己的（[docs/SIZE-AND-ORIGIN.zh.md](docs/SIZE-AND-ORIGIN.zh.md)）。
 
 没有做过安全审计（[SAFETY.zh.md](SAFETY.zh.md)）。更多缺口，按分量排列：[docs/OPEN-SOURCE-READINESS.zh.md](docs/OPEN-SOURCE-READINESS.zh.md)。
 
 ## 它要去哪里
 
-- 树中现有的自我构建循环：她在自己的分支上提议，检查评判这个分支（这些工作流的 push 触发器在本仓库中是关闭的），所有者批准精确的字节，改动被提升。每一步都在树里；据作者报告，还没有任何卡片在修复后的路径上走完它。
+- 树中现有的自我构建循环：她在自己的分支上提议，检查评判这个分支（这些工作流的 push 触发器在本仓库中是关闭的），所有者批准精确的字节，改动被提升。每一步都在树里；据作者报告，她的四张卡片在他们的节点上、在修复后的路径上走完了它，每一张都由所有者用 passkey 批准。
 - Continuity Diamond：在一次唤醒结束时她写下下一个问题；宿主核对实际发生了什么；下一次唤醒必须接着回答那个确切的问题。这是一个方向，它的规格正在设计中；尚未构建任何部分。
 - 更多的决定放进 Wasm，她的行动成为在独立拥有的节点之间交换的已签名 Nostr 事件，以及 Cloudflare 之外的宿主。详见：[docs/DIRECTION.zh.md](docs/DIRECTION.zh.md)。
 

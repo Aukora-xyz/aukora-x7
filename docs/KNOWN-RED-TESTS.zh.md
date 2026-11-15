@@ -16,7 +16,7 @@
 | `apps/web/src/spatial/superagent/superagent.test.ts` | 12 个中 3 个 | 部分用例读取节点自己在 `mirror/home/auma/` 下的世界（收据、语料、记忆 DAG）。这里只提交了创世种子。 | 未运行 |
 | `apps/web/src/spatial/superagent/read.spec.ts` | 50 个中 8 个（第 9 个 "exactly 256 referenced nodes fit the file and concurrency budgets" 对时间敏感，机器繁忙时可能失败） | 同样的原因。 | 未运行 |
 | `deploy/cloudflare/src/__tests__/world-holder.test.mjs` | 59 个中 6 个 | 需要私有的提交历史；公开的树只随附一份快照。这六个用例用 `git show` 与两个较早的提交比较，而这些提交不在本仓库中。 | 在记录的运行（属于较早的一棵树）之后加入 |
-| `deploy/ci/frozen-paths.test.mjs` | 19 个中 6 个，在没有 `.git` 文件夹时运行（直接下载的副本） | 一个用例断言冻结清单上的每个文件都在树中；清单列出了她在 `mirror/home/auma/seed/` 下的收据文件，而本仓库不随附它（只提交了 genesis 种子）。一个用例断言 `proposal-checks.yml` 的自动触发器，而它在这里和其他工作流一样被注释掉了。四个用例调用 `git ls-files`，需要 git 检出；在这棵树的 git 检出中的失败数，本清单没有测量。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `deploy/ci/frozen-paths.test.mjs` | 26 个中 8 个，在没有 `.git` 文件夹时运行（直接下载的副本） | 一个用例断言冻结清单上的每个文件都在树中；清单列出了她在 `mirror/home/auma/seed/` 下的收据文件，而本仓库不随附它（只提交了 genesis 种子）。一个用例断言 `proposal-checks.yml` 的自动触发器，而它在这里和其他工作流一样被注释掉了。六个用例调用 `git ls-files`，需要 git 检出；在这棵树的 git 检出中的失败数，本清单没有测量。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/cloudflare/src/__tests__/rescue-thread-join.test.mjs` | 64 个中 1 个 | 这个用例运行 `git grep`，而直接下载的这棵树没有 `.git` 文件夹。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/cloudflare/src/__tests__/wake4-mirror-reads.test.mjs` | 1（文件无法加载） | 它在加载时读取她的交接笔记 `mirror/home/auma/HANDOFF.md`。那份笔记属于她的世界，本仓库不随附它。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/cloudflare/src/__tests__/capsule-act-shapes.test.mjs` | 18 个中 2 个 | 两个用例读取 `docs/capsule/` 下的胶囊契约页面，本仓库不随附它们。 | 在记录的运行（属于较早的一棵树）之后加入 |

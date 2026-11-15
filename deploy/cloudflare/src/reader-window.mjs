@@ -41,6 +41,7 @@ export const READER_WINDOW_WRITE_PREFIXES = Object.freeze(['/_mirror/', '/_threa
 export const READER_WINDOW_WRITE_ROUTES = Object.freeze([
   '/_host/wake', '/_host/estate', '/_host/crew-relay', '/_host/voice', '/_host/cloud-body',
   '/_host/cell-run', '/_host/web-eyes', '/api/body/run', '/aukora-messages', '/_bootstrap', '/_head/lease',
+  '/_head/stage-withdraw', // Removes the staged head candidate without a Class 3 card
 ])
 
 /** Exact routes whose unapproved calls are refused at the outer wall and whose approved calls are action-classified inside HEAD. */

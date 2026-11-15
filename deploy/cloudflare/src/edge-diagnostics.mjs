@@ -10,7 +10,7 @@ const ROUTES = new Set([
   '/_host/aumlok/invite', '/_host/aumlok/approve', '/_host/aumlok/unseal',
   '/_head/ball', '/_head/lease', '/_head/status', '/_head/ws', '/_head/bootstrap', '/_head/bootstrap-status',
   '/_head/provider-budget', '/_head/class3-authorize', '/_head/mirror-updated', '/_head/state-diff', '/_head/diagnostics',
-  '/_mirror/delta', '/_mirror/status', '/_mirror/memory-history', '/_mirror/conflicts', '/_mirror/export',
+  '/_mirror/delta', '/_mirror/status', '/_mirror/memory-history', '/_mirror/conflicts', '/_mirror/changes', '/_mirror/export',
   '/_mirror/repo-read', '/_mirror/prediction-status', '/_mirror/aura-inputs', '/_mirror/bootstrap', '/_mirror/bootstrap-status', '/_mirror/diagnostics',
   '/api/snapshot', '/__x6/status', '/api/x61/status', '/__x6/facts', '/api/x61/facts',
   '/aukora-messages/contacts.json', '/aukora-messages/thread', '/aukora-messages/send', '/aukora-messages/add-contact',

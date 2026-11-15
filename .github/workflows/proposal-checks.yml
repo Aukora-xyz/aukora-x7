@@ -33,6 +33,10 @@ name: Proposal checks (tests on her branches; no secrets, no deploy)
 #              are selected by exact path through vitest's API, never by its substring filter (MUST 5-6)
 #   Protected jobs also remove every file the proposal ADDED under deploy/cloudflare/src/auma/ (MUST 1).
 #   checks     needs all of them and succeeds only when every one succeeded (the edge's merge rule reads this name)
+# The door level is MAIN's REPO_DOOR_LEVEL (deploy/ci/frozen-paths.mjs). At 'open'
+# only the fence runs (main's list judges the proposal at that level: plain paths, no credential files) and `checks`
+# needs the fence alone; the baseline, edge, ui, boot and new-test jobs are skipped, and the edge's merge waits for
+# proposal-gate.yml only. Any other value of the line runs everything, as before ('guarded').
 # DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
 # repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
 on:
@@ -67,6 +71,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       main: ${{ steps.main.outputs.sha }}
+      level: ${{ steps.level.outputs.level }}
     steps:
       - name: Checkout the pushed proposal commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -105,15 +110,42 @@ jobs:
         id: main
         run: echo "sha=$(git rev-parse 'refs/remotes/origin/main^{commit}')" >> "$GITHUB_OUTPUT"
 
+      # The door level from MAIN's frozen-paths.mjs (the copy the fence step wrote outside the checkout): 'open' or
+      # 'guarded'; anything else, or a missing line, is 'guarded'.
+      - name: Main's door level
+        id: level
+        run: |
+          set -euo pipefail
+          level="$(node --input-type=module -e '
+            import { pathToFileURL } from "node:url"
+            const fence = await import(pathToFileURL(process.argv[1]).href)
+            console.log(fence.REPO_DOOR_LEVEL === "open" ? "open" : "guarded")
+          ' "$RUNNER_TEMP/frozen-paths-main.mjs")"
+          echo "door level: $level (origin/main deploy/ci/frozen-paths.mjs)"
+          echo "level=$level" >> "$GITHUB_OUTPUT"
+
   baseline:
     needs: fence
+    if: ${{ needs.fence.outputs.level != 'open' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
       edge: ${{ steps.verdict.outputs.edge }}
+      edge_2: ${{ steps.verdict.outputs.edge_2 }}
+      edge_3: ${{ steps.verdict.outputs.edge_3 }}
+      edge_4: ${{ steps.verdict.outputs.edge_4 }}
       messages: ${{ steps.verdict.outputs.messages }}
+      messages_2: ${{ steps.verdict.outputs.messages_2 }}
+      messages_3: ${{ steps.verdict.outputs.messages_3 }}
+      messages_4: ${{ steps.verdict.outputs.messages_4 }}
       ui: ${{ steps.verdict.outputs.ui }}
+      ui_2: ${{ steps.verdict.outputs.ui_2 }}
+      ui_3: ${{ steps.verdict.outputs.ui_3 }}
+      ui_4: ${{ steps.verdict.outputs.ui_4 }}
       boot: ${{ steps.verdict.outputs.boot }}
+      boot_2: ${{ steps.verdict.outputs.boot_2 }}
+      boot_3: ${{ steps.verdict.outputs.boot_3 }}
+      boot_4: ${{ steps.verdict.outputs.boot_4 }}
       red: ${{ steps.verdict.outputs.red }}
     steps:
       - name: Checkout main (the commit the fence judged against)
@@ -166,7 +198,15 @@ jobs:
             if [ "$suite" = edge ] || [ "$suite" = messages ]; then input=(--node "$RUNNER_TEMP/$suite.jsonl"); else input=(--vitest "$RUNNER_TEMP/$suite.json"); fi
             out="$(node "$judge" baseline --suite "$suite" "${input[@]}" --root "$PWD" --exit "$(cat "$RUNNER_TEMP/$suite.exit" 2>/dev/null || echo 99)")"
             code=$?
-            if [ "$code" -eq 0 ]; then echo "$suite=$out" >> "$GITHUB_OUTPUT"; else echo "$out"; status=1; red="$red $(printf '%s' "$out" | head -c 2000 | tr '\n' ' ')"; fi
+            # A list too large for one string comes as several lines (main's retention.mjs, PARTS): line 1
+            # is the output `<suite>`, line n the output `<suite>_<n>`. Nothing is truncated; over four parts the judge fails.
+            if [ "$code" -eq 0 ]; then
+              n=0
+              while IFS= read -r part; do
+                n=$((n + 1))
+                if [ "$n" -eq 1 ]; then echo "$suite=$part" >> "$GITHUB_OUTPUT"; else echo "${suite}_$n=$part" >> "$GITHUB_OUTPUT"; fi
+              done <<< "$out"
+            else echo "$out"; status=1; red="$red $(printf '%s' "$out" | head -c 2000 | tr '\n' ' ')"; fi
           done
           if [ "$status" -ne 0 ]; then echo "red=$red" >> "$GITHUB_OUTPUT"; fi
           exit "$status"
@@ -235,7 +275,13 @@ jobs:
         env:
           SUITE_PATHS: deploy/cloudflare/src/__tests__ server/preflight-ordering.test.mjs
           BASELINE_EDGE: ${{ needs.baseline.outputs.edge }}
+          BASELINE_EDGE_2: ${{ needs.baseline.outputs.edge_2 }}
+          BASELINE_EDGE_3: ${{ needs.baseline.outputs.edge_3 }}
+          BASELINE_EDGE_4: ${{ needs.baseline.outputs.edge_4 }}
           BASELINE_MESSAGES: ${{ needs.baseline.outputs.messages }}
+          BASELINE_MESSAGES_2: ${{ needs.baseline.outputs.messages_2 }}
+          BASELINE_MESSAGES_3: ${{ needs.baseline.outputs.messages_3 }}
+          BASELINE_MESSAGES_4: ${{ needs.baseline.outputs.messages_4 }}
         run: |
           set -euo pipefail
           node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" \
@@ -301,6 +347,9 @@ jobs:
         env:
           SUITE_PATHS: packages/client/ui-layout/tests
           BASELINE: ${{ needs.baseline.outputs.ui }}
+          BASELINE_2: ${{ needs.baseline.outputs.ui_2 }}
+          BASELINE_3: ${{ needs.baseline.outputs.ui_3 }}
+          BASELINE_4: ${{ needs.baseline.outputs.ui_4 }}
         run: node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" --suite ui --runner vitest --baseline-env BASELINE -- packages/client/ui-layout/tests
 
   boot:
@@ -359,10 +408,14 @@ jobs:
         env:
           SUITE_PATHS: packages/experimental/webworker-runtime/tests
           BASELINE: ${{ needs.baseline.outputs.boot }}
+          BASELINE_2: ${{ needs.baseline.outputs.boot_2 }}
+          BASELINE_3: ${{ needs.baseline.outputs.boot_3 }}
+          BASELINE_4: ${{ needs.baseline.outputs.boot_4 }}
         run: node "$RUNNER_TEMP/ci/retention.mjs" protected-run --root "$PWD" --hold "$SUITE_PATHS $CONFIG_PATHS" --suite boot --runner vitest --baseline-env BASELINE -- packages/experimental/webworker-runtime/tests/x6/large-store-boot.spec.ts
 
   new-node-tests:
     needs: fence
+    if: ${{ needs.fence.outputs.level != 'open' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -430,6 +483,7 @@ jobs:
 
   new-vitest-tests:
     needs: fence
+    if: ${{ needs.fence.outputs.level != 'open' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -510,9 +564,13 @@ jobs:
           NEW_NODE_TESTS: ${{ needs['new-node-tests'].result }}
           NEW_VITEST_TESTS: ${{ needs['new-vitest-tests'].result }}
           RED: ${{ needs.baseline.outputs.red }}
+          LEVEL: ${{ needs.fence.outputs.level }}
         run: |
           node --input-type=module -e '
-            const required = { fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" }
+            // At the open door level only the fence ran (main decides the level); otherwise every job must be green.
+            const required = process.env.LEVEL === "open" ? { fence: "FENCE" }
+              : { fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" }
+            console.log("door level: " + (process.env.LEVEL || "guarded"))
             const red = process.env.RED ?? ""
             let failed = 0
             for (const [name, variable] of Object.entries(required)) {

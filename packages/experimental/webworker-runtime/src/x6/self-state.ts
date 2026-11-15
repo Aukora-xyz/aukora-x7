@@ -94,13 +94,17 @@ export interface SelfStateRegistry {
   readonly skills?: ReadonlyArray<{ readonly name: string; readonly id: string }> | null
   /**
    * This page load's thread sync (storage/thread-sync.ts `threadSyncSelfState`): `mode`, `role`, `sent` and
-   * `pending` whole lines, `lastOkAtMs`, `lastError`. Absent: no `threadSync` key; null: not readable.
+   * `pending` whole lines, `lastOkAtMs`, `lastError`. CARD 1.5 added `bytes` (her cloud accepted this load) and
+   * `pendingBytes` (bytes no acknowledgement covers) — OPTIONAL here on purpose: a worker from before this card sends the
+   * old six-key shape and it still passes through unchanged. Absent: no `threadSync` key; null: not readable.
    */
   readonly threadSync?: {
     readonly mode: string | null
     readonly role: string | null
     readonly sent: number
+    readonly bytes?: number
     readonly pending: number
+    readonly pendingBytes?: number
     readonly lastOkAtMs: number | null
     readonly lastError: string | null
   } | null
@@ -263,13 +267,21 @@ const SYNC_ROLES = new Set(['reader', 'writer', 'none'])
 
 /** The thread-sync facts as the answer shows them (fixed keys), or null when not that shape. */
 export function threadSyncView(value: unknown): Json | null {
+  // The keys thread sync has always had come first, and `bytes`/`pendingBytes` are OPTIONAL: they arrived with card 1.5,
+  // so a worker from before it (or a page paired with one) must pass through with exactly the keys it sent, unchanged.
   if (!record(value) || !count(value.sent) || !count(value.pending)) return null
+  if (value.bytes !== undefined && !count(value.bytes)) return null
+  if (value.pendingBytes !== undefined && !count(value.pendingBytes)) return null
   const mode = value.mode === null || (typeof value.mode === 'string' && SYNC_MODES.has(value.mode)) ? value.mode : undefined
   const role = value.role === null || (typeof value.role === 'string' && SYNC_ROLES.has(value.role)) ? value.role : undefined
   const okAt = value.lastOkAtMs === null || count(value.lastOkAtMs) ? value.lastOkAtMs : undefined
   if (mode === undefined || role === undefined || okAt === undefined) return null
   if (value.lastError !== null && typeof value.lastError !== 'string') return null
-  return { mode, role, sent: value.sent, pending: value.pending, lastOkAtMs: okAt,
+  return { mode, role, sent: value.sent,
+    ...(value.bytes === undefined ? {} : { bytes: value.bytes }),
+    pending: value.pending,
+    ...(value.pendingBytes === undefined ? {} : { pendingBytes: value.pendingBytes }),
+    lastOkAtMs: okAt,
     lastError: value.lastError === null ? null : safeText(value.lastError, 200) }
 }
 

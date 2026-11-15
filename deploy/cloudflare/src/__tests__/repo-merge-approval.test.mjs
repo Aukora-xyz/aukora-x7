@@ -128,7 +128,8 @@ async function harness() {
   const request = async (input, { token } = {}) => {
     const current = new Request(ORIGIN + '/_host/repo', { method: 'POST', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...(token ? { 'x-x6-class3-approval': token } : {}) }, body: JSON.stringify(input) })
     // The Worker's own consumer is still handed in; a merge never uses it (HEAD consumes), so it only counts.
-    const response = await handleCloudBroker(current, env, { access, bootstrap: { ready: true, head: { phase: 'complete', seedId }, mirror: { phase: 'ready' } }, now: () => Date.now(), networkFetch,
+    // These timings read BOTH workflows, so they pin the GUARDED door level explicitly.
+    const response = await handleCloudBroker(current, env, { access, bootstrap: { ready: true, head: { phase: 'complete', seedId }, mirror: { phase: 'ready' } }, now: () => Date.now(), networkFetch, repoDoorLevel: 'guarded',
       authorizeClass3: async () => { state.brokerAuthorize++; return { ok: false } } })
     return { status: response.status, value: await response.json() }
   }

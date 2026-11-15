@@ -17,7 +17,7 @@
  * @module portal/ApprovalWaiting
  */
 import { useEffect, useId, useRef, useState } from 'react'
-import { STAGED_PROMOTION_CHANGE } from '../aumlok/head-promotion.ts'
+import { heldOrdinaryNothingNeeded, parseHeadStaged, STAGED_PROMOTION_CHANGE } from '../aumlok/head-promotion.ts'
 import { onReasonChange, REASON_CHANGED_KEY, STAGED_OUTWARD_CHANGE } from '../aumlok/outward-class3.ts'
 import { onSentChange, SENT_KEY } from '../aumlok/outward-sent.ts'
 import { readPromotionAnswer } from '../aumlok/repo-proposal.ts'
@@ -26,7 +26,8 @@ import {
   readWaitingApprovals, readWaitingOutward, type PublishedHeadCache, type WaitingHome, type WaitingRead,
 } from './FingerprintWaiting.tsx'
 import {
-  approvalNoticeEntries, NO_HOME_APPROVALS, publishNotices, type ApprovalFacts, type HomeApprovalFacts, type StagedPearlFacts,
+  approvalNoticeEntries, NO_HOME_APPROVALS, onApprovalsChanged, publishNotices, type ApprovalFacts, type HomeApprovalFacts,
+  type StagedPearlFacts,
 } from './notices.ts'
 
 /** How often the reader reads again when no push arrives. */
@@ -66,10 +67,14 @@ export async function readApprovalFacts(signal: AbortSignal, fetchImpl?: typeof 
   const { repo, pearlStaged, body } = await readPromotionAnswer(signal, fetchImpl)
   if (repo.kind === 'absent' && pearlStaged === null) return 'no-route'
   if (pearlStaged === null) return null
+  // A held ordinary change that needs nothing from him (the one predicate the card's words use) is not a
+  // Pearl waiting for his fingerprint, so it gives no row.
+  const held = pearlStaged ? await parseHeadStaged(body) : null
+  const waits = pearlStaged && !(held?.kind === 'staged' && heldOrdinaryNothingNeeded(held.record))
   // A proposal HEAD serves in a form the page cannot check still waits for the owner: Sovereignty says why it cannot merge.
   return {
     merge: repo.kind === 'staged' ? repo.proposal : repo.kind === 'malformed' ? 'malformed' : null,
-    pearl: pearlStaged ? pearlFactsOf(body) ?? { ballId: null, epoch: null, stagedAt: null } : null,
+    pearl: waits ? pearlFactsOf(body) ?? { ballId: null, epoch: null, stagedAt: null } : null,
   }
 }
 
@@ -203,6 +208,8 @@ export function useApprovalNoticeFeed(openSovereignty: () => void, fetchImpl?: t
   }, [withHome])
   const reread = useDebounced(() => { setTick(n => n + 1) })
   const rereadOutward = useDebounced(() => { setOutwardTick(n => n + 1) })
+  // A card on this page merged what HEAD held: read again now (a host without the route is still not asked).
+  useEffect(() => onApprovalsChanged(() => { setTick(n => n + 1) }), [])
   // Listening holds the page's live socket open, so only while the tab is in view (a hidden tab reads again on return).
   useLiveEvents(visible && (!noRoute || withHome), (event) => {
     if (event.kind === 'head-staged' || event.kind === 'repo-staged' || event.kind === 'repo-merged' || event.kind === 'ball-commit') {

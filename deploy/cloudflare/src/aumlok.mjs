@@ -319,7 +319,7 @@ const screenRefuse = (refusal, { code = 'AUMLOK_PROOF_INVALID', malformed = code
  * runs, so what the verifier then says is a verdict or no verdict, never a parser's complaint.
  * Job 9 review: NOT the approve ceremony's full validateCredential. The owner's sign-in page sends the browser's own
  * getClientExtensionResults(), which may hold members; the verifier ignores them, so any plain object (or none) is taken,
- * as is any other top-level or response field the verifier never reads. Sign-in refuses nothing here that 8904acd9's
+ * as is any other top-level or response field the verifier never reads. Sign-in refuses nothing here that an earlier commit's
  * verifier would have accepted.
  * @param {unknown} credential The assertion as sent.
  * @param {string} publicKeyB64 The enrolled credential's stored COSE key.

@@ -113,6 +113,9 @@ export const mergeCause = (previous: ReconciliationCause | undefined | null, nex
 interface ContentRevision { kind: 'content-revision'; seq: number }
 const validRevision = (value: unknown): value is ContentRevision => isRecord(value) && value.kind === 'content-revision' && typeof value.seq === 'number' && Number.isSafeInteger(value.seq) && value.seq >= 0
 const RESET_PREFIX = '@x6-vfs-reset:'
+/** The durable record of one rebase, `@x6-rebase:<cloud revision>`; never sent, never deleted by the tab. */
+export const REBASE_PREFIX = '@x6-rebase:'
+const rebaseRange = (): IDBKeyRange => IDBKeyRange.bound(REBASE_PREFIX, REBASE_PREFIX + '\uffff')
 const batchRange = (): IDBKeyRange => IDBKeyRange.bound(BATCH_PREFIX, BATCH_PREFIX + '\uffff')
 /** One waiting session journal: its path, the earliest time it may go, and how often the cloud has not taken it. */
 const JOURNAL_PREFIX = '@x6-deferred-journal:'
@@ -522,6 +525,8 @@ export const persistence = {
     deferredJournals: [] as string[],
     /** Why a waiting journal last stepped aside (the cloud's upload limit or a size refusal), until it is delivered. */
     journalNote: null as string | null,
+    /** What this boot's rebase look found (null when the tab was in step or never looked); recomputed every boot. */
+    rebase: null as RebaseReport | null,
   },
 }
 
@@ -626,6 +631,8 @@ function fromB64(text: string): Uint8Array {
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
+/** An IndexedDB key as text (every key this store writes is a string). */
+const keyText = (key: IDBValidKey): string => (typeof key === 'string' ? key : JSON.stringify(key))
 
 // Compare the complete durable read-set, including local-only rows and outbox/reset
 // metadata. A mirror sequence alone cannot detect another tab's private saves.
@@ -877,6 +884,379 @@ export interface AttachOptions {
   readonly journal?: { readonly intervalMs?: number }
 }
 
+// ---- REBASE block begin: the pure rebase plan (no I/O) ----
+/**
+ * The cloud wake's checkpoint journal (twin of deploy/cloudflare/src/head-do.mjs `CLOUD_WAKE_CHECKPOINT_PATH`; deploy/ may
+ * not be imported here: tests/x6/rebase-plan.spec.ts fails when the two differ). No code in this tab writes it.
+ */
+export const CLOUD_WAKE_CHECKPOINT_PATH = '/dsh/home/auma/seed/cloud-wake-checkpoints.v1.jsonl'
+/** Paths no tab code writes (SOURCE: `git grep cloud-wake-checkpoints packages/` finds no writer): only these may be adopted. */
+export const REBASE_NO_TAB_WRITER: ReadonlySet<string> = new Set([CLOUD_WAKE_CHECKPOINT_PATH])
+/** Journals the cloud keeps append-only (twin of mirror-do.mjs `protectedHistory`, policy `append`). */
+export const CLOUD_APPEND_ONLY: ReadonlySet<string> = new Set([CLOUD_WAKE_CHECKPOINT_PATH, ...APPEND_ONLY_JOURNALS])
+/** Content-addressed DAG nodes the cloud keeps immutable (twin of mirror-do.mjs `protectedHistory`, policy `immutable`). */
+const cloudImmutable = (path: string): boolean => /^\/dsh\/home\/auma\/memory\/dag\/(nodes\/)?[a-f0-9]{64}\.json$/.test(path)
+export type RebaseMode = 'off' | 'report' | 'apply' | 'chrome-wins'
+const REBASE_MODES: readonly RebaseMode[] = ['off', 'report', 'apply', 'chrome-wins']
+export type RebaseRefusal = 'REBASE_LINEAGE' | 'REBASE_BASE_MISMATCH' | 'REBASE_RECEIPTS_INCOMPLETE' | 'REBASE_OWN_SAVE_APPLIED'
+  | 'REBASE_CHANGES_UNKNOWN' | 'REBASE_WITHHELD' | 'REBASE_TOO_LARGE' | 'REBASE_DELETION_UNSUPPORTED' | 'REBASE_CONFLICT'
+  | 'REBASE_JOURNAL_DIVERGED' | 'REBASE_RESYNC_REFUSED' | 'REBASE_CLOUD_MOVED'
+/** The refusals `chrome-wins` takes over (versions it cannot attribute, or that overlap hers); every other refusal stands. */
+export const CHROME_WINS_OVERRIDES: ReadonlySet<RebaseRefusal> = new Set<RebaseRefusal>(['REBASE_RECEIPTS_INCOMPLETE',
+  'REBASE_CHANGES_UNKNOWN', 'REBASE_TOO_LARGE', 'REBASE_DELETION_UNSUPPORTED', 'REBASE_CONFLICT'])
+/** Bounds of one changes answer, mirrored from mirror-do.mjs `MIRROR_CHANGES_LIMITS`, and of the cloud bytes kept here. */
+export const REBASE_LIMITS = Object.freeze({ paths: 10000, fileBytes: 16 * 1024 * 1024, responseBytes: 24 * 1024 * 1024, versions: 4096 })
+export interface RebaseVersion {
+  readonly revision: number
+  readonly writer: 'wake' | 'self' | 'browser'
+  readonly client: string
+  readonly seq: number
+  readonly digest: string
+  readonly acknowledgedAt: number
+  readonly applied: number
+  readonly paths: readonly string[] | null
+}
+export type RebaseCloudEntry = WireEntry | { readonly kind: 'missing'; readonly reset: boolean } | { readonly kind: 'withheld' }
+/** The changes route's answer, checked field by field (`parseRebaseChanges`). */
+export interface RebaseChanges {
+  readonly lineageId: string
+  readonly revision: number
+  readonly since: number
+  readonly complete: boolean
+  readonly revisions: readonly RebaseVersion[]
+  readonly entries: Readonly<Record<string, RebaseCloudEntry>> | null
+  readonly tooLarge: boolean
+  readonly clientHeadSeq: number
+  readonly mode: RebaseMode
+}
+const HEX64 = /^[0-9a-f]{64}$/
+const safeCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+/** Parse and check every field of a changes answer; null when anything is off (the tab then stays exactly as today). */
+export function parseRebaseChanges(text: string): RebaseChanges | null {
+  let body: unknown
+  try { body = JSON.parse(text) } catch { return null }
+  if (!isRecord(body) || body.ok !== true || body.protocol !== CLOUD_PROTOCOL || !validCloudBase(body) || !safeCount(body.since)
+    || body.since > body.revision || typeof body.complete !== 'boolean' || !Array.isArray(body.revisions) || body.revisions.length > REBASE_LIMITS.versions
+    || !safeCount(body.clientHeadSeq) || !REBASE_MODES.includes(body.mode as RebaseMode)
+    || (body.tooLarge !== undefined && body.tooLarge !== true)) return null
+  const revisions: RebaseVersion[] = []
+  let previous = body.since
+  for (const item of body.revisions as unknown[]) {
+    if (!isRecord(item) || !safeCount(item.revision) || item.revision <= previous || item.revision > body.revision
+      || !['wake', 'self', 'browser'].includes(item.writer as string) || typeof item.client !== 'string' || !/^[0-9a-f]{8}$/.test(item.client)
+      || !safeCount(item.seq) || item.seq < 1 || typeof item.digest !== 'string' || !HEX64.test(item.digest) || !safeCount(item.acknowledgedAt)
+      || !safeCount(item.applied) || item.applied < 1) return null
+    if (item.paths !== null && (!Array.isArray(item.paths) || item.paths.length > REBASE_LIMITS.paths
+      || item.paths.some(path => typeof path !== 'string' || !cloudPathSyntax(path)))) return null
+    previous = item.revision
+    revisions.push({ revision: item.revision, writer: item.writer as RebaseVersion['writer'], client: item.client, seq: item.seq, digest: item.digest,
+      acknowledgedAt: item.acknowledgedAt, applied: item.applied, paths: item.paths === null ? null : [...item.paths as string[]] })
+  }
+  let entries: Record<string, RebaseCloudEntry> | null = null
+  if (body.entries !== null) {
+    if (!isRecord(body.entries) || body.tooLarge === true) return null
+    const known = new Set(revisions.flatMap(item => item.paths ?? []))
+    const keys = Object.keys(body.entries)
+    if (keys.length !== known.size || keys.some(key => !known.has(key))) return null
+    entries = {}
+    for (const key of keys) {
+      const wire = body.entries[key]
+      if (!isRecord(wire)) return null
+      const mode = (value: unknown): value is number => safeCount(value) && value <= 0o777
+      if (wire.kind === 'withheld') entries[key] = { kind: 'withheld' }
+      else if (wire.kind === 'missing' && typeof wire.reset === 'boolean') entries[key] = { kind: 'missing', reset: wire.reset }
+      else if (wire.kind === 'dir' && mode(wire.mode)) entries[key] = { kind: 'dir', mode: wire.mode }
+      else if (wire.kind === 'file' && mode(wire.mode) && typeof wire.mtimeMs === 'number' && Number.isFinite(wire.mtimeMs) && wire.mtimeMs >= 0
+        && typeof wire.b64 === 'string' && wire.b64.length % 4 === 0 && /^[A-Za-z0-9+/]*={0,2}$/.test(wire.b64) && toB64(fromB64(wire.b64)) === wire.b64) {
+        entries[key] = { kind: 'file', mode: wire.mode, mtimeMs: wire.mtimeMs, b64: wire.b64 }
+      } else return null
+    }
+  } else if (body.tooLarge !== true && revisions.some(item => item.paths !== null)) return null
+  return { lineageId: body.lineageId, revision: body.revision, since: body.since, complete: body.complete, revisions, entries,
+    tooLarge: body.tooLarge === true, clientHeadSeq: body.clientHeadSeq, mode: body.mode as RebaseMode }
+}
+
+type FileEntry = Entry & { readonly kind: 'file' }
+const entryBytes = (entry: Entry | null | undefined): number | null => (entry?.kind === 'file' ? entry.bytes.byteLength : null)
+const entrySha = (entry: Entry | null | undefined): string | null => (entry?.kind === 'file' ? sha256HexSync(entry.bytes) : null)
+/** One version as the result shows it (no digest of another browser's bytes is needed to read it). */
+export interface RebaseVersionView {
+  readonly revision: number
+  readonly writer: string
+  readonly client: string
+  readonly at: number
+  readonly paths: number | null
+}
+const versionView = (item: RebaseVersion): RebaseVersionView => ({ revision: item.revision, writer: item.writer, client: item.client,
+  at: item.acknowledgedAt, paths: item.paths === null ? null : item.paths.length })
+/** A queued save the rebase drops (never applied; its content is already in her rows), as the durable record keeps it. */
+export interface RebaseDropped {
+  readonly seq: number
+  readonly id: string
+  readonly digest: string
+  readonly entries: number
+  readonly paths: readonly string[]
+}
+export interface RebaseAdopt {
+  readonly path: string
+  readonly entry: FileEntry
+  readonly cloudSha: string
+  readonly local: Uint8Array | null
+  readonly localSha: string | null
+}
+export interface RebaseConflict {
+  readonly path: string
+  readonly why: string
+  readonly revision: number | null
+  readonly writer: string | null
+  readonly cloudSha: string | null
+  readonly cloudBytes: number | null
+  readonly localSha: string | null
+  readonly localBytes: number | null
+}
+export interface RebaseRefused {
+  readonly kind: 'refused'
+  readonly code: RebaseRefusal
+  readonly detail: string
+  readonly ack: number | null
+  readonly versions: readonly RebaseVersionView[]
+  readonly conflicts: readonly RebaseConflict[]
+  readonly dropped: readonly RebaseDropped[]
+}
+export interface RebaseReady {
+  readonly kind: 'ready'
+  readonly lineageId: string
+  readonly from: number
+  readonly to: number
+  readonly ack: number
+  readonly adopt: readonly RebaseAdopt[]
+  readonly converged: readonly string[]
+  readonly dropped: readonly RebaseDropped[]
+  readonly versions: readonly RebaseVersionView[]
+}
+export type RebasePlan = RebaseRefused | RebaseReady | { readonly kind: 'not-needed'; readonly detail: string }
+export interface RebaseInput {
+  readonly meta: MirrorMeta | undefined
+  readonly queue: readonly MirrorBatch[]
+  readonly changes: RebaseChanges
+  /** This tab's state of a path after hydration (file, dir), or null when absent. */
+  readonly local: (path: string) => Entry | null
+  /** Her own pending changes: tombstone roots, subtree resets, waiting session journals. */
+  readonly held: { readonly tombstones: Iterable<string>; readonly resets: Iterable<string>; readonly journals: Iterable<string> }
+}
+const cloudEntryOf = (wire: RebaseCloudEntry | undefined): Entry | null =>
+  wire?.kind === 'file' ? { kind: 'file', bytes: fromB64(wire.b64), mode: wire.mode, mtimeMs: wire.mtimeMs } : wire?.kind === 'dir' ? { kind: 'dir', mode: wire.mode } : null
+
+/**
+ * THE REBASE PLAN. Pure: it reads only its arguments. Given this tab's mirror record,
+ * its queue, its hydrated state and the changes route's answer, it says whether the tab may move its cloud base forward
+ * to the answer's revision, and what it would adopt. Anything it cannot prove refuses, by name:
+ * REBASE_LINEAGE (another lineage), REBASE_BASE_MISMATCH (the answer is not about her base, or her record is not intact),
+ * REBASE_OWN_SAVE_APPLIED (the cloud holds saves of hers she has no acknowledgement for, unless they are exactly her first
+ * queued saves, same digests, one revision past each one's fence: then they are her lost acknowledgements, taken first),
+ * REBASE_RECEIPTS_INCOMPLETE, REBASE_CHANGES_UNKNOWN (a version whose paths nobody knows: another browser's), REBASE_TOO_LARGE,
+ * REBASE_WITHHELD (a path the cloud will not serve, or one that is secret-shaped, under balls or outside the roots),
+ * REBASE_DELETION_UNSUPPORTED (a changed path the cloud deleted), REBASE_CONFLICT (with the full list).
+ * Per changed path: converged (same entry); conflict when her tab changed it (a queued entry, a tombstone, a reset, a
+ * waiting journal); adopt only for a path no tab code writes, and only as an append-only extension of hers or when she
+ * has none; any other path is a conflict (she may have changed it: older saves recorded no paths).
+ */
+export function planRebase(input: RebaseInput): RebasePlan {
+  const { meta, queue, changes } = input
+  const versions = changes.revisions.map(versionView)
+  type Extra = { ack?: number | null; conflicts?: RebaseConflict[]; dropped?: RebaseDropped[] }
+  const refuse = (code: RebaseRefusal, detail: string, extra: Extra = {}): RebasePlan =>
+    ({ kind: 'refused', code, detail, ack: extra.ack ?? null, versions, conflicts: extra.conflicts ?? [], dropped: extra.dropped ?? [] })
+  if (!meta || !validCloudBase(meta.cloudBase)) return refuse('REBASE_BASE_MISMATCH', 'this browser has no cloud base')
+  if (changes.lineageId !== meta.cloudBase.lineageId) return refuse('REBASE_LINEAGE', 'the cloud is on another lineage')
+  if (changes.since !== meta.cloudBase.revision || changes.revision <= changes.since) {
+    return refuse('REBASE_BASE_MISMATCH', `the answer is about revision ${String(changes.since)} to ${String(changes.revision)}; this browser's base is ${String(meta.cloudBase.revision)}`)
+  }
+  try { projectedCloudBase(meta, queue) } catch { return refuse('REBASE_BASE_MISMATCH', 'this browser\'s queue or sequence record is not intact') }
+  const acknowledged = meta.cloudAcknowledgedSeq ?? 0
+  // Her own versions: only her first queued saves, in order, may be in the cloud; they are her lost acknowledgements.
+  const own = changes.revisions.filter(item => item.writer === 'self')
+  for (const [index, item] of own.entries()) {
+    const record = queue[index]
+    if (record === undefined || item.revision !== changes.since + 1 + index || item.seq !== acknowledged + 1 + index
+      || record.batch.seq !== item.seq
+      || record.digest !== item.digest || record.batch.cloudBase?.revision !== item.revision - 1) {
+      return refuse('REBASE_OWN_SAVE_APPLIED', `the cloud holds save ${String(item.seq)} of this browser at revision ${String(item.revision)}, which is not its queued save`)
+    }
+  }
+  const ack = acknowledged + own.length
+  if (changes.clientHeadSeq !== ack) {
+    return refuse('REBASE_OWN_SAVE_APPLIED', `the cloud's last save from this browser is ${String(changes.clientHeadSeq)}; this browser accounts for ${String(ack)}`)
+  }
+  const dropped: RebaseDropped[] = queue.slice(own.length).map(record => ({ seq: record.batch.seq, id: record.batch.id,
+    digest: record.digest,
+    entries: record.batch.entries.length, paths: record.batch.entries.slice(0, 16).map(([path]) => path) }))
+  const others = changes.revisions.filter(item => item.writer !== 'self')
+  if (!others.length) return { kind: 'not-needed', detail: 'every version after this browser\'s base is its own queued save; the drain confirms them' }
+  const carry = { ack, dropped }
+  if (!changes.complete) return refuse('REBASE_RECEIPTS_INCOMPLETE', 'a version after this browser\'s base has no receipt in the cloud', carry)
+  const unknown = others.filter(item => item.paths === null)
+  if (unknown.length) {
+    return refuse('REBASE_CHANGES_UNKNOWN', `the cloud does not know what ${String(unknown.length)} version(s) changed: `
+      + unknown.slice(0, 16).map(item => `${String(item.revision)} by ${item.writer} ${item.client} at ${new Date(item.acknowledgedAt).toISOString()}`).join('; '), carry)
+  }
+  if (changes.entries === null) return refuse('REBASE_TOO_LARGE', 'the changed paths are larger than one answer', carry)
+  const changedBy = new Map<string, RebaseVersion>()
+  for (const item of others) for (const path of item.paths ?? []) changedBy.set(path, item)
+  const entries = changes.entries
+  for (const path of [...changedBy.keys()].sort()) {
+    const wire = entries[path]
+    if (wire === undefined) return refuse('REBASE_CHANGES_UNKNOWN', `the answer lists ${path} without its entry`, carry)
+    if (wire.kind === 'withheld' || SKIP_REMOTE(path) || !cloudPathAllowed(path)) return refuse('REBASE_WITHHELD', `${path} is never taken from the cloud`, carry)
+    if (wire.kind === 'missing' && wire.reset) return refuse('REBASE_DELETION_UNSUPPORTED', `the cloud deleted ${path}; this version adopts no deletion`, carry)
+  }
+  const held = [...input.held.tombstones, ...input.held.resets, ...input.held.journals,
+    ...queue.flatMap(record => record.batch.entries.map(([path]) => path))]
+  const adopt: RebaseAdopt[] = []
+  const converged: string[] = []
+  const conflicts: RebaseConflict[] = []
+  for (const [path, version] of [...changedBy].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const cloud = cloudEntryOf(entries[path])
+    const local = input.local(path)
+    const conflict = (why: string): void => {
+      conflicts.push({ path, why, revision: version.revision, writer: version.writer, cloudSha: entrySha(cloud),
+        cloudBytes: entryBytes(cloud),
+        localSha: entrySha(local), localBytes: entryBytes(local) })
+    }
+    if (cloud === null ? local === null : local !== null && sameEntry(local, cloud)) { converged.push(path); continue }
+    const mine = held.find(other => overlaps(path, other))
+    if (mine !== undefined) { conflict(`this browser changed it (${mine})`); continue }
+    if (!REBASE_NO_TAB_WRITER.has(path)) { conflict('this browser may have changed it (older saves recorded no paths)'); continue }
+    if (cloud?.kind !== 'file') { conflict('the cloud holds no file there'); continue }
+    if (local !== null && (local.kind !== 'file' || (criticalCloudPath(path) && !extendsJournal(local.bytes, cloud.bytes)))) {
+      conflict('the cloud\'s copy does not extend this browser\'s line for line'); continue
+    }
+    adopt.push({ path, entry: cloud, cloudSha: sha256HexSync(cloud.bytes), local: local?.kind === 'file' ? local.bytes : null, localSha: entrySha(local) })
+  }
+  if (conflicts.length) return refuse('REBASE_CONFLICT', `${String(conflicts.length)} changed path(s) overlap this browser's own changes or cannot be proven untouched`, { ...carry, conflicts })
+  return { kind: 'ready', lineageId: changes.lineageId, from: changes.since, to: changes.revision, ack, adopt, converged, dropped, versions }
+}
+
+/** Where a replaced local byte, or a cloud byte this browser overrides, is kept: a local-only row the cloud outbox drops. */
+export function rebaseBackupPath(to: number, side: 'local' | 'cloud', path: string, bytes: Uint8Array): string {
+  const name = path.slice(path.lastIndexOf('/') + 1).slice(0, 160)
+  return `${JOURNAL_BACKUP_ROOT}/rebase-${String(to)}/${side === 'cloud' ? `cloud/${name}.${sha256HexSync(path).slice(0, 8)}` : name}.${sha256HexSync(bytes).slice(0, 16)}.bak`
+}
+export interface RebaseOverride {
+  readonly path: string
+  readonly cloudSha: string | null
+  readonly cloudBytes: number | null
+  readonly cloudKind: 'file' | 'dir'
+  readonly localSha: string | null
+  readonly localBytes: number | null
+  readonly cloudBackup: string | null
+}
+export interface ChromeWinsReady {
+  readonly kind: 'ready'
+  readonly adopt: readonly RebaseAdopt[]
+  readonly overridden: readonly RebaseOverride[]
+  readonly cloudBackups: ReadonlyArray<readonly [string, FileEntry]>
+}
+export type ChromeWinsPlan = ChromeWinsReady
+  | { readonly kind: 'refused'; readonly code: RebaseRefusal; readonly detail: string; readonly paths: readonly string[] }
+/**
+ * `MIRROR_REBASE = "chrome-wins"`. Pure: her stored rows and resets, and the
+ * cloud's whole snapshot at the version her base moves to. It adopts ONLY what the cloud's own guards force: an
+ * append-only journal the cloud extended line for line (her bytes kept in a backup row). Every other path where the
+ * cloud's entry differs from hers is recorded (path, both digests and sizes) and HER copy is what the existing resync
+ * then sends; the cloud's bytes of each such file are kept in a local backup row while they fit the changes route's own
+ * bounds (16 MiB in all, never a hidden path). It refuses, changing nothing, when the cloud's guards would refuse her
+ * copy (a journal neither side extends, a different DAG node), when the existing resync would refuse, or when the resync
+ * would delete any cloud entry (it never deletes a cloud file). A path she does not hold is never touched.
+ */
+export function planChromeWins(
+  rows: ReadonlyMap<string, Entry>, resets: ReadonlySet<string>, cloud: ReadonlyMap<string, Entry>, to: number,
+): ChromeWinsPlan {
+  const adopt: RebaseAdopt[] = []
+  const diverged: string[] = []
+  const after = new Map(rows)
+  for (const [path, mine] of rows) {
+    const theirs = cloud.get(path)
+    if (theirs?.kind !== 'file' || mine.kind === 'gone' || sameEntry(mine, theirs)) continue
+    if (cloudImmutable(path)) { diverged.push(path); continue }
+    if (!CLOUD_APPEND_ONLY.has(path)) continue
+    if (mine.kind !== 'file') { diverged.push(path); continue }
+    if (sameBytes(mine.bytes, theirs.bytes) || extendsJournal(theirs.bytes, mine.bytes)) continue
+    if (!extendsJournal(mine.bytes, theirs.bytes)) { diverged.push(path); continue }
+    adopt.push({ path, entry: theirs, cloudSha: sha256HexSync(theirs.bytes), local: mine.bytes, localSha: sha256HexSync(mine.bytes) })
+    after.set(path, theirs)
+  }
+  if (diverged.length) return { kind: 'refused', code: 'REBASE_JOURNAL_DIVERGED', detail: `the cloud refuses this browser's copy of ${String(diverged.length)} history file(s)`, paths: diverged.sort() }
+  const resync = planCloudResync(after, resets, cloud)
+  if (resync.refused !== null) return { kind: 'refused', code: 'REBASE_RESYNC_REFUSED', detail: resync.refused, paths: [] }
+  const deletes = resync.batches.flat().filter(([, wire]) => wire.kind === 'gone').map(([path]) => path)
+  // A
+  // deletion this browser recorded as its own single-file TOMBSTONE is carried out at her cloud under `chrome-wins`, and
+  // the cloud's bytes are kept in a local backup row named in the override record, so nothing is lost and nothing is
+  // restored to the slot it was removed from (the objection). Narrower than the first draft: a reset root never
+  // authorizes a deletion (it records that local rows are unknown, not that she deleted them); a directory tombstone
+  // whose children the cloud still holds refuses; immutable or append-only history refuses; and a backup key that
+  // already holds a different file refuses rather than overwrite it. Anything else still refuses, by name.
+  const unexplained = deletes.filter(path => {
+    if (after.get(path)?.kind !== 'gone') return true
+    const theirs = cloud.get(path)
+    if (theirs?.kind !== 'file' || cloudImmutable(path) || CLOUD_APPEND_ONLY.has(path)) return true
+    return [...cloud.keys()].some(key => key.startsWith(path + '/'))
+  })
+  if (unexplained.length) return { kind: 'refused', code: 'REBASE_DELETION_UNSUPPORTED', detail: `the resync would delete ${String(unexplained.length)} cloud path(s) this browser did not tombstone as a single file`, paths: unexplained.sort() }
+  const overridden: RebaseOverride[] = []
+  const cloudBackups: Array<readonly [string, FileEntry]> = []
+  let kept = 0
+  for (const path of [...deletes].sort()) {
+    const theirs = cloud.get(path)
+    if (theirs?.kind !== 'file') continue
+    let cloudBackup: string | null = null
+    const backupPath = rebaseBackupPath(to, 'cloud', path, theirs.bytes)
+    const existing = after.get(backupPath)
+    if (existing !== undefined && !(existing.kind === 'file' && sameBytes(existing.bytes, theirs.bytes))) {
+      return { kind: 'refused', code: 'REBASE_DELETION_UNSUPPORTED', detail: `keeping the cloud's bytes of ${path} would overwrite the row already at ${backupPath}`, paths: [path] }
+    }
+    if (existing === undefined && kept + theirs.bytes.byteLength <= REBASE_LIMITS.fileBytes && !secretShapedPath(path)) {
+      kept += theirs.bytes.byteLength
+      cloudBackup = backupPath
+      cloudBackups.push([backupPath, { kind: 'file', bytes: theirs.bytes, mode: 0o600, mtimeMs: theirs.mtimeMs }])
+    }
+    overridden.push({ path, cloudSha: entrySha(theirs), cloudBytes: entryBytes(theirs), cloudKind: 'file',
+      localSha: null, localBytes: null, cloudBackup })
+  }
+  const tombstones = [...after].filter(([, entry]) => entry.kind === 'gone').map(([path]) => path)
+  for (const [path, mine] of [...after].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const theirs = cloud.get(path)
+    if (theirs === undefined || theirs.kind === 'gone' || mine.kind === 'gone' || sameEntry(mine, theirs)) continue
+    if (tombstones.some(root => path.startsWith(root + '/')) || !outboxAdmits(path, false) || cloudAdmission(path, entryBytes(mine)) !== 'send') continue
+    let cloudBackup: string | null = null
+    if (theirs.kind === 'file' && kept + theirs.bytes.byteLength <= REBASE_LIMITS.fileBytes && !secretShapedPath(path)) {
+      kept += theirs.bytes.byteLength
+      cloudBackup = rebaseBackupPath(to, 'cloud', path, theirs.bytes)
+      cloudBackups.push([cloudBackup, { kind: 'file', bytes: theirs.bytes, mode: 0o600, mtimeMs: theirs.mtimeMs }])
+    }
+    overridden.push({ path, cloudSha: entrySha(theirs), cloudBytes: entryBytes(theirs), cloudKind: theirs.kind,
+      localSha: entrySha(mine), localBytes: entryBytes(mine), cloudBackup })
+  }
+  return { kind: 'ready', adopt, overridden, cloudBackups }
+}
+/** What `persistence.mirror.rebase` says after a boot that looked (her `x6_browser_estate`, persistence section). */
+export interface RebaseReport {
+  readonly state: 'off' | 'not-needed' | 'unavailable' | 'refused' | 'would-adopt' | 'applied' | 'failed'
+  readonly mode: RebaseMode | null
+  readonly code: RebaseRefusal | null
+  readonly detail: string
+  readonly from: number | null
+  readonly to: number | null
+  readonly adopted: readonly string[]
+  readonly overridden: number
+  readonly droppedQueue: number
+  readonly versions: readonly RebaseVersionView[]
+  readonly conflicts: readonly RebaseConflict[]
+  readonly record: string | null
+}
+// ---- REBASE block end ----
+
 export async function attachIdbPersistence(
   vfs: MemoryVfs, roots: readonly string[], options: AttachOptions = {},
 ): Promise<() => Promise<void>> {
@@ -893,6 +1273,7 @@ export async function attachIdbPersistence(
   persistence.mirror.shadowedJournals = []
   persistence.mirror.transient = null; persistence.mirror.resyncPending = false; persistence.mirror.quarantinedPaths = []
   persistence.mirror.deferredJournals = []; persistence.mirror.journalNote = null
+  persistence.mirror.rebase = null
   persistence.localSave.error = null; persistence.localSave.capacity = null; persistence.localSave.pendingPaths = 0
   // A refused IndexedDB stays a visible boot failure (a memory-only fallback let writes, sync
   // and close resolve with her data in memory only, with no warning anyone saw).
@@ -1033,6 +1414,134 @@ export async function attachIdbPersistence(
       return { kind: 'unreachable', reason: error instanceof Error ? error.message : String(error) }
     }
   }
+  /**
+   * After the fence is classified and before her tree boots. One read of
+   * the changes route; the pure plan decides. `report` changes nothing. `apply` (and `chrome-wins`) is ONE IndexedDB
+   * transaction guarded by the stored-rows stamp, so a second tab's save aborts it: adopted entries with a backup row of
+   * every replaced local byte, the refused queue dropped but recorded, the meta moved to the cloud's version, the hold
+   * marker kept (so the EXISTING resync sends her saves), the durable record `@x6-rebase:<N>`, the content revision. Then
+   * the adopted files enter the VFS silently. The cloud is never written here. Every failure leaves the tab as it was.
+   * @returns the new cloud base and the hold marker after a committed rebase; null when nothing changed.
+   */
+  const rebaseAtBoot = async (meta: MirrorMeta, base: CloudBase): Promise<{ base: CloudBase; marker: CloudReconciliation } | null> => {
+    const report = (state: RebaseReport['state'], detail: string, extra: Partial<RebaseReport> = {}): null => {
+      persistence.mirror.rebase = { state, mode: null, code: null, detail, from: base.revision, to: null, adopted: [], overridden: 0,
+        droppedQueue: 0, versions: [], conflicts: [], record: null, ...extra }
+      if (state !== 'off' && state !== 'not-needed') console.info(`x6-persist: cloud rebase ${state}${extra.code ? ` (${extra.code})` : ''}: ${detail}`)
+      return null
+    }
+    const url = apiUrl(`/_mirror/changes?since=${String(base.revision)}&clientId=${encodeURIComponent(meta.clientId)}`)
+    if (url === null) return report('unavailable', 'no page origin')
+    let changes: RebaseChanges | null
+    try {
+      const res = await timedFetchText(url, {}, MIRROR_READ_POLICY.statusCeilingMs, REBASE_LIMITS.responseBytes,
+        Math.min(idleMs, MIRROR_READ_POLICY.bootIdleMs))
+      if (!res.ok) return report('unavailable', `/_mirror/changes answered ${String(res.status)}`)
+      changes = parseRebaseChanges(res.text)
+    } catch (error) { return report('unavailable', error instanceof Error ? error.message : String(error)) }
+    if (changes === null) return report('unavailable', 'the changes answer was malformed')
+    const mode = changes.mode
+    if (mode === 'off') return report('off', 'MIRROR_REBASE is off', { mode, to: changes.revision })
+    const local = (path: string): Entry | null => {
+      if (!vfs.existsSync(path)) return null
+      const stat = vfs.statSync(path) as { isDirectory(): boolean; mode: number; mtimeMs: number }
+      if (stat.isDirectory()) return { kind: 'dir', mode: stat.mode & 0o777 }
+      return { kind: 'file', bytes: new Uint8Array(vfs.readFileSync(path) as Uint8Array), mode: stat.mode & 0o777, mtimeMs: stat.mtimeMs }
+    }
+    const plan = planRebase({ meta, queue: hydratedQueue, changes, local,
+      held: { tombstones: tombstoneRoots, resets: resetRoots, journals: persistence.mirror.deferredJournals } })
+    const seen = { mode, to: changes.revision }
+    if (plan.kind === 'not-needed') return report('not-needed', plan.detail, seen)
+    let adopt: readonly RebaseAdopt[]
+    let overridden: readonly RebaseOverride[] = []
+    let cloudBackups: ReadonlyArray<readonly [string, Entry]> = []
+    let ack: number, dropped: readonly RebaseDropped[]
+    if (plan.kind === 'refused') {
+      const refused = { ...seen, code: plan.code, versions: plan.versions.slice(0, 64), conflicts: plan.conflicts.slice(0, 50),
+        droppedQueue: plan.dropped.length }
+      if (mode !== 'chrome-wins' || !CHROME_WINS_OVERRIDES.has(plan.code) || plan.ack === null) return report('refused', plan.detail, refused)
+      // chrome-wins: the cloud's whole snapshot at exactly this version, and her stored rows as the resync will read them.
+      const snap = await readSnapshot(true)
+      if (snap.kind !== 'snapshot' || snap.base === null) return report('unavailable', snap.kind === 'unreachable' ? snap.reason : 'snapshot has no fence', seen)
+      if (!sameCloudBase(snap.base, { lineageId: changes.lineageId, revision: changes.revision })) {
+        return report('refused', 'the cloud moved while it was read; the next boot looks again', { ...refused, code: 'REBASE_CLOUD_MOVED' })
+      }
+      const readTx = db.transaction(STORE, 'readonly')
+      const readDone = done(readTx)
+      const readStore = readTx.objectStore(STORE)
+      const [keys, values] = await Promise.all([request(readStore.getAllKeys()), request(readStore.getAll())])
+      await readDone
+      const rows = new Map<string, Entry>(), resets = new Set<string>()
+      keys.forEach((key, index) => {
+        const path = keyText(key)
+        if (path.startsWith(RESET_PREFIX)) {
+          const root = path.slice(RESET_PREFIX.length)
+          if (under(root, roots) && !SKIP(root)) resets.add(root)
+          return
+        }
+        if (path.startsWith('@') || !under(path, roots) || SKIP(path)) return
+        const entry: unknown = values[index]
+        if (isRecord(entry) && ['file', 'dir', 'gone'].includes(entry.kind as string)) rows.set(path, entry as Entry)
+      })
+      const wins = planChromeWins(rows, resets, new Map(snap.entries), changes.revision)
+      if (wins.kind === 'refused') return report('refused', `${wins.detail}${wins.paths.length ? `: ${wins.paths.slice(0, 8).join(', ')}` : ''}`, { ...refused, code: wins.code })
+      adopt = wins.adopt; overridden = wins.overridden; cloudBackups = wins.cloudBackups; ack = plan.ack; dropped = plan.dropped
+    } else { adopt = plan.adopt; ack = plan.ack; dropped = plan.dropped }
+    const summary = { ...seen, adopted: adopt.map(item => item.path), overridden: overridden.length, droppedQueue: dropped.length,
+      versions: plan.versions.slice(0, 64) }
+    if (mode === 'report') return report('would-adopt', `would move this browser's base from ${String(base.revision)} to ${String(changes.revision)}`, summary)
+    const to = changes.revision
+    const next: CloudBase = { lineageId: changes.lineageId, revision: to }
+    const recordKey = REBASE_PREFIX + String(to)
+    const tx = db.transaction(STORE, 'readwrite')
+    const completed = done(tx)
+    let marker: CloudReconciliation
+    const backups: Array<[string, Entry]> = []
+    try {
+      const store = tx.objectStore(STORE)
+      const [keys, values] = await Promise.all([request(store.getAllKeys()), request(store.getAll())])
+      const revision: unknown = values[keys.findIndex(key => key === CONTENT_KEY)]
+      if (storedRowsStamp(keys, values) !== hydratedStamp || !validRevision(revision) || revision.seq !== contentRevision) {
+        tx.abort(); await completed.catch(() => {})
+        return report('failed', 'another tab saved while this one booted; nothing was changed', summary)
+      }
+      if (contentRevision === Number.MAX_SAFE_INTEGER) throw new Error('Durable content revision exhausted')
+      const at = Date.now()
+      const adopted = adopt.map((item) => {
+        let backup: string | null = null
+        if (item.local !== null && !sameBytes(item.local, item.entry.bytes)) {
+          backup = rebaseBackupPath(to, 'local', item.path, item.local)
+          backups.push([backup, { kind: 'file', bytes: item.local, mode: 0o600, mtimeMs: at }])
+        }
+        return { path: item.path, cloudSha: item.cloudSha, localSha: item.localSha, backup }
+      })
+      for (const [path, entry] of [...backups, ...cloudBackups]) store.put(entry, path)
+      for (const item of adopt) store.put(item.entry, item.path)
+      for (const key of keys) if (keyText(key).startsWith(BATCH_PREFIX)) store.delete(key)
+      store.put({ ...meta, seq: ack, cloudAcknowledgedSeq: ack, cloudBase: next } satisfies MirrorMeta, META_KEY)
+      const existing = values[keys.findIndex(key => key === RECONCILE_KEY)] as CloudReconciliation | undefined
+      marker = existing ?? { kind: 'cloud-reconciliation', firstRevision: contentRevision + 1, lastRevision: contentRevision + 1,
+        scope: 'all-persisted-mirror-content', cause: 'transient' }
+      if (existing === undefined) store.put(marker, RECONCILE_KEY)
+      store.put({ kind: 'cloud-rebase', mode, from: base.revision, to, lineageId: next.lineageId, at, ack, clientHeadSeq: changes.clientHeadSeq,
+        acknowledgedOwn: ack - (meta.cloudAcknowledgedSeq ?? 0), revisions: plan.versions.slice(0, 256), versionCount: plan.versions.length,
+        adopted, overridden, droppedQueue: dropped }, recordKey)
+      store.put({ kind: 'content-revision', seq: contentRevision + 1 } satisfies ContentRevision, CONTENT_KEY)
+      await completed
+    } catch (error) {
+      try { tx.abort() } catch {}
+      await completed.catch(() => {})
+      return report('failed', `the rebase was not committed; nothing was changed (${error instanceof Error ? error.message : String(error)})`, summary)
+    }
+    // Step 7: the committed rows enter the VFS silently (seeding publishes no mutation), as the first-load import does.
+    for (const [path, entry] of [...backups, ...cloudBackups, ...adopt.map(item => [item.path, item.entry] as const)]) {
+      if (entry.kind !== 'file') continue
+      if (vfs.existsSync(path) && vfs.statSync(path).isDirectory()) vfs.rmSync(path, { recursive: true, force: true })
+      vfs.seed(path, entry.bytes, { mode: entry.mode, mtimeMs: entry.mtimeMs })
+    }
+    report('applied', `this browser's base moved from ${String(base.revision)} to ${String(to)}; the resync sends her saves`, { ...summary, record: recordKey })
+    return { base: next, marker }
+  }
   const unreachable = (reason: string): string => `MIRROR_CLOUD_UNREACHABLE: ${reason}; saves stay in this browser and are sent when the cloud answers`
   let bootFailure: string | null = null
   if (localTransport || !hasDurableHistory) {
@@ -1061,8 +1570,26 @@ export async function attachIdbPersistence(
     else if (verdict.kind === 'replay-pending') {
       console.info(`x6-persist: the cloud already holds ${String(verdict.applied)} of this browser's queued saves; re-sending them in order to confirm`)
     }
+    // Out of step on the same lineage with the cloud ahead, the tab asks the changes route
+    // once. Only a store whose base the cloud passed is looked at; a store in step never calls it (idempotent).
+    let rebased: CloudBase | null = null
+    const storedBase = hydratedMeta?.cloudBase
+    if ((verdict.kind === 'diverged' || verdict.kind === 'replay-pending') && hasDurableHistory && cloudSnapshot !== null
+      && hydratedMeta !== undefined && validCloudBase(storedBase) && cloudSnapshot.lineageId === storedBase.lineageId
+      && cloudSnapshot.revision > storedBase.revision) {
+      const outcome = await rebaseAtBoot(hydratedMeta, storedBase)
+      if (outcome !== null) {
+        rebased = outcome.base
+        cloudSnapshot = outcome.base
+        fenced = false
+        persistence.mirror.conflict = null
+        hydratedReconciliation = outcome.marker
+        contentRevision += 1
+        fenceKind = 'in-step'
+      }
+    }
     if (hydratedReconciliation) {
-      const cause = verdict.kind === 'diverged' ? 'genuine' : mergeCause(hydratedReconciliation.cause, 'transient')
+      const cause = verdict.kind === 'diverged' && rebased === null ? 'genuine' : mergeCause(hydratedReconciliation.cause, 'transient')
       if (cause === 'genuine') {
         persistence.mirror.reconciliationRequired = true
         persistence.mirror.conflict ??= 'MIRROR_RECONCILIATION_REQUIRED: locally saved changes need explicit cloud reconciliation'
@@ -2198,9 +2725,10 @@ export async function attachIdbPersistence(
   persistence.inspect = async (limit = 64): Promise<Record<string, unknown>> => {
     const cap = Math.min(Math.max(Number.isSafeInteger(limit) ? limit : 64, 1), 256)
     const store = db.transaction(STORE, 'readonly').objectStore(STORE)
-    const [batchKeys, batches, meta, reconcile] = await Promise.all([
+    const [batchKeys, batches, meta, reconcile, rebases] = await Promise.all([
       request(store.getAllKeys(batchRange())), request(store.getAll(batchRange(), cap)),
       request(store.get(META_KEY)), request(store.get(RECONCILE_KEY)),
+      request(store.getAll(rebaseRange(), 16)) as Promise<unknown[]>, // Her rebase records, newest last
     ])
     // Her private tree is reported by existence and count only: never a file name, never bytes.
     const PRIVATE = '/dsh/home/auma/private'
@@ -2229,6 +2757,11 @@ export async function attachIdbPersistence(
       pendingLocal: { dirty: listed(dirty), removed: listed(removed) },
       conflict: persistence.conflict,
       mirrorConflict: persistence.mirror.conflict,
+      // This boot's rebase look, and each durable record in short (counts, never bytes).
+      rebase: { boot: persistence.mirror.rebase, records: rebases.filter(isRecord).map(item => ({ from: item.from, to: item.to,
+        mode: item.mode, at: item.at, ack: item.ack, adopted: Array.isArray(item.adopted) ? item.adopted.length : 0,
+        overridden: Array.isArray(item.overridden) ? item.overridden.length : 0,
+        droppedQueue: Array.isArray(item.droppedQueue) ? item.droppedQueue.length : 0 })) },
     }
   }
   if (!localTransport) {

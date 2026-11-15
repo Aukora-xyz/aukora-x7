@@ -36,7 +36,7 @@ export const SELF_CHECK_CALL_MS = 60_000
 export const SELF_CHECK_BUILTINS: readonly string[] = Object.freeze([
   'auma_alien_compose', 'auma_handoff', 'auma_snapshot', 'ball_put', 'ball_status', 'crew_relay', 'head_adopt', 'pearl_put',
   'scion_grow', 'self_apply', 'self_facts', 'self_undo', 'stage_head_promotion', 'stage_organ_promotion',
-  'stage_organ_set_promotion', 'tree_patch', 'tree_undo', 'x6_browser_estate', 'x6_capability_index', 'x6_cell',
+  'stage_organ_remove_promotion', 'stage_organ_set_promotion', 'tree_patch', 'tree_undo', 'x6_browser_estate', 'x6_capability_index', 'x6_cell',
   'x6_cloudflare', 'x6_consult', 'x6_exec', 'x6_facts', 'x6_github', 'x6_host_facts', 'x6_linear', 'x6_nostr', 'x6_repo',
   'x6_self_check', 'x6_self_state', 'x6_skill', 'x6_swarm', 'x6_threads', 'x6_tools', 'x6_trusted_docs', 'x6_voice_status', 'x6_web_eyes', 'x6_wish',
 ])

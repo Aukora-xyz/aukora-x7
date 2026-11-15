@@ -225,7 +225,7 @@ export const VOICE_SWITCH_TABLE: Readonly<Record<string, VoiceToolRow>> = deepFr
  */
 export const VOICE_REFUSED_TOOLS: readonly string[] = deepFreeze([
   // Her worker built-ins that change things or spend (ball-loader.ts).
-  'scion_grow', 'stage_organ_promotion', 'stage_organ_set_promotion', 'stage_head_promotion', 'ball_put', 'pearl_put',
+  'scion_grow', 'stage_organ_promotion', 'stage_organ_set_promotion', 'stage_organ_remove_promotion', 'stage_head_promotion', 'ball_put', 'pearl_put',
   'tree_patch', 'tree_undo', 'self_apply', 'self_undo', 'x6_consult', 'x6_swarm', 'x6_wish', 'x6_trusted_docs',
   // ---- KYBERSKILL block begin ----
   // Her skills tool: `keep` and `forget` write her home; `check` and `run` call cells; `list` fetches. None from voice.

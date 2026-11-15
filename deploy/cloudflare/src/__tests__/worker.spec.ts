@@ -2422,7 +2422,9 @@ test('owner sign-in leaves APIs, assets, non-GET and non-document requests as JS
 test('owner sign-in preserves host, configuration, origin and login endpoint refusals', async () => {
   const f = signinFixture()
   for (const [options, status, code] of [
-    [{ origin: 'http://messages-fixture.example.invalid' }, 403, 'HOST_REFUSED'],
+    // Moved pin (2026-11-15): a GET over plain http on her own host was HOST_REFUSED 403 and is now a 308 to https (the
+    // test below); a POST over http on her host stays refused.
+    [{ origin: 'http://messages-fixture.example.invalid', method: 'POST' }, 403, 'HOST_REFUSED'],
     [{ origin: 'https://other.example.invalid' }, 403, 'HOST_REFUSED'],
     [{ selectedEnv: { PUBLIC_HOST: f.env.PUBLIC_HOST } }, 503, 'OWNER_ACCESS_NOT_CONFIGURED'],
     [{ selectedEnv: { PUBLIC_HOST: f.env.PUBLIC_HOST, OWNER_EMAIL: f.env.OWNER_EMAIL, OWNER_PUBLIC_KEY_HEX: 'bad' } }, 503, 'OWNER_ACCESS_NOT_CONFIGURED'],
@@ -2440,6 +2442,46 @@ test('owner sign-in preserves host, configuration, origin and login endpoint ref
   const failure = await worker.fetch(new Request(ORIGIN, { headers: { accept: 'text/html' } }), f.env)
   assert.equal(failure.status, 503); assert.deepEqual(await body(failure), { ok: false, code: 'CLOUD_REQUEST_FAILED' })
   assert.equal(f.protectedReads, 0)
+})
+
+test('plain http on her own host forwards GET and HEAD to https; every other http request is refused as before', async () => {
+  const f = signinFixture()
+  const host = f.env.PUBLIC_HOST
+  for (const method of ['GET', 'HEAD']) {
+    const response = await f.request('/some/path?x=1&y=two', { method, origin: `http://${host}` })
+    assert.equal(response.status, 308, method)
+    assert.equal(response.headers.get('location'), `https://${host}/some/path?x=1&y=two`, method)
+    assert.equal(response.headers.get('set-cookie'), null, method)
+    assert.equal(await response.text(), '', method)
+  }
+  const bare = await f.request('/', { origin: `http://${host}` })
+  assert.equal(bare.status, 308); assert.equal(bare.headers.get('location'), `https://${host}/`)
+  // The target is PUBLIC_HOST, never the Host the request names: a path that looks like another host stays a path.
+  const lookalike = await f.request('//other.example.invalid/x', { origin: `http://${host}` })
+  assert.equal(lookalike.status, 308); assert.equal(lookalike.headers.get('location'), `https://${host}//other.example.invalid/x`)
+  for (const [options, label] of [
+    [{ method: 'POST', origin: `http://${host}` }, 'http POST on her host'],
+    [{ method: 'PUT', origin: `http://${host}` }, 'http PUT on her host'],
+    [{ method: 'DELETE', origin: `http://${host}` }, 'http DELETE on her host'],
+    [{ method: 'OPTIONS', origin: `http://${host}` }, 'http OPTIONS on her host'],
+    [{ origin: 'http://other.example.invalid' }, 'http GET on another host'],
+    [{ method: 'HEAD', origin: 'http://other.example.invalid' }, 'http HEAD on another host'],
+    [{ origin: `http://${host}:8080` }, 'http GET on her host at another port'],
+    [{ origin: 'https://other.example.invalid' }, 'https GET on another host'],
+    [{ origin: `http://${host}`, selectedEnv: { PUBLIC_HOST: '' } }, 'http GET with an empty PUBLIC_HOST'],
+    [{ origin: `http://${host}`, selectedEnv: {} }, 'http GET with PUBLIC_HOST unset'],
+  ]) {
+    const response = await f.request('/', options)
+    assert.equal(response.status, 403, label)
+    assert.equal(response.headers.get('location'), null, label)
+    assert.deepEqual(await body(response), { ok: false, code: 'HOST_REFUSED' }, label)
+  }
+  // Nothing above reached access verification or a protected read: the forward and the refusals come first.
+  assert.equal(f.verifications, 0); assert.equal(f.protectedReads, 0)
+  // https on her host is unchanged: the signed-out entry document, never a redirect.
+  const secure = await f.request('/')
+  assert.equal(secure.status, 401); assert.equal(secure.headers.get('location'), null)
+  assert.match(secure.headers.get('content-type') ?? '', /^text\/html/)
 })
 
 test('authenticated entry documents still require bootstrap before fetching application assets', async t => {

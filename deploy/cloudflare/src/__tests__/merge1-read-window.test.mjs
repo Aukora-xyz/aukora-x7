@@ -120,7 +120,8 @@ async function harness({ files = null } = {}) {
   }
   const request = async (input, { token, signal } = {}) => {
     const current = new Request(ORIGIN + '/_host/repo', { method: 'POST', ...(signal ? { signal } : {}), headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json', ...(token ? { 'x-x6-class3-approval': token } : {}) }, body: JSON.stringify(input) })
-    const response = await handleCloudBroker(current, env, { access, bootstrap: { ready: true, head: { phase: 'complete', seedId }, mirror: { phase: 'ready' } }, now: () => Date.now(), networkFetch,
+    // These timings read BOTH workflows, so they pin the GUARDED door level explicitly.
+    const response = await handleCloudBroker(current, env, { access, bootstrap: { ready: true, head: { phase: 'complete', seedId }, mirror: { phase: 'ready' } }, now: () => Date.now(), networkFetch, repoDoorLevel: 'guarded',
       authorizeClass3: async () => ({ ok: false }) })
     return { status: response.status, value: await response.json() }
   }

@@ -14,14 +14,25 @@ import {
 
 const LIGHT_BACKGROUND = '#fff'
 const DARK_BACKGROUND = '#111520'  // AUKORA canvas (pinned aukora-foundation bg-base)
+/**
+ * The loading screen's night (packages/client/web boot-page.module.css --dsh-boot-night, which mirrors the Spatial
+ * --aukora-background in ui-layout spatial-tokens.css; boot-page-look.client.spec.ts holds them equal).
+ */
+const BOOT_NIGHT = 'rgb(11, 13, 24)'
+/**
+ * While the framework-free boot page holds the mount point, the canvas under it is the same night in every scheme, so
+ * nothing white shows on overscroll or when a phone's toolbar collapses. Scoped by the boot page's presence: when the
+ * renderer replaces it, these rules stop matching and the scheme rules before them apply exactly as they did.
+ */
+const BOOT_CANVAS = `:root:has(#root>[data-dsh-boot]){color-scheme:dark}:root:has(#root>[data-dsh-boot]) body{background-color:${BOOT_NIGHT}}`
 
 /** CSS that colors the document canvas before any script executes. */
 function bootThemeStyle(preference: ThemePreference): string {
   const light = `:root{color-scheme:light}body{background-color:${LIGHT_BACKGROUND};--dsh-boot-bg:${LIGHT_BACKGROUND}}`
   const dark = `:root{color-scheme:dark}body{background-color:${DARK_BACKGROUND};--dsh-boot-bg:${DARK_BACKGROUND}}`
-  if (preference === 'light') return light
-  if (preference === 'dark') return dark
-  return `${light}@media(prefers-color-scheme:dark){${dark}}`
+  if (preference === 'light') return `${light}${BOOT_CANVAS}`
+  if (preference === 'dark') return `${dark}${BOOT_CANVAS}`
+  return `${light}@media(prefers-color-scheme:dark){${dark}}${BOOT_CANVAS}`
 }
 
 /** Build the body script that installs the palette selector and font variables. */

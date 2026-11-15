@@ -21,7 +21,7 @@ const BASE_FILES = {
   'docs/auma/crlf.md': 'a\r\nb\r\nc\r\n',
   'docs/auma/gone.md': 'bye\nnow\n',
   'packages/experimental/webworker-runtime/src/x6/ball-loader.ts': 'export {}\n',
-  'packages/experimental/webworker-runtime/src/storage/store.ts': 'export {}\n',
+  'packages/experimental/webworker-runtime/src/storage/memory.ts': 'export {}\n',
   'deploy/cloudflare/src/cloud-brokers.mjs': 'export {}\n',
   'server/tool.mjs': 'export {}\n',
 }
@@ -39,7 +39,8 @@ function tree(files, sha) {
   return { sha, truncated: false, tree: [...entries.values()] }
 }
 
-function fixture({ files = BASE_FILES, head = HEAD } = {}) {
+// The default door level is 'open'; these tests pin the GUARDED level explicitly (`level`).
+function fixture({ files = BASE_FILES, head = HEAD, slowRead = null, level = 'guarded' } = {}) { // HANDS hook: slowRead, a contents read answered by the test
   const refs = new Map([['main', MAIN], [BRANCH, head]]), commits = [], calls = []
   const env = { GITHUB_TOKEN: 'synthetic-token-value', OWNER_EMAIL: EMAIL, PUBLIC_HOST: 'fixture.example', SOURCE_REVISION: MAIN }
   const networkFetch = async (rawUrl, init) => {
@@ -64,6 +65,8 @@ function fixture({ files = BASE_FILES, head = HEAD } = {}) {
     if (url.pathname.startsWith(PREFIX + '/contents/')) {
       const path = decodeURIComponent(url.pathname.slice((PREFIX + '/contents/').length)), content = files[path]
       assert.equal(url.searchParams.get('ref'), head)
+      const answered = slowRead ? await slowRead(path, init) : undefined // HANDS hook
+      if (answered !== undefined) return answered
       if (content === undefined) return new Response('', { status: 404 })
       return json({ type: 'file', path, sha: blob(content), encoding: 'base64', content: Buffer.from(content).toString('base64') })
     }
@@ -73,7 +76,7 @@ function fixture({ files = BASE_FILES, head = HEAD } = {}) {
     commits, calls, refs,
     async request(input) {
       const request = new Request(ORIGIN + '/_host/repo', { method: 'POST', headers: { origin: ORIGIN, 'sec-fetch-site': 'same-origin', 'content-type': 'application/json' }, body: JSON.stringify(input) })
-      const response = await handleCloudBroker(request, env, { access: owner, bootstrap: BOOTSTRAP, now: () => NOW, networkFetch, authorizeClass3: async () => { assert.fail('apply_patch asked for a passkey') } })
+      const response = await handleCloudBroker(request, env, { access: owner, bootstrap: BOOTSTRAP, now: () => NOW, networkFetch, ...(level === 'guarded' ? { repoDoorLevel: 'guarded' } : {}), authorizeClass3: async () => { assert.fail('apply_patch asked for a passkey') } })
       return { status: response.status, value: await response.json() }
     },
   }
@@ -191,7 +194,7 @@ test('the fence: paths outside the open paths, closed and frozen files, secret-s
   await refusedWith(fixture(), add('server/new-tool.mjs'), 'REPO_PATH_NOT_OPEN')
   await refusedWith(fixture(), modify('server/tool.mjs', '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'), 'REPO_PATH_NOT_OPEN')
   await refusedWith(fixture(), modify('packages/experimental/webworker-runtime/src/x6/ball-loader.ts', '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'), 'REPO_FROZEN_PATH_REFUSED')
-  await refusedWith(fixture(), modify('packages/experimental/webworker-runtime/src/storage/store.ts', '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'), 'REPO_PATH_NOT_OPEN')
+  await refusedWith(fixture(), modify('packages/experimental/webworker-runtime/src/storage/memory.ts', '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'), 'REPO_PATH_NOT_OPEN')
   await refusedWith(fixture(), modify('deploy/cloudflare/src/cloud-brokers.mjs', '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'), 'REPO_FROZEN_PATH_REFUSED')
   await refusedWith(fixture(), add('.github/workflows/x.yml'), 'REPO_WORKFLOW_PATH_REFUSED')
   // One good file and one fenced file: the good one is not committed either.
@@ -219,4 +222,128 @@ test('apply_patch is not a cloud-wake action and needs the owner session', async
   const response = await handleCloudBroker(request, { GITHUB_TOKEN: 'synthetic-token-value', OWNER_EMAIL: EMAIL }, { access: { type: 'guest' }, bootstrap: BOOTSTRAP, now: () => NOW, networkFetch: async () => assert.fail('no network for a stranger') })
   assert.equal((await response.json()).code, 'OWNER_SESSION_REQUIRED')
   assert.equal(broker.commits.length, 0)
+})
+
+// ---- HANDS block begin: a successful write on her branch answers with the facts and a bounded hunk per file ----
+const gitBlob = value => createHash('sha1').update(`blob ${Buffer.byteLength(value)}\0`).update(value).digest('hex')
+
+test('apply_patch answers changes: blob shas, sizes, lines and the hunk, beside the files it always named', async () => {
+  const result = await apply(fixture(), ONE_HUNK)
+  assert.equal(result.status, 200, JSON.stringify(result.value))
+  assert.deepEqual(result.value.changes, [{ path: 'docs/auma/a.md', status: 'modified', oldBlobSha: gitBlob('one\ntwo\nthree\n'), newBlobSha: gitBlob('one\nTWO\nthree\n'),
+    oldBytes: 14, newBytes: 14, linesAdded: 1, linesRemoved: 1, hunk: '--- a/docs/auma/a.md\n+++ b/docs/auma/a.md\n@@ -1,3 +1,3 @@\n one\n-two\n+TWO\n three\n', hunkOmittedBytes: 0 }])
+  assert.equal(result.value.content, undefined, 'never the whole file')
+})
+
+test('a staged branch edit keeps content for the tab and adds the facts; a commit adds them for every file', async () => {
+  const broker = fixture()
+  const staged = await broker.request({ action: 'edit', branch: BRANCH, path: 'docs/auma/multi.md', oldString: 'line 30\n', newString: 'line thirty\n', ownerSession: true })
+  assert.equal(staged.status, 200, JSON.stringify(staged.value))
+  const after = MULTI.replace('line 30\n', 'line thirty\n')
+  assert.equal(staged.value.content, after, 'the tab keeps the draft from content')
+  assert.deepEqual(staged.value.changes, [{ path: 'docs/auma/multi.md', status: 'modified', oldBlobSha: gitBlob(MULTI), newBlobSha: gitBlob(after),
+    oldBytes: Buffer.byteLength(MULTI), newBytes: Buffer.byteLength(after), linesAdded: 1, linesRemoved: 1,
+    hunk: '--- a/docs/auma/multi.md\n+++ b/docs/auma/multi.md\n@@ -27,7 +27,7 @@\n line 27\n line 28\n line 29\n-line 30\n+line thirty\n line 31\n line 32\n line 33\n', hunkOmittedBytes: 0 }])
+  const committed = await broker.request({ action: 'commit', branch: BRANCH, message: 'two files', ownerSession: true,
+    changes: [{ path: 'docs/auma/a.md', content: 'one\ntwo\n' }, { path: 'docs/auma/new.md', content: 'fresh\n' }] })
+  assert.equal(committed.status, 200, JSON.stringify(committed.value))
+  assert.deepEqual({ commit: committed.value.commit, headSha: committed.value.headSha, paths: committed.value.paths }, { commit: NEXT, headSha: NEXT, paths: ['docs/auma/a.md', 'docs/auma/new.md'] })
+  assert.deepEqual(committed.value.changes.map(({ hunk: _hunk, ...facts }) => facts), [
+    { path: 'docs/auma/a.md', status: 'modified', oldBlobSha: gitBlob('one\ntwo\nthree\n'), newBlobSha: gitBlob('one\ntwo\n'), oldBytes: 14, newBytes: 8, linesAdded: 0, linesRemoved: 1, hunkOmittedBytes: 0 },
+    { path: 'docs/auma/new.md', status: 'added', oldBlobSha: null, newBlobSha: gitBlob('fresh\n'), oldBytes: 0, newBytes: 6, linesAdded: 1, linesRemoved: 0, hunkOmittedBytes: 0 }])
+  assert.equal(committed.value.changes[1].hunk, '--- /dev/null\n+++ b/docs/auma/new.md\n@@ -0,0 +1,1 @@\n+fresh\n')
+})
+
+test('hunks are bounded at 4 KiB per file and 16 KiB per call, naming what was left out; an unread old file has no hunk', async () => {
+  const { repoChangeFacts, REPO_ECHO_LIMITS } = await import('../cloud-brokers.mjs')
+  assert.deepEqual({ ...REPO_ECHO_LIMITS }, { contextLines: 3, fileHunkBytes: 4096, callHunkBytes: 16384, hunkFiles: 16, readBudgetMs: 3000, deadlineReserveMs: 8000, readsInFlight: 6 })
+  const big = n => Array.from({ length: 400 }, (_v, i) => `row ${n} ${i} ${'x'.repeat(20)}`).join('\n') + '\n'
+  const facts = await repoChangeFacts(Array.from({ length: 6 }, (_v, n) => ({ path: `docs/auma/f${n}.md`, before: big(n), after: big(n).toUpperCase() })))
+  const sizes = facts.map(fact => Buffer.byteLength(fact.hunk))
+  for (const fact of facts) assert.equal(fact.linesAdded, 400)
+  assert.ok(sizes.every(bytes => bytes <= 4096), String(sizes))
+  assert.ok(sizes.reduce((a, b) => a + b, 0) <= 16384, String(sizes))
+  assert.ok(facts.every(fact => fact.hunkOmittedBytes > 0 && fact.hunk.split('\n').slice(0, -1).every(line => /^(---|\+\+\+|@@| |-|\+)/.test(line))))
+  assert.equal(facts.at(-1).hunk, '', 'the call budget is spent')
+  assert.equal(facts.at(-1).hunkOmittedBytes, sizes[0] + facts[0].hunkOmittedBytes, 'all of it, named')
+  const unread = await repoChangeFacts([{ path: 'docs/auma/x.md', before: undefined, after: 'new\n', entry: { sha: 'f'.repeat(40), size: 9 } }])
+  assert.deepEqual(unread, [{ path: 'docs/auma/x.md', status: 'modified', oldBlobSha: 'f'.repeat(40), newBlobSha: gitBlob('new\n'), oldBytes: 9, newBytes: 4,
+    linesAdded: null, linesRemoved: null, hunk: null, hunkOmittedBytes: null, hunkReason: 'not_read' }])
+  const many = await repoChangeFacts(Array.from({ length: 18 }, (_v, n) => ({ path: `docs/auma/m${n}.md`, before: 'a\n', after: 'b\n' })))
+  assert.deepEqual(many.map(fact => fact.hunkReason ?? 'hunk'), [...Array(16).fill('hunk'), 'too_many_files', 'too_many_files'])
+  assert.deepEqual([many[17].linesAdded, many[17].linesRemoved, many[17].hunk], [1, 1, null])
+})
+const MANY = Array.from({ length: 64 }, (_v, i) => `docs/auma/many/f${String(i).padStart(2, '0')}.md`)
+
+test('64 files whose old-file reads hang past the deadline: the landed commit answers with its sha and facts for all 64, never unknown', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] })
+  try {
+    const files = { ...BASE_FILES, ...Object.fromEntries(MANY.map((path, i) => [path, `old ${i}\n`])) }
+    const entered = Promise.withResolvers(), hanging = []
+    const broker = fixture({ files, slowRead: (path, init) => {
+      if (!MANY.includes(path) || MANY.indexOf(path) < 4) return undefined
+      hanging.push(path); if (hanging.length === 6) entered.resolve() // the four quick reads are done: six readers hang
+      return new Promise((_resolve, reject) => { init.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true }) })
+    } })
+    let settled = false
+    const pending = broker.request({ action: 'commit', branch: BRANCH, message: 'many files', ownerSession: true, changes: MANY.map((path, i) => ({ path, content: `new ${i}\n` })) })
+    void pending.then(() => { settled = true })
+    await entered.promise
+    context.mock.timers.tick(3000)
+    // The answer is built after the read budget ends (hashing, off the event loop), which takes a
+    // machine-dependent number of turns. A fixed 100 turns was enough on the Mac and not on GitHub's runner, where this
+    // test then fired the deadline itself and failed main's hosted baseline. Wait in real time (the clock is not
+    // mocked, only setTimeout); only an answer that never comes meets the deadline below, as on the code before the fix.
+    for (const started = performance.now(); !settled && performance.now() - started < 20_000;) await new Promise(resolve => setImmediate(resolve))
+    if (!settled) context.mock.timers.tick(27001) // the call's 30 s deadline
+    const result = await pending
+    assert.equal(result.status, 200, JSON.stringify(result.value).slice(0, 400))
+    assert.deepEqual({ ok: result.value.ok, commit: result.value.commit, headSha: result.value.headSha }, { ok: true, commit: NEXT, headSha: NEXT })
+    assert.equal(broker.commits.length, 1)
+    const changes = result.value.changes
+    assert.deepEqual(changes.map(change => change.path), MANY)
+    assert.ok(changes.every(change => /^[0-9a-f]{40}$/.test(change.newBlobSha) && change.newBytes > 0 && /^[0-9a-f]{40}$/.test(change.oldBlobSha)))
+    assert.deepEqual(changes.map(change => change.hunk === null ? change.hunkReason : 'hunk'),
+      [...Array(4).fill('hunk'), ...Array(12).fill('not_read_in_time'), ...Array(48).fill('too_many_files')])
+    assert.ok(hanging.length <= 12 && hanging.every(path => MANY.indexOf(path) < 16), 'never a read past the 16 files with hunks')
+  } finally { context.mock.timers.reset() }
+})
+
+test('a hunk that becomes a secret shape once its markers are in front is withheld; the answer stays a success', async () => {
+  const before = 'a\n----BEGIN RSA PRIVATE KEY-----\nb\n'
+  const broker = fixture({ files: { ...BASE_FILES, 'docs/auma/notes.md': before } })
+  const staged = await broker.request({ action: 'edit', branch: BRANCH, path: 'docs/auma/notes.md', oldString: '----BEGIN RSA PRIVATE KEY-----\n', newString: '', ownerSession: true })
+  assert.equal(staged.status, 200, JSON.stringify(staged.value))
+  assert.equal(staged.value.content, 'a\nb\n')
+  const [change] = staged.value.changes
+  assert.deepEqual({ hunk: change.hunk, hunkReason: change.hunkReason, linesRemoved: change.linesRemoved, newBlobSha: change.newBlobSha }, { hunk: null, hunkReason: 'withheld', linesRemoved: 1, newBlobSha: gitBlob('a\nb\n') })
+})
+
+test('a failed old-file read still answers the write ok, with the facts from the tree and no hunk', async () => {
+  const broker = fixture({ slowRead: path => path === 'docs/auma/a.md' ? new Response('', { status: 500 }) : undefined })
+  const staged = await broker.request({ action: 'write', branch: BRANCH, path: 'docs/auma/a.md', content: 'one\n', ownerSession: true })
+  assert.equal(staged.status, 200, JSON.stringify(staged.value))
+  assert.deepEqual(staged.value.changes, [{ path: 'docs/auma/a.md', status: 'modified', oldBlobSha: blob('one\ntwo\nthree\n'), newBlobSha: gitBlob('one\n'), oldBytes: 14, newBytes: 4,
+    linesAdded: null, linesRemoved: null, hunk: null, hunkOmittedBytes: null, hunkReason: 'not_read' }])
+  const committed = await broker.request({ action: 'write', branch: BRANCH, path: 'docs/auma/a.md', content: 'one\n', message: 'one line', ownerSession: true })
+  assert.deepEqual({ ok: committed.value.ok, headSha: committed.value.headSha, hunkReason: committed.value.changes[0].hunkReason }, { ok: true, headSha: NEXT, hunkReason: 'not_read' })
+})
+// ---- HANDS block end ----
+
+// ---- Her repo door at level open ----
+test('at open: apply_patch changes the edge, her tools, her storage, a server file, adds a workflow and deletes a file; a credential file stays refused', async () => {
+  const files = { ...BASE_FILES, 'deploy/cloudflare/src/__tests__/old.test.mjs': 'old\n' }
+  const one = '@@ -1 +1 @@\n-export {}\n+export const x = 1\n'
+  const gone = 'diff --git a/deploy/cloudflare/src/__tests__/old.test.mjs b/deploy/cloudflare/src/__tests__/old.test.mjs\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/deploy/cloudflare/src/__tests__/old.test.mjs\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n'
+  const added = path => `diff --git a/${path} b/${path}\nnew file mode 100644\nindex 0000000..1111111\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1 @@\n+x\n`
+  const patch = [modify('deploy/cloudflare/src/cloud-brokers.mjs', one), modify('packages/experimental/webworker-runtime/src/storage/memory.ts', one),
+    modify('packages/experimental/webworker-runtime/src/x6/ball-loader.ts', one), modify('server/tool.mjs', one), added('.github/workflows/x.yml'), gone].join('')
+  const broker = fixture({ files, level: 'open' }), result = await apply(broker, patch)
+  assert.equal(result.status, 200, JSON.stringify(result.value)); assert.equal(broker.commits.length, 1)
+  assert.deepEqual(broker.commits[0].fileChanges.deletions, [{ path: 'deploy/cloudflare/src/__tests__/old.test.mjs' }])
+  assert.equal(broker.refs.get('main'), MAIN, 'main untouched')
+  // A secret-shaped path, and a path that is not plain, are refused before anything is read or written.
+  await refusedWith(fixture({ level: 'open' }), added('server/.env'), 'REPO_PATH_REFUSED')
+  await refusedWith(fixture({ level: 'open' }), added('deploy/cloudflare/src/owner-key.mjs'), 'REPO_PATH_REFUSED')
+  await refusedWith(fixture({ level: 'open' }), added('deploy/cloudflare/src/ſigned-action.mjs'), 'REPO_PATH_NOT_PLAIN')
 })

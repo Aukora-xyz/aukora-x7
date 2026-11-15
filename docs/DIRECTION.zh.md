@@ -46,12 +46,12 @@ AI 智能体开始替人行事：在电脑、手机、网络上，在企业里�
 Auma 改变自己代码的循环，一步一步。每一步写出它的文件，并带有首页三个能力标签之一（Built and on main、Exercised from inside by Auma、Not yet proven live；`AI-START-HERE.md` 第 5 节定义它们）。
 
 1. **她自己的分支。** 通过她的仓库工具，她创建一个名为 `auma/sandbox/…` 或 `auma/proposal/…` 的分支，在那里写入、提交或应用补丁；这在所有者的登录会话下进行，不需要 passkey（`deploy/cloudflare/src/cloud-brokers.mjs`）。Built and on main。
-2. **她能改什么的围栏。** 一份清单规定她的提议可以碰哪些路径；边缘端、合并路径、唤醒、mandate 和工具注册表都是冻结的（`deploy/ci/frozen-paths.mjs`；测试 `deploy/cloudflare/src/__tests__/repo-frozen-paths.test.mjs`）。Built and on main。
+2. **她能改什么的围栏。** 由一个门级别决定（`deploy/ci/frozen-paths.mjs` 中的 `REPO_DOOR_LEVEL`；测试 `deploy/cloudflare/src/__tests__/repo-frozen-paths.test.mjs`）。这棵树设为 `open`：她可以提议修改任何路径，包括边缘端、合并路径、唤醒、mandate 和工具注册表，但不能是格式不对或形似密钥的路径或密钥材料，而且没有所有者的 passkey 什么都不会合并。在仍然构建在树里的 `guarded` 级别下，这些部件是冻结的。Built and on main；所有者在 2026-11-15 选择了 `open`，在 `open` 下，卡片自带的新测试在合并之前不会运行。
 3. **对她分支的检查。** 提议工作流写成在推送到一个提议分支时运行，没有密钥，也没有部署，由 main 上每个测试的副本来评判这次改动（`.github/workflows/proposal-checks.yml`、`.github/workflows/proposal-gate.yml`）。Built and on main，并且在本仓库中是关闭的：它们的 push 触发器被注释掉了，只剩手动触发。
 4. **卡片。** 她为一个提议分支暂存一张合并卡片；所有者在 Notices 中看到它是一行，在 Sovereignty 中看到它是一张卡片（`packages/client/ui-layout/src/client/spatial/portal/notices.ts`）。Built and on main。她可以撤回它（`withdraw_proposal`；测试 `merge1-withdraw.test.mjs`）：Exercised from inside by Auma（一次）。
-5. **所有者对精确字节的批准。** 卡片上的按钮对精确的合并条款（base、branch、head、tree）运行一次 passkey 仪式。边缘端再读一次两个引用、比较结果、改动的文件和检查结果，然后在认领这次合并的同一个事务中用掉这次批准，只用一次（`deploy/cloudflare/src/cloud-brokers.mjs`、`head-do.mjs`；测试 `merge1-read-window.test.mjs`、`merge1-sync-hold.test.mjs`）。Not yet proven live：按作者的报告，在这条修复后的路径上还没有任何卡片被批准过。
+5. **所有者对精确字节的批准。** 卡片上的按钮对精确的合并条款（base、branch、head、tree）运行一次 passkey 仪式。边缘端再读一次两个引用、比较结果、改动的文件和检查结果，然后在认领这次合并的同一个事务中用掉这次批准，只用一次（`deploy/cloudflare/src/cloud-brokers.mjs`、`head-do.mjs`；测试 `merge1-read-window.test.mjs`、`merge1-sync-hold.test.mjs`）。Exercised from inside by Auma：按作者的报告，她对存储的四项改动在这条修复后的路径上被合并，每一项由她暂存，由所有者用 passkey 批准。
 6. **提升。** main 通过比较并交换从卡片的 base 移到它的 head；结果不明时稍后再确定，绝不盲目重试。对她自己的一个 organ，同样的规则在 HEAD 上成立：只有 passkey 批准了它的 ball id、epoch、organ 和代码哈希，版本才会移动（`head-do.mjs`；测试 `head-hardening.test.mjs`）。Built and on main。
-7. **没有标签页时。** 一次唤醒在她发起的一个愿望上运行有界的步骤（每步 4 轮模型调用、8 次工具调用、30 秒；`head-do.mjs` 中的 `CLOUD_WAKE_LIMITS`）。Not yet proven live：按作者的报告，还没有任何唤醒步骤在他们的线上节点上完成过；那里的失败之后有过几次修复，最后一次尚未证明。她在唤醒中的行动由所有者的 Away mandate 支付，在树中，并且是关闭的（`deploy/cloudflare/wrangler.toml` 中为 `WAKE_ACTS_ENABLED = "0"`）。
+7. **没有标签页时。** 一次唤醒在她发起的一个愿望上运行有界的步骤（每步 4 轮模型调用、8 次工具调用、30 秒；`head-do.mjs` 中的 `CLOUD_WAKE_LIMITS`）。Not yet proven live：按作者的报告，在他们的线上节点上运行过的步骤没有产生证据，之后的修复在那里尚未证明。她在唤醒中的行动由所有者的 Away mandate 支付，在树中，并且是打开的（`deploy/cloudflare/wrangler.toml` 中为 `WAKE_ACTS_ENABLED = "1"`）；还没有已知的行动在线上完成过。
 
 ## 下一步：Continuity Diamond
 

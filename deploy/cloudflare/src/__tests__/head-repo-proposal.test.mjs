@@ -1,7 +1,7 @@
 /** Repo proposal claims and receipts use only synthetic owner, storage, and transport fixtures. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { X61HeadDurableObject, BOOTSTRAP_VERSION, canonicalBootstrap, digest, manifestIdCanon } from '../head-do.mjs'
+import { X61HeadDurableObject, BOOTSTRAP_VERSION, canonicalBootstrap, digest, manifestIdCanon, repoProposalPathAllowed } from '../head-do.mjs'
 import { canonicalJson } from '../owner-grant-policy.mjs'
 import { createWorker } from '../worker.mjs'
 
@@ -178,7 +178,8 @@ test('exact bounded metadata and five-field merge request and binding refuse tam
     v => { v.mergeBody.token = 'caller-selected' }, v => { v.mergeBody.headSha = '9'.repeat(40) },
     v => { v.binding.extra = true }, v => { v.binding.audience = 'https://foreign.invalid' },
     v => { v.binding.bodySha256 = '0'.repeat(64) }, v => { v.binding.method = 'GET' }, v => { v.binding.pathname = '/_head/repo-proposal' },
-    v => { v.changedFiles[0].path = '.github/workflows/ci.yml' }, v => { v.changedFiles[0].path = 'docs/../private.txt' },
+    // `.github` itself is open at the open level (pinned per level below); its other spellings are refused at both.
+    v => { v.changedFiles[0].path = '.GitHub/workflows/ci.yml' }, v => { v.changedFiles[0].path = 'docs/../private.txt' },
     v => { v.changedFiles[0].path = 'docs\\private.txt' }, v => { v.changedFiles[0].additions = -1 },
     v => { v.changedFiles[0].deletions = 1e9 + 1 }, v => { v.changedFiles[0].status = 'renamed' },
     v => { v.changedFiles[0].t2Protected = 'true' }, v => { v.changedFiles.push({ ...v.changedFiles[0] }) },
@@ -672,7 +673,7 @@ test('promotion status rejects corrupt or additional persisted fields instead of
   for (const corrupt of [
     async fx => { const value = await fx.storage.get(STAGE); value.secret = 'synthetic private content'; await fx.storage.put(STAGE, value) },
     async fx => { const value = await fx.storage.get(STAGE); value.binding.bodySha256 = '0'.repeat(64); await fx.storage.put(STAGE, value) },
-    async fx => { const value = await fx.storage.get(STAGE); value.changedFiles[0].path = '.github/workflows/ci.yml'; await fx.storage.put(STAGE, value) },
+    async fx => { const value = await fx.storage.get(STAGE); value.changedFiles[0].path = '.GitHub/workflows/ci.yml'; await fx.storage.put(STAGE, value) }, // See below
     async fx => { await fx.storage.put(OUTCOME, { status: 'succeeded', secret: 'synthetic private content' }) },
     async fx => { await fx.storage.put(ATTEMPT, { status: 'pending', secret: 'synthetic private content' }) },
   ]) {
@@ -704,4 +705,25 @@ test('damaged prior receipts never authorize a replacement stage or another merg
     failure(await fx.begin(p), 503, 'REPO_PROPOSAL_STORAGE_INVALID')
     assert.deepEqual(fx.storage.snapshot(), before)
   }
+})
+
+test('HEAD takes a staged proposal path by the door level: .github itself at open, never at guarded; other spellings and traversal never', () => {
+  assert.equal(repoProposalPathAllowed('.github/workflows/ci.yml'), true)
+  assert.equal(repoProposalPathAllowed('.github/workflows/ci.yml', 'open'), true)
+  assert.equal(repoProposalPathAllowed('.github/workflows/ci.yml', 'guarded'), false)
+  assert.equal(repoProposalPathAllowed('docs/x.md', 'guarded'), true)
+  for (const level of ['open', 'guarded']) {
+    for (const path of ['.GitHub/workflows/ci.yml', 'a/.GITHUB/x', 'docs/../private.txt', 'docs\\private.txt', 'docs/%2e/x', 'docs//x', '', ' ']) {
+      assert.equal(repoProposalPathAllowed(path, level), false, `${level} ${JSON.stringify(path)}`)
+    }
+  }
+})
+
+test('at open a staged proposal changing a workflow is held and shown, his passkey still decides', async () => {
+  const fx = await fixture(), p = await proposal()
+  p.changedFiles[0].path = '.github/workflows/proposal-checks.yml'
+  p.changedFiles[0].t2Protected = true
+  const staged = await fx.stage(p)
+  assert.equal(staged.status, 200, JSON.stringify(staged.body)); assert.deepEqual(staged.body, { ok: true, proposal: p })
+  assert.deepEqual((await fx.status()).body.stagedRepoProposal.changedFiles, p.changedFiles)
 })

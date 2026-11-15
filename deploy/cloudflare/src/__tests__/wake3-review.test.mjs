@@ -386,3 +386,16 @@ test('a runner job over execDoor\'s in-memory hour bound is refused BEFORE the m
   assert.equal([...storage.snapshot().keys()].some(key => key.startsWith('aum456:budget:v1:')), false, 'no runner minutes reserved')
   assert.equal(requests.length, 0)
 })
+
+// ---- HANDS block begin: the wake commit passes facts: false, so it never reads an old file for them ----
+test('a wake commit of an existing file reads no old file (facts: false) and answers headSha and paths only', async () => {
+  const github = githubFake()
+  const { head, requests, fetchImpl } = world({ answer: github.answer })
+  const out = await act(head, 'act_commit', { ...COMMIT, changes: [{ path: 'docs/auma/a.md', content: 'two\n' }] }, { networkFetch: fetchImpl })
+  assert.equal(out.ok, true, JSON.stringify(out))
+  assert.equal(out.headSha, NEXT_SHA)
+  assert.deepEqual(out.paths, ['docs/auma/a.md'])
+  assert.equal(Object.hasOwn(out, 'changes'), false)
+  assert.deepEqual(requests.filter(request => request.url.pathname.includes('/contents/')).map(request => request.url.pathname), [], 'no old-file read')
+})
+// ---- HANDS block end ----

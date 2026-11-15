@@ -69,6 +69,103 @@ export function parseThreadSyncState(data: unknown, page: string | null = ownPag
   return { at, mode: mode as ThreadSyncMode, role: role as ThreadSyncRole, footer }
 }
 
+/** CARD 3a: one conversation as her cloud's index lists it (thread-sync.ts `ThreadCloudRow`), as the page reads it. */
+export interface ThreadCloudRow {
+  readonly id: string
+  readonly path: string
+  readonly bytes: number
+  /** Her cloud's own time for it (when it last appended), or null when the row has none. */
+  readonly activeAt: number | null
+  /** The index's title (her writer sends one with `x-thread-meta`); null before it has. */
+  readonly title: string | null
+  /** Bytes of the journal this browser holds for it; null when it holds none (a thread over the cap is not pulled). */
+  readonly local: number | null
+  /** Over the size a reader pulls: listed here, not read (card 3b opens it tail-first). */
+  readonly long: boolean
+}
+
+/** The list her worker posts beside its state: `{v, kind: 'rows', at, mode, rows, worker?}`. */
+export interface ThreadCloudList {
+  readonly at: number
+  readonly mode: ThreadSyncMode
+  readonly rows: readonly ThreadCloudRow[]
+}
+
+/** How many rows one message may carry; a longer list is refused whole rather than half-shown. */
+export const THREAD_CLOUD_ROWS_MAX = 400
+
+const isCount = (value: unknown): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+const textOrNull = (value: unknown): string | null => (typeof value === 'string' && value !== '' && !CONTROL.test(value) ? value : null)
+
+/**
+ * Read one rows message against the contract. A message that is not exactly the shape is dropped whole: the lane then
+ * draws what it drew before (no list from her cloud), never a partial one.
+ * @param data - the message's `data`, whatever was posted.
+ * @param page - this page's id (default: the one its client set); a page that has one shows only its own worker's rows.
+ * @returns the list, or null when the message is not a valid rows message, or is another tab's.
+ */
+export function parseThreadCloudRows(data: unknown, page: string | null = ownPageId()): ThreadCloudList | null {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return null
+  const message = data as Record<string, unknown>
+  // CARD 3a: the list rides inside her worker's state message, so a page hears one post and one answer.
+  if (message.v !== 1 || message.kind !== 'state') return null
+  if (page !== null && message.worker !== page) return null
+  if (!isCount(message.at)) return null
+  if (typeof message.mode !== 'string' || !MODES.includes(message.mode as string)) return null
+  const raw = message.rows
+  if (!Array.isArray(raw) || raw.length > THREAD_CLOUD_ROWS_MAX) return null
+  const rows: ThreadCloudRow[] = []
+  for (const item of raw) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const row = item as Record<string, unknown>
+    const { id, path, bytes, title } = row
+    if (typeof id !== 'string' || typeof path !== 'string' || !isCount(bytes)) return null
+    const activeAt = row.activeAt === null ? null : isCount(row.activeAt) ? row.activeAt : undefined
+    const local = row.local === null ? null : isCount(row.local) ? row.local : undefined
+    if (activeAt === undefined || local === undefined || typeof row.long !== 'boolean') return null
+    rows.push({ id, path, bytes, activeAt, title: textOrNull(title), local, long: row.long })
+  }
+  return { at: message.at, mode: message.mode as ThreadSyncMode, rows }
+}
+
+/** One local session, as the lane knows it. */
+export interface ThreadCloudLocal {
+  readonly id: string
+  /** Blank, subagent or her voice channel: never counted as "only in this browser". */
+  readonly hidden: boolean
+}
+
+/** Her index joined to this browser's sessions, by SESSION id. */
+export interface ThreadCloudJoin {
+  readonly bySession: ReadonlyMap<string, ThreadCloudRow>
+  /** Rows her index holds that this browser has no session for. */
+  readonly cloudOnly: readonly ThreadCloudRow[]
+  /** Rows where this browser's own copy is smaller than her cloud's count; nothing is deleted. */
+  readonly olderCopies: readonly ThreadCloudRow[]
+  /** Sessions here that her index does not list at all: the only thing that may say "only in this browser". */
+  readonly localOnly: readonly string[]
+}
+
+/**
+ * CARD 3a: join her index rows to this browser's sessions. The key is `row.id`, which is the
+ * SESSION id taken from the journal path (`/dsh/home/sessions/<project>/<id>/session.vN.jsonl`) — never the thread id
+ * (sha256 of the path, which is what her index calls a thread's `id`). Joining on the thread id is what made every
+ * reader say "only in this browser" for every conversation while listing all index rows as cloud-only.
+ * @param rows - The rows her worker published (already carrying the session id).
+ * @param local - The sessions this browser holds, with the ones the lane never shows marked hidden.
+ */
+export function joinCloudRows(rows: readonly ThreadCloudRow[], local: readonly ThreadCloudLocal[]): ThreadCloudJoin {
+  const bySession = new Map<string, ThreadCloudRow>()
+  for (const row of rows) bySession.set(row.id, row)
+  const here = new Set(local.map(entry => entry.id))
+  return {
+    bySession,
+    cloudOnly: rows.filter(row => !here.has(row.id)),
+    olderCopies: rows.filter(row => row.local !== null && row.local < row.bytes),
+    localOnly: local.filter(entry => !entry.hidden && !bySession.has(entry.id)).map(entry => entry.id),
+  }
+}
+
 /** The part of a BroadcastChannel this hook uses. */
 interface SyncChannel {
   postMessage(message: unknown): void
@@ -125,4 +222,39 @@ export function useThreadSyncMarks(): ThreadSyncState | null {
     }
   }, [])
   return state
+}
+
+/**
+ * CARD 3a: read her cloud's list of every conversation her index holds, beside the sync state, while the lane is
+ * mounted. Same channel and same ask as {@link useThreadSyncMarks}; only `kind: 'rows'` messages are taken, so the
+ * state hook's contract is untouched.
+ * @returns the newest list this page has received, or null (no list: the lane draws exactly as it did before).
+ */
+export function useThreadCloudRows(): ThreadCloudList | null {
+  const [list, setList] = useState<ThreadCloudList | null>(null)
+  useEffect(() => {
+    const page = ownPageId()
+    if (page === null) return undefined
+    const channel = openChannel()
+    if (channel === null) return undefined
+    let closed = false
+    const onMessage = (event: { readonly data: unknown }): void => {
+      if (closed) return
+      const next = parseThreadCloudRows(event.data, page)
+      if (next === null) return
+      setList(previous => (previous !== null && next.at < previous.at ? previous : next))
+    }
+    try {
+      channel.addEventListener('message', onMessage)
+      channel.postMessage({ v: 1, kind: 'ask', worker: page })
+    } catch {
+      // A channel that cannot listen or post gives no list; the lane renders as before.
+    }
+    return () => {
+      closed = true
+      try { channel.removeEventListener('message', onMessage) } catch { /* closing anyway */ }
+      try { channel.close() } catch { /* already closed */ }
+    }
+  }, [])
+  return list
 }

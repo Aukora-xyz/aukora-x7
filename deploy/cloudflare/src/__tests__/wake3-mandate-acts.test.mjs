@@ -120,7 +120,9 @@ test('RT-MANDATE-1: a malformed stored mandate fails closed MANDATE_STATE_INVALI
   assert.deepEqual(await head.store.checkOwnerMandate({ scope: 'repo.read' }), { ok: false, code: 'MANDATE_STATE_INVALID', status: 503 })
   assert.equal((await head.store.readOwnerMandate()).code, 'MANDATE_STATE_INVALID')
   const response = await head.fetch(new Request(ORIGIN + '/_head/mandate', { method: 'GET', headers: { 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': SEED,
-    'x-x6-verified-access': JSON.stringify({ type: 'owner', email: OWNER, expires: T0 / 1000 + 3600 }) } }))
+    // The route checks the session against the real clock (head-do.mjs ownerMandateRoute), so the fixture's session must not be pinned to T0:
+    // it expired for good at T0 + 1 h ( WITA) and the case then answered 403 before it reached the mandate.
+    'x-x6-verified-access': JSON.stringify({ type: 'owner', email: OWNER, expires: Math.floor(Date.now() / 1000) + 3600 }) } }))
   assert.equal(response.status, 503, 'the route passes 503 through, never 403')
   assert.equal((await response.json()).code, 'MANDATE_STATE_INVALID')
 })

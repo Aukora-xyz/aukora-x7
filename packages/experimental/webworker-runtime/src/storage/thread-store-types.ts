@@ -48,13 +48,19 @@ export interface ThreadSyncAskMessage {
   readonly worker?: string
 }
 
-/** One thread as `GET /_thread/index` lists it (the fields thread sync reads). */
+/**
+ * One thread as `GET /_thread/index` lists it (the fields thread sync reads). CARD 3a: `title` and `preview` are the
+ * row's own (`deploy/cloudflare/src/thread-log.mjs` `summary`), so a reader can name a conversation it has not pulled;
+ * a row written before her writer sent any `x-thread-meta` has neither. Display text only, never an identity.
+ */
 export interface ThreadIndexEntry {
   readonly id: string
   readonly path: string
   readonly bytes: number
   readonly activeAt?: number | null
   readonly updatedAt?: number | null
+  readonly title?: string | null
+  readonly preview?: string | null
 }
 
 /** The lease as the index shows it: who holds her turn, if anyone. */

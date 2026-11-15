@@ -60,7 +60,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 9. One source for deployment values
 
-- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 2866), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
+- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3014), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
 - **Done:** every non-test code file that the grep below lists reads the values from one configuration source.
 - **Check:** `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists only that configuration, tests and documentation, and `node --test deploy/ci/*.test.mjs` has no failure (KNOWN-RED-TESTS.md lists none there).
 

@@ -485,8 +485,8 @@ describe('closed refusals, tamper detection, fuel, voice look-only, and frozen-p
     expect(mutation.actions).toEqual({ read: ['journal', 'list'], write: ['cord', 'hive'] })
 
     const { isFrozenRepoPath, isOpenRepoPath } = await import(new URL('deploy/ci/frozen-paths.mjs', REPO).href) as {
-      isFrozenRepoPath: (path: string) => boolean
-      isOpenRepoPath: (path: string, status: string) => boolean
+      isFrozenRepoPath: (path: string, level: string) => boolean
+      isOpenRepoPath: (path: string, status: string, level: string) => boolean
     }
     const { isFrozenRepoPath: uiIsFrozen, isOpenRepoPath: uiIsOpen } = await import(
       '../../../../client/ui-layout/src/client/spatial/aumlok/frozen-paths.ts',
@@ -500,8 +500,9 @@ describe('closed refusals, tamper detection, fuel, voice look-only, and frozen-p
       'packages/experimental/webworker-runtime/src/x6/menger-run.ts',
       'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
     ]) {
-      expect(isFrozenRepoPath(path) || !isOpenRepoPath(path, 'modified'), `ci frozen: ${path}`).toBe(true)
-      expect(uiIsFrozen(path) || !uiIsOpen(path, 'modified'), `ui frozen: ${path}`).toBe(true)
+      // The guarded door level pins these closed (since 2026-11-15 the default level is 'open').
+      expect(isFrozenRepoPath(path, 'guarded') || !isOpenRepoPath(path, 'modified', 'guarded'), `ci frozen: ${path}`).toBe(true)
+      expect(uiIsFrozen(path, 'guarded') || !uiIsOpen(path, 'modified', 'guarded'), `ui frozen: ${path}`).toBe(true)
     }
   })
 })

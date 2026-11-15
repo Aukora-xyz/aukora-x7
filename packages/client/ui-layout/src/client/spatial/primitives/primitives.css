@@ -412,6 +412,33 @@
 }
 .ak-action svg { width: 12px; height: 12px; }
 .ak-action__note { color: var(--ak-muted); font-size: 11px; }
+/*
+ * THE APPROVAL'S ONE PRIMARY ACTION (an owner approval card's "Approve with Touch ID"): the action pill filled in its tone, as
+ * the chat lane's fingerprint card draws its one gold button (FingerprintWaiting.module.css `.primary`), across its block, at
+ * least 44px tall, its label on one line. It approves nothing itself: the card's passkey ceremony does. Disabled, it dims;
+ * while an approval is in flight (`aria-busy`), it waits with it.
+ */
+.ak-action--primary {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 16px;
+  border-color: var(--ak-tone, var(--ak-gold));
+  background: var(--ak-tone, var(--ak-gold));
+  color: rgb(20, 17, 10);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.ak-action--primary:hover:not(:disabled) {
+  border-color: var(--ak-tone, var(--ak-gold));
+  background: color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 88%, white);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--ak-tone, var(--ak-gold)) 30%, transparent);
+}
+.ak-action--primary:disabled { opacity: 0.5; box-shadow: none; cursor: default; }
+.ak-action--primary[aria-busy='true'] { opacity: 0.6; cursor: progress; }
 
 .ak-footnote {
   display: flex;

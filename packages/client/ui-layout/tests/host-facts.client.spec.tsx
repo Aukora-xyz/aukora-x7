@@ -2209,7 +2209,7 @@ describe('the Work view offers no passkey approval the host would refuse', () =>
 
 /** A staged epoch 163: seed-pearl's bytes move to ball:fa5df625…; everything else is the published head. */
 const STAGED_PEARL = 'fa5df62571b34d59aadc4e32ac75d2cbff51b58cc5799c8abfecd2ca164a9292'
-const HEAD_62 = '79fd695ce12f6fb6614d7b4c5fb10dffe52e6ed0fdb1ab4c30f7a5c9724cd5f2'
+const HEAD_62 = '7c01cb98514e4ae7a6aaa0dc29653282d94bc4717b85a18968b47aa4310120a8'
 /** A manifest entry in HEAD's own shape (`validateManifest`). */
 const entryOf = (id: string, specifier: string, extra: Record<string, unknown> = {}) =>
   ({ id, specifier, disabled: false, config: {}, previousSpecifiers: [] as string[], ...extra })

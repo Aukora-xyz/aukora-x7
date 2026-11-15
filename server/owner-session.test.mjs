@@ -51,7 +51,9 @@ test('Round26 only explicit HTML document GETs receive sign-in', async () => {
 
 test('Round26 owner entry retains host, origin, and configuration refusals', async () => {
   for (const [incoming, config, status, code] of [
-    [new Request('http://owner.example/?ui=1', { headers: { accept: 'text/html' } }), env, 403, 'HOST_REFUSED'],
+    // Moved pin (2026-11-15): a GET over plain http on her host was HOST_REFUSED 403 and is now a 308 to https (pinned
+    // in deploy/cloudflare/src/__tests__/worker.spec.ts); a POST over http on her host stays refused.
+    [new Request('http://owner.example/?ui=1', { method: 'POST', headers: { accept: 'text/html' } }), env, 403, 'HOST_REFUSED'],
     [request('/?ui=1'), { ...env, PUBLIC_HOST: 'other.example' }, 403, 'HOST_REFUSED'],
     [request('/?ui=1', { origin: 'https://evil.example' }), env, 403, 'ORIGIN_REFUSED'],
     [request('/?ui=1'), { PUBLIC_HOST: env.PUBLIC_HOST }, 503, 'OWNER_ACCESS_NOT_CONFIGURED'],

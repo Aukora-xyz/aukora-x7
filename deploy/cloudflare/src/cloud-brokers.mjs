@@ -5,7 +5,7 @@ import { reserveRunnerMinutesAtHead } from './runner-budget-broker.mjs' //
 import { EDGE_DIAGNOSTIC_LIMITS, projectDiagnostics } from './edge-diagnostics.mjs'
 import { validStateDiffBase, validMirrorIdentity, projectHeadStateDiff } from './state-diff.mjs'
 import { isDeployInertRepoPath } from '../../ci/deploy-paths.mjs'
-import { PROPOSAL_PATH_NEXTS, caseTwinPaths, isPlainRepoPath, proposalPathRefusal } from '../../ci/frozen-paths.mjs'
+import { PROPOSAL_PATH_NEXTS, REPO_DOOR_LEVEL, caseTwinPaths, doorLevel, isPlainRepoPath, isSecretShapedRepoPath, proposalPathRefusal } from '../../ci/frozen-paths.mjs'
 import { headProblem, mirrorCopyRefusals, referencedModules, serializeHead, sha256Hex } from '../../ci/mirror-copy.mjs'
 import { classifyCloudflareRequest, cloudflareAnswerCarriesCredential, cloudflareProtectionShape, cloudflareStagedBytes, liveDurableObjectIds, liveWorkerFacts, normalHost, cloudflareAuth, cloudflareAuthKind, cloudflareDoorLevel, cloudflareDoorStatus, credentialShaped, CLOUDFLARE_DOOR_LIMITS, CLOUDFLARE_LIVE_HOME, CLOUDFLARE_NEXT, CLOUDFLARE_PROTECTED_REASONS } from './cloudflare-door.mjs'
 import { isReaderWindow, readerWindowRefusalResponse } from './reader-window.mjs'
@@ -42,8 +42,14 @@ const sourceRoots = new Set(['.github', 'deploy', 'server', 'packages', 'apps', 
 const sourceFiles = new Set(['package.json', 'AGENTS.md', 'NORTH-STAR.md', 'README.md', 'README.zh.md', 'tsconfig.json'])
 const stagedOwnerWrites = new Map()
 const liveMirrorPath = path => path.startsWith('mirror/home/auma/') || documentPath(path)
-const canonicalPath = path => typeof path === 'string' && path.length > 0 && path.length <= 1024
-  && !/[\\%?#\u0000-\u0020\u007f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && !privatePart(part))
+/** Her repo door's level, REPO_DOOR_LEVEL in deploy/ci/frozen-paths.mjs, the one line
+ * the edge, CI and the card read. A caller may only make it stricter (`context.repoDoorLevel: 'guarded'`), never wider. */
+export const repoDoorLevel = context => context?.repoDoorLevel === 'guarded' ? 'guarded' : doorLevel(REPO_DOOR_LEVEL)
+/** At level 'open' a name is refused only for a credential's shape (frozen-paths.mjs isSecretShapedRepoPath) or as an
+ * installed-package folder; at 'guarded' the private-name rule above, as before. */
+const refusedPart = (part, level) => level === 'open' ? isSecretShapedRepoPath(part) || part.toLowerCase() === 'node_modules' : privatePart(part)
+const canonicalPath = (path, level = 'guarded') => typeof path === 'string' && path.length > 0 && path.length <= 1024
+  && !/[\\%?#\u0000-\u0020\u007f]/.test(path) && path.split('/').every(part => part && part !== '.' && part !== '..' && !refusedPart(part, level))
 
 /** Fixed byte/time ceilings apply to complete streams, not only declared Content-Length.
  * A broker call's time went from 10 s to 30 s. `merge_proposal` keeps 10 s
@@ -106,13 +112,14 @@ function escapedTail(text, budget) {
   return text.slice(start)
 }
 
-function repoPathAllowed(path) {
-  return canonicalPath(path) && (sourceFile(path) || path.includes('/') && sourceRoots.has(path.split('/')[0]) || liveMirrorPath(path))
+function repoPathAllowed(path, level = 'guarded') {
+  // At 'open' the whole repository, not only the source roots (her live memory keeps the mirror rule below).
+  return canonicalPath(path, level) && (level === 'open' || sourceFile(path) || path.includes('/') && sourceRoots.has(path.split('/')[0]) || liveMirrorPath(path))
 }
 
 // Live memory is readable only through the original owner MIRROR subset. It is
 // never a remote source fallback or publication input, even with an innocuous name.
-const remotePathAllowed = path => canonicalPath(path) && (sourceFile(path) || path.includes('/') && sourceRoots.has(path.split('/')[0]))
+const remotePathAllowed = (path, level = 'guarded') => canonicalPath(path, level) && (level === 'open' || sourceFile(path) || path.includes('/') && sourceRoots.has(path.split('/')[0]))
   && (!path.startsWith('mirror/home/') || sourceOrgan(path))
   && !path.startsWith('mirror/workspace/')
   && (!path.startsWith('mirror/') || !path.split('/').some(part => /^(?:memory|snapshots?|conflicts?|receipts?|journals?|sessions?|logs?)$/i.test(part)))
@@ -127,8 +134,8 @@ export function cloudRepoMirrorPathAllowed(path) {
   return path.startsWith('/dsh/workspace/') && documentPath(path.slice('/dsh/workspace/'.length)) && canonicalPath(path.slice('/dsh/workspace/'.length))
 }
 
-function requirePath(path, publication = false) {
-  if (!repoPathAllowed(path) || (publication && !remotePathAllowed(path))) fail('REPO_PATH_REFUSED', 403)
+function requirePath(path, publication = false, level = 'guarded') {
+  if (!repoPathAllowed(path, level) || (publication && !remotePathAllowed(path, level))) fail('REPO_PATH_REFUSED', 403)
   return path
 }
 
@@ -202,15 +209,24 @@ export function isT2ProtectedRepoPath(path) {
 /** The outward-write secret screen safeText applies, as a predicate: true when the text carries a secret shape or a
  * configured secret's value. the wake: her wake notes are screened by this same function (head-do.mjs appendWakeNote). */
 export function outwardTextCarriesSecret(text, env) {
-  if (/-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:cfk|cfut|cfat)_[A-Za-z0-9_-]{16,})\b|["'](?:seedHex|privateKey(?:Hex|Pkcs8|Jwk)?|secretKey(?:Hex)?|access_token|refresh_token|client_secret)["']\s*:/i.test(text)) return true
-  // Error and content echoes from an upstream must not reveal any configured secret.
+  return secretShapeIn(text) || configuredSecretIn(text, env)
+}
+
+/** A secret's shape: key material, a provider credential's form, or a JSON field named for a secret. */
+function secretShapeIn(text) {
+  return /-----BEGIN (?:[A-Z ]*PRIVATE KEY|OPENSSH PRIVATE KEY)-----|\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|(?:cfk|cfut|cfat)_[A-Za-z0-9_-]{16,})\b|["'](?:seedHex|privateKey(?:Hex|Pkcs8|Jwk)?|secretKey(?:Hex)?|access_token|refresh_token|client_secret)["']\s*:/i.test(text)
+}
+
+/** Error and content echoes from an upstream must not reveal any configured secret's VALUE. */
+function configuredSecretIn(text, env) {
   for (const [key, value] of Object.entries(env)) if (/(?:TOKEN|SECRET|PASSWORD|API_KEY)$|(?:^|_)(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|SIGNING_KEY|CREDENTIAL)(?:_|$)/.test(key) && typeof value === 'string' && value && text.includes(value)) return true
   return false
 }
 
 function safeText(text, env, maximum = CLOUD_BROKER_LIMITS.fileBytes) {
   if (typeof text !== 'string' || size(text) > maximum || /[\u0000]/.test(text)) fail('BROKER_CONTENT_INVALID', 502)
-  if (outwardTextCarriesSecret(text, env)) fail('BROKER_PRIVATE_CONTENT_REFUSED', 403)
+  // The refusal says whether a configured secret's VALUE was in the text (search withholds a shape-only file).
+  if (outwardTextCarriesSecret(text, env)) fail('BROKER_PRIVATE_CONTENT_REFUSED', 403, { configuredValue: configuredSecretIn(text, env) })
   return text
 }
 
@@ -419,16 +435,18 @@ function decodeFileBytes(b64, env, allowNonText = false) {
   return { bytes, content: safeText(content, env, CLOUD_REPO_READ_LIMITS.fileBytes) }
 }
 
-async function byteInspection(input, env, context) {
-  if (Object.keys(input).some(key => !['action', 'path', 'offset', 'length'].includes(key))) fail('BROKER_QUERY_INVALID')
+async function byteInspection(input, env, context, branch = 'main' /* the branch reads: main or her own branch (repoRef) */) {
+  if (Object.keys(input).some(key => !['action', 'path', 'offset', 'length', 'branch'].includes(key))) fail('BROKER_QUERY_INVALID')
   if (context.bootstrap?.ready !== true) fail('BOOTSTRAP_REQUIRED', 503)
-  const path = requirePath(input.path, true), offset = input.offset === undefined ? 0 : input.offset, length = input.length === undefined ? CLOUD_REPO_BYTE_LIMITS.defaultSliceBytes : input.length
+  const path = requirePath(input.path, true, repoDoorLevel(context)), offset = input.offset === undefined ? 0 : input.offset, length = input.length === undefined ? CLOUD_REPO_BYTE_LIMITS.defaultSliceBytes : input.length
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > CLOUD_REPO_READ_LIMITS.fileBytes
     || !Number.isSafeInteger(length) || length < 1 || length > CLOUD_REPO_BYTE_LIMITS.sliceBytes) fail('REPO_BYTE_RANGE_INVALID')
   safeText(path, env, 1024)
-  const pinned = await pinnedTree('main', env, context.networkFetch, context.signal)
+  const pinned = await pinnedTree(branch, env, context.networkFetch, context.signal)
   const entry = regularFile(pinned.tree, path)
-  const isPinnedWasm = /^apps\/web\/public\/cells\/[a-z0-9-]+\.wasm$/.test(path)
+  // Main's pinned cell wasm was judged at merge (CELL_PINS); on her branch nothing has judged it, so it takes the
+  // whole-file text screen below, the screen `read` on her branch applies (binary is refused there too).
+  const isPinnedWasm = branch === 'main' && /^apps\/web\/public\/cells\/[a-z0-9-]+\.wasm$/.test(path)
   const maxFileBytes = isPinnedWasm ? 1024 * 1024 : CLOUD_REPO_READ_LIMITS.fileBytes
   const maxEncodedBytes = isPinnedWasm ? Math.ceil((1024 * 1024) / 3) * 4 + 64 * 1024 : CLOUD_REPO_READ_LIMITS.encodedResponseBytes
   const value = await github(env, context.networkFetch, '/contents/' + encodePath(path) + '?ref=' + pinned.commitSha, context.signal, maxEncodedBytes)
@@ -455,7 +473,7 @@ async function byteInspection(input, env, context) {
   if (hex(new Uint8Array(await crypto.subtle.digest('SHA-1', gitBlob))) !== entry.sha) fail('REPO_BLOB_HASH_MISMATCH', 502)
   if (offset > bytes.length) fail('REPO_BYTE_RANGE_INVALID')
   const slice = bytes.slice(offset, offset + length)
-  return { ok: true, action: 'bytes', source: 'github-main', path, commitSha: pinned.commitSha, blobSha: entry.sha,
+  return { ok: true, action: 'bytes', source: branch === 'main' ? 'github-main' : 'github-branch', ...(branch === 'main' ? {} : { branch }), path, commitSha: pinned.commitSha, blobSha: entry.sha,
     totalBytes: bytes.length, offset, length: slice.length, requestedLength: length, truncated: offset + slice.length < bytes.length,
     bytes: Array.from(slice), hex: hex(slice), sha256: hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))), hashScope: 'whole-file-original-bytes', limit: CLOUD_REPO_BYTE_LIMITS.sliceBytes }
 }
@@ -500,15 +518,15 @@ async function stateDiff(input, env, context) {
     ...(!ok ? { code: 'STATE_DIFF_INCOMPLETE' } : {}), head, mirror }
 }
 
-async function githubFile(path, env, networkFetch, signal, revision = 'main') {
-  if (!remotePathAllowed(path)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403)
+async function githubFile(path, env, networkFetch, signal, revision = 'main', level = 'guarded') {
+  if (!remotePathAllowed(path, level)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403)
   safeText(path, env, 1024)
   const pinned = await pinnedTree(revision, env, networkFetch, signal)
-  return await githubFileAt(path, pinned, env, networkFetch, signal)
+  return await githubFileAt(path, pinned, env, networkFetch, signal, false, level)
 }
 
-async function githubFileAt(path, pinned, env, networkFetch, signal, allowNonText = false) {
-  if (!remotePathAllowed(path)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403)
+async function githubFileAt(path, pinned, env, networkFetch, signal, allowNonText = false, level = 'guarded') {
+  if (!remotePathAllowed(path, level)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403)
   safeText(path, env, 1024)
   const entry = regularFile(pinned.tree, path)
   const value = await github(env, networkFetch, '/contents/' + encodePath(path) + '?ref=' + pinned.commitSha, signal, CLOUD_REPO_READ_LIMITS.encodedResponseBytes)
@@ -561,12 +579,14 @@ function regularFile(tree, path, allowMissing = false) {
   return entry
 }
 
-async function repositoryTree(prefix, env, networkFetch, signal, { entryLimit = CLOUD_REPO_TREE_LIMITS.returnedEntries, byteLimit = CLOUD_REPO_TREE_LIMITS.treeProjectedBytes } = {}) {
-  if (prefix !== undefined && (!canonicalPath(prefix) || !(sourceRoots.has(prefix) || remotePathAllowed(prefix)))) fail('REPO_PATH_REFUSED', 403)
-  const tree = await readTree('main', env, networkFetch, signal), entries = []
+async function repositoryTree(prefix, env, networkFetch, signal, { entryLimit = CLOUD_REPO_TREE_LIMITS.returnedEntries, byteLimit = CLOUD_REPO_TREE_LIMITS.treeProjectedBytes, ref = 'main', level = 'guarded' } = {}) {
+  if (prefix !== undefined && (!canonicalPath(prefix, level) || !(sourceRoots.has(prefix) || remotePathAllowed(prefix, level)))) fail('REPO_PATH_REFUSED', 403)
+  // Her own branch is read at its head commit (pinnedTree), never main's tree; main keeps its one tree read.
+  const pinned = ref === 'main' ? null : await pinnedTree(ref, env, networkFetch, signal)
+  const tree = pinned ? pinned.tree : await readTree('main', env, networkFetch, signal), entries = []
   let matched = 0, projectedBytes = 0
   for (const entry of tree.entries.values()) {
-    if (!(remotePathAllowed(entry.path) || sourceRoots.has(entry.path)) || (prefix !== undefined && entry.path !== prefix && !entry.path.startsWith(prefix + '/'))
+    if (!(remotePathAllowed(entry.path, level) || sourceRoots.has(entry.path)) || (prefix !== undefined && entry.path !== prefix && !entry.path.startsWith(prefix + '/'))
       || !['040000', '100644', '100755'].includes(entry.mode)) continue
     const parts = entry.path.split('/')
     if (parts.slice(0, -1).some((_part, index) => tree.entries.get(parts.slice(0, index + 1).join('/'))?.mode !== '040000')) continue
@@ -575,7 +595,7 @@ async function repositoryTree(prefix, env, networkFetch, signal, { entryLimit = 
     const bytes = size(JSON.stringify(projected)) + 1
     if (entries.length < entryLimit && projectedBytes + bytes <= byteLimit) { entries.push(projected); projectedBytes += bytes }
   }
-  return { branch: BRANCH, treeSha: tree.sha, entries, filtered: true, truncated: tree.truncated || matched > entries.length, upstreamTruncated: tree.truncated, limit: entryLimit, byteLimit }
+  return { branch: pinned ? ref : BRANCH, ...(pinned ? { commitSha: pinned.commitSha } : {}), treeSha: tree.sha, entries, filtered: true, truncated: tree.truncated || matched > entries.length, upstreamTruncated: tree.truncated, limit: entryLimit, byteLimit }
 }
 
 function projectCommit(value, env) {
@@ -601,15 +621,15 @@ async function mainComparison(base, main, env, networkFetch, signal) {
   return value
 }
 
-async function comparison(base, path, env, networkFetch, signal, head = 'main') {
+async function comparison(base, path, env, networkFetch, signal, head = 'main', level = 'guarded') {
   if (!SHA.test(base)) fail('REPO_BASE_SHA_REQUIRED')
   if (head !== 'main') fail('GITHUB_ENDPOINT_REFUSED', 403)
-  if (path !== undefined) { requirePath(path); if (!remotePathAllowed(path)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403) }
+  if (path !== undefined) { requirePath(path, false, level); if (!remotePathAllowed(path, level)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403) }
   const after = await pinnedTree('main', env, networkFetch, signal)
   const value = await mainComparison(base, after.commitSha, env, networkFetch, signal)
   const before = base === after.commitSha ? after : await pinnedTree(base, env, networkFetch, signal)
   if (!record(value) || !Array.isArray(value.files) || value.files.length > 300) fail('BROKER_RESPONSE_INVALID', 502)
-  const files = value.files.filter(file => record(file) && remotePathAllowed(file.filename) && (file.previous_filename === undefined || remotePathAllowed(file.previous_filename)) && (path === undefined || path === file.filename)).map(file => {
+  const files = value.files.filter(file => record(file) && remotePathAllowed(file.filename, level) && (file.previous_filename === undefined || remotePathAllowed(file.previous_filename, level)) && (path === undefined || path === file.filename)).map(file => {
     if (typeof file.status !== 'string' || !['added', 'removed', 'modified', 'renamed', 'copied', 'changed', 'unchanged'].includes(file.status)) fail('BROKER_RESPONSE_INVALID', 502)
     if (['renamed', 'copied'].includes(file.status) && typeof file.previous_filename !== 'string') fail('BROKER_RESPONSE_INVALID', 502)
     if (file.status !== 'added') regularFile(before.tree, file.previous_filename ?? file.filename)
@@ -716,32 +736,33 @@ function requireOwner(env, context) {
     || !Number.isSafeInteger(now) || now < 1 || !Number.isFinite(access.expires) || access.expires * 1000 <= now) fail('OWNER_SESSION_REQUIRED', 403)
 }
 
-/** A path on her branches, as judged before the fence: .github/ refused, the path canonical and publishable. */
-function branchPathName(path, env) {
-  if (typeof path === 'string' && (path === '.github' || path.startsWith('.github/'))) fail('REPO_WORKFLOW_PATH_REFUSED', 403)
-  return safeText(requirePath(path, true), env, 1024)
+/** A path on her branches, as judged before the fence: .github/ refused (at the guarded level; at 'open' it is hers too),
+ * the path canonical and publishable. */
+function branchPathName(path, env, level = 'guarded') {
+  if (level !== 'open' && typeof path === 'string' && (path === '.github' || path.startsWith('.github/'))) fail('REPO_WORKFLOW_PATH_REFUSED', 403)
+  return safeText(requirePath(path, true, level), env, 1024)
 }
 
 /** Refuse a proposal path by the one judgement of deploy/ci/frozen-paths.mjs (plain, frozen, test main has, open). */
-function refuseProposalPath(path, status, twin = false) {
-  const refusal = proposalPathRefusal(path, status, { twin })
+function refuseProposalPath(path, status, twin = false, level = 'guarded') {
+  const refusal = proposalPathRefusal(path, status, { twin, level })
   if (refusal) fail(refusal.code, 403, { protectedPath: path, next: refusal.next })
 }
 
 /** Her branches carry only plain, open, unfrozen paths (deploy/ci/frozen-paths.mjs): refused at write, before anything
  * reaches GitHub. A write cannot tell an addition from a change relative to main, so it is judged as an addition (a new
  * test file may be written); stage, merge and CI judge the real status with both trees in hand. */
-function branchPath(path, env) {
-  if (typeof path === 'string' && path.length > 0 && !isPlainRepoPath(path)) refuseProposalPath(path, 'added')
-  const canonical = branchPathName(path, env)
-  refuseProposalPath(canonical, 'added')
+function branchPath(path, env, level = 'guarded') {
+  if (typeof path === 'string' && path.length > 0 && !isPlainRepoPath(path)) refuseProposalPath(path, 'added', false, level)
+  const canonical = branchPathName(path, env, level)
+  refuseProposalPath(canonical, 'added', false, level)
   return canonical
 }
 
-function readablePath(path) {
+function readablePath(path, level = 'guarded') {
   if (typeof path === 'string' && path.startsWith('/dsh/home/auma/')) path = 'mirror/home/auma/' + path.slice('/dsh/home/auma/'.length)
   else if (typeof path === 'string' && path.startsWith('/dsh/workspace/')) path = path.slice('/dsh/workspace/'.length)
-  return requirePath(path)
+  return requirePath(path, false, level)
 }
 
 async function sourceText(path, source, ref, env, context, pinned, allowNonText = false) {
@@ -757,7 +778,7 @@ async function sourceText(path, source, ref, env, context, pinned, allowNonText 
     if (value.kind === 'dir') fail('REPO_FILE_REQUIRED', 409)
     if (source === 'mirror') fail('BROKER_NOT_FOUND', 404)
   }
-  return { ...await githubFileAt(path, pinned ?? await pinnedTree(ref, env, context.networkFetch, context.signal), env, context.networkFetch, context.signal, allowNonText), source: 'github' }
+  return { ...await githubFileAt(path, pinned ?? await pinnedTree(ref, env, context.networkFetch, context.signal), env, context.networkFetch, context.signal, allowNonText, repoDoorLevel(context)), source: 'github' }
 }
 
 // A common-prefix/suffix hunk is deterministic and valid, though not necessarily
@@ -781,9 +802,108 @@ function lineDiff(left, right, leftPath, rightPath, contextLines = 3) {
   return { diff, additions, deletions }
 }
 
+// ---- HANDS block begin: what a successful write on her branch says about each changed file ----
+/** The hunk view of one answer: 3 context lines, at most 4 KiB per file, 16 KiB and 16 files with a hunk per call. The
+ * old-file reads for it have their own budget inside the call's deadline: they start only while 8 s of the deadline
+ * remain and for at most 3 s in all, at most 6 at once; what is not read by then is answered without a hunk. */
+export const REPO_ECHO_LIMITS = Object.freeze({ contextLines: 3, fileHunkBytes: 4 * 1024, callHunkBytes: 16 * 1024, hunkFiles: 16,
+  readBudgetMs: 3000, deadlineReserveMs: 8000, readsInFlight: 6 })
+/** Why a file's `hunk` is null (closed): its old file was not read before the budget ended, its read failed, the call
+ * already has 16 files with a hunk, or the hunk would carry a secret shape once its diff markers are in front. */
+export const REPO_ECHO_HUNK_REASONS = Object.freeze(['not_read_in_time', 'not_read', 'too_many_files', 'withheld'])
+
+/** The first `room` bytes of `text`, cut back to whole lines (nothing when not one whole line fits). */
+function boundedHunk(text, room) {
+  const bytes = encoder.encode(text)
+  if (bytes.length <= room) return text
+  let cut = Math.max(0, room)
+  while (cut > 0 && (bytes[cut] & 0xc0) === 0x80) cut--
+  const head = new TextDecoder().decode(bytes.subarray(0, cut)), line = head.lastIndexOf('\n')
+  return line >= 0 ? head.slice(0, line + 1) : ''
+}
+
+/** Facts for each changed file, compared with the file at the branch head the write started from: path, old and new
+ * git blob sha, old and new size, lines added and removed, and the unified hunk (bounded; `hunkOmittedBytes` says how
+ * much was left out). `before` null = the file is new, `after` null = deleted, `before` undefined = the old file was not
+ * read (`reason` says why; its blob sha and size come from the tree). A null hunk carries `hunkReason`. Each hunk passes
+ * the screen a `read` passes, with its markers in front. Never refuses: it only describes a write already judged. */
+export async function repoChangeFacts(entries, env = {}) {
+  let room = REPO_ECHO_LIMITS.callHunkBytes, slots = REPO_ECHO_LIMITS.hunkFiles
+  const facts = []
+  for (const { path, before, after, entry, reason } of entries) {
+    const status = before === null ? 'added' : after === null ? 'deleted' : 'modified'
+    const newBytes = after === null ? 0 : size(after)
+    const fact = { path, status, oldBlobSha: before === null ? null : before === undefined ? entry?.sha ?? null : await gitBlobSha(encoder.encode(before)),
+      newBlobSha: after === null ? null : await gitBlobSha(encoder.encode(after)),
+      oldBytes: before === null ? 0 : before === undefined ? entry?.size ?? null : size(before), newBytes }
+    if (before === undefined) {
+      facts.push({ ...fact, linesAdded: null, linesRemoved: null, hunk: null, hunkOmittedBytes: null, hunkReason: REPO_ECHO_HUNK_REASONS.includes(reason) ? reason : 'not_read' })
+      continue
+    }
+    const { diff, additions, deletions } = lineDiff(before ?? '', after ?? '', before === null ? '/dev/null' : 'a/' + path, after === null ? '/dev/null' : 'b/' + path, REPO_ECHO_LIMITS.contextLines)
+    const lines = { linesAdded: additions, linesRemoved: deletions }
+    if (slots <= 0) { facts.push({ ...fact, ...lines, hunk: null, hunkOmittedBytes: size(diff), hunkReason: 'too_many_files' }); continue }
+    slots--
+    const hunk = boundedHunk(diff, Math.min(REPO_ECHO_LIMITS.fileHunkBytes, room))
+    if (outwardTextCarriesSecret(hunk, env) || outwardTextCarriesSecret(JSON.stringify(hunk), env)) {
+      facts.push({ ...fact, ...lines, hunk: null, hunkOmittedBytes: size(diff), hunkReason: 'withheld' })
+      continue
+    }
+    room -= size(hunk)
+    facts.push({ ...fact, ...lines, hunk, hunkOmittedBytes: size(diff) - size(hunk) })
+  }
+  return facts
+}
+
+/** The text of each file at the pinned branch head, for the facts only, inside the read budget (REPO_ECHO_LIMITS): a
+ * file that is not there is null; one not read is undefined with its reason. Never throws and never outlives its budget:
+ * a read still running when the budget ends is aborted and left unread. */
+async function priorTexts(paths, pinned, env, context) {
+  const out = paths.map(path => {
+    const entry = pinned.tree.entries.get(path) ?? null
+    return { path, entry, before: entry === null ? null : undefined, reason: undefined }
+  })
+  const queue = []
+  for (const [index, item] of out.entries()) {
+    if (item.before !== null && index < REPO_ECHO_LIMITS.hunkFiles) queue.push(item)
+    else if (item.before !== null) item.reason = 'too_many_files'
+  }
+  const left = Number.isFinite(context.deadlineAt) ? context.deadlineAt - Date.now() - REPO_ECHO_LIMITS.deadlineReserveMs : Infinity
+  const budget = Math.min(REPO_ECHO_LIMITS.readBudgetMs, left)
+  for (const item of queue) item.reason = 'not_read_in_time'
+  if (!queue.length || !(budget > 0) || context.signal?.aborted) return out
+  const controller = new AbortController(), stop = () => controller.abort()
+  context.signal?.addEventListener('abort', stop, { once: true })
+  let timer, next = 0
+  const ended = new Promise(resolve => { timer = setTimeout(() => { controller.abort(); resolve() }, budget) })
+  const reader = async () => {
+    while (!controller.signal.aborted && next < queue.length) {
+      const item = queue[next++]
+      try {
+        const text = (await githubFileAt(item.path, pinned, env, context.networkFetch, controller.signal, false, repoDoorLevel(context))).content
+        if (!controller.signal.aborted) Object.assign(item, { before: text, reason: undefined })
+      } catch {
+        if (!controller.signal.aborted) item.reason = 'not_read'
+      }
+    }
+  }
+  try {
+    await Promise.race([Promise.all(Array.from({ length: Math.min(REPO_ECHO_LIMITS.readsInFlight, queue.length) }, reader)), ended])
+  } catch { /* a reader never rejects; nothing here may cost the answer */ } finally {
+    clearTimeout(timer); controller.abort(); context.signal?.removeEventListener('abort', stop)
+  }
+  return out
+}
+
+/** The `changes` of an answer, or none: this runs after the write has landed (or been judged), so it never throws. */
+async function safeChangeFacts(build) {
+  try { return { changes: await build() } } catch { return {} }
+}
+// ---- HANDS block end ----
+
 async function compareFiles(input, env, context) {
   exactFields(input, ['action', 'leftPath', 'rightPath', 'leftSource', 'rightSource', 'ref', 'contextLines'])
-  const leftPath = readablePath(input.leftPath), rightPath = readablePath(input.rightPath)
+  const leftPath = readablePath(input.leftPath, repoDoorLevel(context)), rightPath = readablePath(input.rightPath, repoDoorLevel(context))
   const ref = SHA.test(input.ref) ? input.ref : repoRef(input.ref)
   const contextLines = input.contextLines ?? 3
   if (!Number.isInteger(contextLines) || contextLines < 0 || contextLines > 20) fail('BROKER_QUERY_INVALID')
@@ -841,22 +961,32 @@ async function mirrorInventory(env, context) {
 async function searchRepository(input, env, context) {
   exactFields(input, ['action', 'query', 'regex', 'caseSensitive', 'prefix', 'branch', 'maxMatches'])
   const ref = repoRef(input.branch), matchesLine = searchMatcher(input, env), maxMatches = input.maxMatches ?? 200
+  const level = repoDoorLevel(context)
   if (!Number.isInteger(maxMatches) || maxMatches < 1 || maxMatches > 200) fail('REPO_SEARCH_QUERY_INVALID')
-  if (input.prefix !== undefined && (!canonicalPath(input.prefix) || !(sourceRoots.has(input.prefix) || repoPathAllowed(input.prefix)))) fail('REPO_PATH_REFUSED', 403)
+  if (input.prefix !== undefined && (!canonicalPath(input.prefix, level) || !(sourceRoots.has(input.prefix) || repoPathAllowed(input.prefix, level)))) fail('REPO_PATH_REFUSED', 403)
   return await withDeadline(context.signal, async signal => {
     const local = { ...context, signal }, pinned = await pinnedTree(ref, env, context.networkFetch, signal)
     const inventory = ref === 'main' ? await mirrorInventory(env, local) : null
-    const candidates = new Set([...pinned.tree.entries.values()].filter(entry => remotePathAllowed(entry.path) && entry.type === 'blob' && ['100644', '100755'].includes(entry.mode)).map(entry => entry.path))
+    const candidates = new Set([...pinned.tree.entries.values()].filter(entry => remotePathAllowed(entry.path, level) && entry.type === 'blob' && ['100644', '100755'].includes(entry.mode)).map(entry => entry.path))
     for (const path of inventory?.paths ?? []) candidates.add(path)
     const paths = ordered(candidates).filter(path => input.prefix === undefined || path === input.prefix || path.startsWith(input.prefix + '/'))
     const matches = [], skippedPaths = []; let scannedBytes = 0, projectedBytes = 0, filesScanned = 0, truncated = pinned.tree.truncated, skippedFiles = 0, skippedBytes = 0
-    let screenedOut = 0
+    let screenedOut = 0, withheld = 0
     for (const path of paths) {
       if (filesScanned >= CLOUD_REPO_PROPOSAL_LIMITS.searchFiles || scannedBytes >= CLOUD_REPO_PROPOSAL_LIMITS.searchBytes) { truncated = true; break }
       let value
       try { value = await sourceText(path, 'auto', ref, env, local, pinned, true) }
       catch (error) {
         if (['REPO_PATH_DELETED', 'REPO_FILE_REQUIRED'].includes(error?.code)) continue
+        // A file whose text has a credential's SHAPE (the repo's own test fixtures carry fake
+        // ones, so a search of deploy/cloudflare/src ended BROKER_PRIVATE_CONTENT_REFUSED at the first) is withheld, never
+        // shown, and the search goes on. A file carrying a configured secret's VALUE still refuses the whole answer.
+        if (level === 'open' && error?.code === 'BROKER_PRIVATE_CONTENT_REFUSED' && error.configuredValue === false) {
+          withheld++
+          const skipped = { path: safeText(path, env, 1024), reason: 'withheld' }, bytes = size(JSON.stringify(skipped))
+          if (skippedPaths.length < 32 && skippedBytes + bytes <= 8192) { skippedPaths.push(skipped); skippedBytes += bytes }
+          continue
+        }
         throw error
       }
       if (value.source === 'mirror' && (value.lineageId !== inventory.lineageId || value.revision !== inventory.revision)) fail('REPO_MIRROR_CHANGED', 409)
@@ -881,8 +1011,8 @@ async function searchRepository(input, env, context) {
       }
       if (matches.length === maxMatches || projectedBytes >= CLOUD_REPO_TREE_LIMITS.projectedBytes) { truncated = true; break }
     }
-    return { ok: true, matches, truncated, filesScanned, skippedFiles, skippedPaths, skippedPathsTruncated: skippedFiles > skippedPaths.length,
-      ...(typeof context.screenFile === 'function' ? { screenedOut } : {}) }
+    return { ok: true, matches, truncated, filesScanned, skippedFiles, skippedPaths, skippedPathsTruncated: skippedFiles + withheld > skippedPaths.length,
+      ...(withheld ? { withheld } : {}), ...(typeof context.screenFile === 'function' ? { screenedOut } : {}) }
   })
 }
 
@@ -917,7 +1047,7 @@ async function updateRefs(updates, id, env, context) {
   if (result?.errors?.length || result?.data?.updateRefs?.clientMutationId !== clientMutationId) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
 }
 
-async function branchOperation(input, env, context) {
+async function branchOperation(input, env, context, { facts = true } = {}) { // HANDS hook: `facts` (the wake act passes false)
   requireOwner(env, context)
   const branch = repoRef(input.branch)
   if (!validAumaBranch(branch)) fail('REPO_BRANCH_REFUSED', 403)
@@ -947,8 +1077,9 @@ async function branchOperation(input, env, context) {
   if (!['write', 'edit', 'commit'].includes(input.action)) fail('REPO_ACTION_UNAVAILABLE')
   if (input.expectedHeadSha !== undefined && !SHA.test(input.expectedHeadSha)) fail('REPO_BASE_SHA_REQUIRED')
   if (input.dryRun !== undefined && typeof input.dryRun !== 'boolean') fail('BROKER_QUERY_INVALID')
-  let content, path, files
-  if (input.action !== 'commit') path = branchPath(input.path, env)
+  let content, path, files, prior // HANDS hook: `prior`, the file an edit already read
+  const level = repoDoorLevel(context)
+  if (input.action !== 'commit') path = branchPath(input.path, env, level)
   if (input.action === 'write') content = safeText(input.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
   if (input.action === 'edit') {
     safeText(input.oldString, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes); safeText(input.newString, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
@@ -959,7 +1090,7 @@ async function branchOperation(input, env, context) {
     files = input.changes.map(change => {
       if (!record(change)) fail('REPO_CHANGE_INVALID')
       exactFields(change, ['path', 'content'])
-      return { path: branchPath(change.path, env), content: safeText(change.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) }
+      return { path: branchPath(change.path, env, level), content: safeText(change.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) }
     })
     if (new Set(files.map(file => file.path)).size !== files.length || files.reduce((total, file) => total + size(file.content), 0) > CLOUD_REPO_BRANCH_LIMITS.publicationBytes) fail('REPO_CHANGE_INVALID')
   }
@@ -968,7 +1099,7 @@ async function branchOperation(input, env, context) {
   const pinned = await pinnedTree(current, env, context.networkFetch, context.signal)
   if (pinned.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
   if (input.action === 'edit') {
-    const prior = (await githubFileAt(path, pinned, env, context.networkFetch, context.signal)).content
+    prior = (await githubFileAt(path, pinned, env, context.networkFetch, context.signal, false, level)).content
     const index = prior.indexOf(input.oldString)
     if (index === -1) fail('REPO_EDIT_TARGET_NOT_FOUND', 409)
     if (prior.indexOf(input.oldString, index + input.oldString.length) !== -1) fail('REPO_EDIT_TARGET_AMBIGUOUS', 409)
@@ -977,13 +1108,17 @@ async function branchOperation(input, env, context) {
   if (input.action !== 'commit') files = [{ path, content }]
   for (const file of files) regularFile(pinned.tree, file.path, true)
   // A case twin of a path already on her branch (one file on a case-insensitive disk) is refused here too (MUST 1).
-  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true)
-  if (input.action !== 'commit' && input.message === undefined) return { ok: true, action: input.action, branch, path, content, baseSha: current, bytesWritten: size(content), staged: input.dryRun !== true, scope: 'caller', ...(input.dryRun ? { dryRun: true } : {}) }
+  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true, level)
+  // HANDS hook: every check above is unchanged; `changes` only describes the write, after it has been judged.
+  const changeFacts = async () => facts ? await safeChangeFacts(async () => repoChangeFacts((input.action === 'edit'
+    ? [{ path, before: prior, entry: pinned.tree.entries.get(path) ?? null }]
+    : await priorTexts(files.map(file => file.path), pinned, env, context)).map((old, index) => ({ ...old, after: files[index].content })), env)) : {}
+  if (input.action !== 'commit' && input.message === undefined) return { ok: true, action: input.action, branch, path, content, baseSha: current, bytesWritten: size(content), staged: input.dryRun !== true, scope: 'caller', ...(input.dryRun ? { dryRun: true } : {}), ...await changeFacts() }
   const message = safeText(input.message, env, 1024)
   if (!message.trim() || /[\r\n]/.test(message)) fail('REPO_COMMIT_MESSAGE_INVALID')
   if (input.dryRun === true) return { ok: true, action: input.action, branch, baseSha: current, dryRun: true, committed: false, paths: files.map(file => file.path) }
   const commit = await commitOnBranch(branch, current, files, message, env, context)
-  return { ok: true, action: input.action, branch, commit, commitSha: commit, headSha: commit, paths: files.map(file => file.path), stdout: commit, stderr: '' }
+  return { ok: true, action: input.action, branch, commit, commitSha: commit, headSha: commit, paths: files.map(file => file.path), stdout: commit, stderr: '', ...await changeFacts() }
 }
 
 /** The one commit to her own branch: GitHub's createCommitOnBranch with `expectedHeadOid` (compare-and-swap), then the
@@ -1012,21 +1147,22 @@ async function commitOnBranch(branch, current, files, message, env, context, del
  * such file with `refused` (its code) and `next` instead (`frozen: true` for a frozen one). */
 async function inspectedChanges(before, after, env, context, allowEmpty = false, { pathsOnly = false, markFrozen = false, concurrentReads = false } = {}) {
   if (before.tree.truncated || after.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
+  const level = repoDoorLevel(context) // At 'open' every path is hers to propose, .github/ and T2 files included
   const paths = ordered(new Set([...before.tree.entries.keys(), ...after.tree.entries.keys()])), candidates = [], changed = []
   for (const path of paths) {
     const a = before.tree.entries.get(path), b = after.tree.entries.get(path)
     if (a && b && a.sha === b.sha && a.mode === b.mode && a.type === b.type) continue
     // Inspect every changed name before filtering directory metadata. Forbidden
     // renames/deletions and mode-only changes must not disappear from evidence.
-    if (!canonicalPath(path) || path === '.github' || path.startsWith('.github/')) fail('REPO_PROPOSAL_PATH_REFUSED', 403)
+    if (!canonicalPath(path, level) || (level !== 'open' && (path === '.github' || path.startsWith('.github/')))) fail('REPO_PROPOSAL_PATH_REFUSED', 403)
     if ([a, b].every(entry => !entry || entry.type === 'tree')) continue
     candidates.push({ path, a, b })
   }
   const twins = new Set(caseTwinPaths(candidates.map(({ path }) => path), before.tree.entries.keys(), after.tree.entries.keys()))
   for (const { path, a, b } of candidates) {
-    const status = !a ? 'added' : !b ? 'removed' : 'modified', refusal = proposalPathRefusal(path, status, { twin: twins.has(path) })
+    const status = !a ? 'added' : !b ? 'removed' : 'modified', refusal = proposalPathRefusal(path, status, { twin: twins.has(path), level })
     if (refusal && !markFrozen) fail(refusal.code, 403, { protectedPath: path, next: refusal.next })
-    if (refusal?.code !== 'REPO_PATH_NOT_PLAIN') branchPathName(path, env)
+    if (refusal?.code !== 'REPO_PATH_NOT_PLAIN') branchPathName(path, env, level)
     if (a) regularFile(before.tree, path)
     if (b) regularFile(after.tree, path)
     changed.push({ path, status, ...(refusal ? { refused: refusal.code, next: refusal.next, ...(refusal.code === 'REPO_FROZEN_PATH_REFUSED' ? { frozen: true } : {}) } : {}) })
@@ -1038,7 +1174,7 @@ async function inspectedChanges(before, after, env, context, allowEmpty = false,
   // in the same order with the same byte bound below; a read left ahead of a refusal is cancelled by the read window. ----
   const ahead = concurrentReads ? [] : null
   const side = (file, pinned, absent) => settled(file.status === absent ? Promise.resolve('')
-    : githubFileAt(file.path, pinned, env, context.networkFetch, context.signal).then(value => value.content))
+    : githubFileAt(file.path, pinned, env, context.networkFetch, context.signal, false, level).then(value => value.content))
   const fetchAhead = index => { if (ahead && index < changed.length) ahead[index] = [side(changed[index], before, 'added'), side(changed[index], after, 'removed')] }
   for (let index = 0; index < MERGE_FILES_AHEAD; index++) fetchAhead(index)
   // ---- MERGE block end ----
@@ -1046,8 +1182,8 @@ async function inspectedChanges(before, after, env, context, allowEmpty = false,
   for (const [index, file] of changed.entries()) {
     const read = ahead ? ahead[index] : null
     if (ahead) fetchAhead(index + MERGE_FILES_AHEAD)
-    const left = read ? await judged(read[0]) : file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, context.networkFetch, context.signal)).content
-    const right = read ? await judged(read[1]) : file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, context.networkFetch, context.signal)).content
+    const left = read ? await judged(read[0]) : file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, context.networkFetch, context.signal, false, level)).content
+    const right = read ? await judged(read[1]) : file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, context.networkFetch, context.signal, false, level)).content
     bytes += size(left) + size(right)
     if (bytes > CLOUD_REPO_PROPOSAL_LIMITS.inspectedBytes) fail('REPO_PROPOSAL_TOO_LARGE', 413)
     const { additions, deletions } = lineDiff(left, right, file.path, file.path, 0)
@@ -1135,6 +1271,10 @@ async function paginatedCi(path, key, env, context) {
 export const PROPOSAL_GATE_WORKFLOW = Object.freeze({ file: 'proposal-gate.yml', path: '.github/workflows/proposal-gate.yml', jobs: Object.freeze(['preflight', 'build', 'scrub-dist', 'bundle']) })
 export const PROPOSAL_CHECKS_WORKFLOW = Object.freeze({ file: 'proposal-checks.yml', path: '.github/workflows/proposal-checks.yml', jobs: Object.freeze(['checks']) })
 export const PROPOSAL_CI_WORKFLOWS = Object.freeze([PROPOSAL_GATE_WORKFLOW, PROPOSAL_CHECKS_WORKFLOW])
+/** The workflows a merge waits for, by door level. At 'open' the fast gate only
+ * (proposal-gate.yml: preflight, build, scrub-dist, bundle); proposal-checks.yml then runs its fence job alone and is not
+ * read. At 'guarded' both, as before. His passkey on the exact base, head and tree is required at every level. */
+export const proposalCiWorkflows = level => level === 'open' ? Object.freeze([PROPOSAL_GATE_WORKFLOW]) : PROPOSAL_CI_WORKFLOWS
 const RUN_STATUSES = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']
 const RUN_CONCLUSIONS = ['success', 'failure', 'neutral', 'cancelled', 'skipped', 'timed_out', 'action_required', 'stale', 'startup_failure']
 
@@ -1170,17 +1310,19 @@ async function workflowCi(workflow, branch, headSha, env, context) {
 }
 
 /**
- * CI evidence for a proposal head: BOTH workflows of PROPOSAL_CI_WORKFLOWS under the same exact-run rules. 'passed' only
- * when both passed; 'failed' when either failed (a failed gate is not read further); 'none' when neither has a run;
- * else 'pending'. stage_proposal shows this same combined state, and merge_proposal reads it before the passkey.
+ * CI evidence for a proposal head: every workflow of proposalCiWorkflows(level) (both at 'guarded', the gate alone at
+ * 'open') under the same exact-run rules. 'passed' only when each passed; 'failed' when any failed (a failed gate is not
+ * read further); 'none' when none has a run; else 'pending'. stage_proposal shows this same combined state, and
+ * merge_proposal reads it before the passkey.
  * @returns {Promise<'passed'|'pending'|'failed'|'none'>}
  */
 async function proposalCi(branch, headSha, env, context, { concurrent = false } = {}) {
+  const workflows = proposalCiWorkflows(repoDoorLevel(context))
   // The merge reads both workflows at once; they are judged here in this same order (a failed one first
   // reached is the answer, whatever a later one says, as when the later one was never read).
-  const reads = concurrent ? PROPOSAL_CI_WORKFLOWS.map(workflow => settled(workflowCi(workflow, branch, headSha, env, context))) : null
+  const reads = concurrent ? workflows.map(workflow => settled(workflowCi(workflow, branch, headSha, env, context))) : null
   const states = []
-  for (const [index, workflow] of PROPOSAL_CI_WORKFLOWS.entries()) {
+  for (const [index, workflow] of workflows.entries()) {
     const state = reads ? await judged(reads[index]) : await workflowCi(workflow, branch, headSha, env, context)
     if (state === 'failed') return 'failed'
     states.push(state)
@@ -1193,6 +1335,8 @@ async function proposalCi(branch, headSha, env, context, { concurrent = false } 
 const CI_STATES = Object.freeze(['passed', 'pending', 'failed', 'none'])
 /** What to do when a merge is refused because the proposal's gate has not passed on its exact head. */
 export const PROPOSAL_CI_NEXT = 'wait for both proposal-gate and proposal-checks to pass on this exact head, then stage_proposal again so the card shows it; a failed run of either needs a new commit on the branch'
+/** The same, at level 'open', where the merge waits for the fast gate only. */
+export const PROPOSAL_GATE_CI_NEXT = 'wait for proposal-gate (the fast build check) to pass on this exact head, then stage_proposal again so the card shows it; a failed run needs a new commit on the branch'
 
 /** One call to HEAD's repo-proposal route. `approval`: his Class 3 approval, sent only with begin_merge, which consumes it
  * in HEAD's own transaction. `signal`: a bookkeeping call's own limit, for settling after this call's deadline fired. A
@@ -1554,7 +1698,7 @@ async function mergeProposal(input, env, context) {
     const repository = settled(repositoryId(env, context))
     await judged(files)
     const ciStatus = await judged(ci)
-    if (ciStatus !== 'passed') fail('REPO_PROPOSAL_CI_NOT_PASSED', 409, { ciStatus })
+    if (ciStatus !== 'passed') fail('REPO_PROPOSAL_CI_NOT_PASSED', 409, { ciStatus, ...(repoDoorLevel(context) === 'open' ? { next: PROPOSAL_GATE_CI_NEXT } : {}) })
     id = await judged(repository)
     // Review: both refs again, together, as the LAST read before his approval is used. A ref that moved
     // during the reads is refused here, unspent; past this point only GitHub's compare-and-swap catches it, after
@@ -1986,19 +2130,20 @@ async function applyPatch(input, env, context) {
   if (typeof input.patch !== 'string') fail('PATCH_SHAPE')
   const parsed = parseUnifiedPatch(input.patch)
   // The path rules `commit` applies, every path, before anything is read (a delete is judged as commit judges a write).
-  for (const file of parsed) file.path = branchPath(file.path, env)
+  const level = repoDoorLevel(context)
+  for (const file of parsed) file.path = branchPath(file.path, env, level)
   const message = safeText(input.message, env, 1024)
   if (!message.trim() || /[\r\n]/.test(message)) fail('REPO_COMMIT_MESSAGE_INVALID')
   const current = await branchHead(branch, env, context)
   if (current !== input.baseSha) fail('REPO_HEAD_MOVED', 409, { headSha: current })
   const pinned = await pinnedTree(current, env, context.networkFetch, context.signal)
   if (pinned.tree.truncated) fail('REPO_TREE_INCOMPLETE', 502)
-  const files = [], deletions = [], answer = []
+  const files = [], deletions = [], answer = [], sides = [] // HANDS hook: `sides`, both texts of each file for the facts
   let total = 0
   for (const file of parsed) {
     const entry = regularFile(pinned.tree, file.path, true)
     if ((entry === null) !== (file.status === 'added')) fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk: 0 })
-    const prior = entry === null ? '' : (await githubFileAt(file.path, pinned, env, context.networkFetch, context.signal)).content
+    const prior = entry === null ? '' : (await githubFileAt(file.path, pinned, env, context.networkFetch, context.signal, false, level)).content
     const content = applyFilePatch(file, prior)
     if (file.status === 'deleted') {
       if (content !== '') fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk: file.hunks.length })
@@ -2008,12 +2153,13 @@ async function applyPatch(input, env, context) {
       total += size(content)
     }
     answer.push({ path: file.path, status: file.status })
+    sides.push({ path: file.path, before: entry === null ? null : prior, after: file.status === 'deleted' ? null : content, entry }) // HANDS hook
   }
   if (total > CLOUD_REPO_BRANCH_LIMITS.publicationBytes) fail('REPO_CHANGE_INVALID')
-  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true)
+  for (const path of caseTwinPaths(files.map(file => file.path), pinned.tree.entries.keys())) refuseProposalPath(path, 'added', true, level)
   const commit = await commitOnBranch(branch, current, files, message, env, context, deletions)
   return { ok: true, action: 'apply_patch', branch, head: commit, commit, headSha: commit, baseSha: current, files: answer,
-    stdout: `${commit} ${answer.map(file => `${file.status} ${file.path}`).join(', ')}`, stderr: '' }
+    stdout: `${commit} ${answer.map(file => `${file.status} ${file.path}`).join(', ')}`, stderr: '', ...await safeChangeFacts(() => repoChangeFacts(sides, env)) } // HANDS hook: changes
 }
 // ---- PATCH block end ----
 
@@ -2031,12 +2177,13 @@ async function repo(input, env, context) {
   if (input.action === 'merge_proposal') return await mergeProposal(input, env, context)
   const branch = repoRef(input.branch)
   if (['branch_create', 'branch_delete'].includes(input.action) || branch !== 'main' && ['write', 'edit', 'commit'].includes(input.action)) return await branchOperation(input, env, context)
-  if (branch !== 'main' && !['read', 'diff'].includes(input.action)) fail('REPO_BRANCH_REFUSED', 403)
+  // `tree`, `log` and `bytes` are reads too, at her branch's head, behind main's same screens.
+  if (branch !== 'main' && !['read', 'diff', 'tree', 'log', 'bytes'].includes(input.action)) fail('REPO_BRANCH_REFUSED', 403)
   if (branch === 'main' && ['write', 'edit', 'commit', 'push'].includes(input.action)) {
     const paths = ['write', 'edit'].includes(input.action) ? [input.path] : Array.isArray(input.changes) ? input.changes.map(file => file?.path) : []
     for (const path of paths) if (isT2ProtectedRepoPath(path)) refuseT2OnMain(path)
   }
-  if (input.action === 'bytes') return await byteInspection(input, env, context)
+  if (input.action === 'bytes') return await byteInspection(input, env, context, branch)
   if (input.action === 'state_diff') return await stateDiff(input, env, context)
   if (input.action === 'diagnostics') {
     if (Object.keys(input).some(key => key !== 'action')) fail('BROKER_QUERY_INVALID')
@@ -2047,8 +2194,8 @@ async function repo(input, env, context) {
     return await selftest(env, context)
   }
   if (input.action === 'tree') {
-    if (Object.keys(input).some(key => !['action', 'prefix'].includes(key))) fail('BROKER_QUERY_INVALID')
-    return { ok: true, ...await repositoryTree(input.prefix, env, networkFetch, signal) }
+    if (Object.keys(input).some(key => !['action', 'prefix', 'branch'].includes(key))) fail('BROKER_QUERY_INVALID')
+    return { ok: true, ...await repositoryTree(input.prefix, env, networkFetch, signal, { ref: branch, level: repoDoorLevel(context) }) }
   }
   if (input.action === 'status') {
     const meta = metadata(env)
@@ -2059,7 +2206,8 @@ async function repo(input, env, context) {
     const offset = input.offset === undefined ? 0 : input.offset
     const length = input.length === undefined ? undefined : input.length
     if (!Number.isSafeInteger(offset) || offset < 0 || (length !== undefined && (!Number.isSafeInteger(length) || length < 1 || length > CLOUD_REPO_READ_LIMITS.rangeLength))) fail('REPO_BYTE_RANGE_INVALID')
-    const path = requirePath(input.path)
+    const level = repoDoorLevel(context)
+    const path = requirePath(input.path, false, level)
     const sliceContent = fullResult => {
       if (input.offset === undefined && input.length === undefined) return fullResult
       const totalBytes = size(fullResult.content)
@@ -2072,16 +2220,16 @@ async function repo(input, env, context) {
       if (mirror.kind === 'gone') fail('REPO_PATH_DELETED', 404)
       if (mirror.kind === 'dir') fail('REPO_FILE_REQUIRED', 409)
       if (mirror.kind === 'file') return sliceContent({ ok: true, path, content: decodeFile(mirror.b64, env), source: 'mirror', lineageId: mirror.lineageId, revision: mirror.revision })
-      if (!remotePathAllowed(path)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 404)
+      if (!remotePathAllowed(path, level)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 404)
     }
-    return sliceContent({ ok: true, path, ...await githubFile(path, env, networkFetch, signal, branch), source: branch === 'main' ? 'github-main' : 'github-branch', ...(branch === 'main' ? {} : { branch }) })
+    return sliceContent({ ok: true, path, ...await githubFile(path, env, networkFetch, signal, branch, level), source: branch === 'main' ? 'github-main' : 'github-branch', ...(branch === 'main' ? {} : { branch }) })
   }
   if (input.action === 'log') {
     const limit = input.limit ?? CLOUD_REPO_LOG_LIMITS.defaultCommits
     if (!Number.isInteger(limit) || limit < 1 || limit > CLOUD_REPO_LOG_LIMITS.commits) fail('BROKER_QUERY_INVALID')
-    const log = await commits(env, networkFetch, signal, limit)
+    const log = await commits(env, networkFetch, signal, limit, branch)
     // Newest first: keep the newest commits whose answer fits answerBytes; the rest are named, never silently dropped.
-    const answer = kept => ({ ok: true, commits: kept, stdout: kept.map(commit => `${commit.sha.slice(0, 8)} ${commit.message.split('\n')[0]}`).join('\n'), stderr: '',
+    const answer = kept => ({ ok: true, ...(branch === 'main' ? {} : { branch, headSha: log[0].sha }), commits: kept, stdout: kept.map(commit => `${commit.sha.slice(0, 8)} ${commit.message.split('\n')[0]}`).join('\n'), stderr: '',
       ...(kept.length < log.length ? { truncated: true, returned: kept.length, available: log.length, next: 'ask for fewer commits, or read one with diff' } : {}) })
     let kept = log
     while (kept.length > 1 && size(JSON.stringify(answer(kept))) > CLOUD_REPO_LOG_LIMITS.answerBytes) kept = kept.slice(0, Math.max(1, Math.floor(kept.length * 0.9)))
@@ -2093,20 +2241,20 @@ async function repo(input, env, context) {
       const base = input.base ?? await branchHead('main', env, context)
       if (!SHA.test(base)) fail('REPO_BASE_SHA_REQUIRED')
       // A read: a frozen file is marked (frozen, next), never refused here; stage, merge and CI refuse it.
-      if (input.path !== undefined) branchPathName(input.path, env)
+      if (input.path !== undefined) branchPathName(input.path, env, repoDoorLevel(context))
       const after = await pinnedTree(branch, env, networkFetch, signal)
       await mainComparison(base, after.commitSha, env, networkFetch, signal)
       const before = await pinnedTree(base, env, networkFetch, signal)
       const changed = await inspectedChanges(before, after, env, context, true, { markFrozen: true }), files = []
       for (const file of changed) {
         if (input.path !== undefined && file.path !== input.path) continue
-        const left = file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, networkFetch, signal)).content
-        const right = file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, networkFetch, signal)).content
+        const left = file.status === 'added' ? '' : (await githubFileAt(file.path, before, env, networkFetch, signal, false, repoDoorLevel(context))).content
+        const right = file.status === 'removed' ? '' : (await githubFileAt(file.path, after, env, networkFetch, signal, false, repoDoorLevel(context))).content
         files.push({ ...file, patch: lineDiff(left, right, file.path, file.path).diff })
       }
       return { ok: true, base, head: after.commitSha, branch, files, filtered: false, truncated: false, stdout: files.map(file => file.patch).join('\n'), stderr: '' }
     }
-    const diff = await comparison(input.base ?? env.SOURCE_REVISION, input.path, env, networkFetch, signal)
+    const diff = await comparison(input.base ?? env.SOURCE_REVISION, input.path, env, networkFetch, signal, 'main', repoDoorLevel(context))
     return { ok: true, ...diff, stdout: diff.files.map(file => `${file.path}\n${file.patch ?? '[patch unavailable]'}`).join('\n'), stderr: '' }
   }
   const nowMs = typeof context.now === 'function' ? context.now() : Date.now()
@@ -2884,7 +3032,7 @@ async function cloudflareBroker(input, env, context) {
  * @param {object} options Bootstrap metadata, fixed-target fetch, clock and trusted Class 3 consumer. The default publication approver requires its exact consumption result; null disables publication before consumption. An injected approver may additionally refuse. publicHttpsFetch must enforce public addresses at connection time through IP pinning or Cloudflare production's runtime-flag-gated public fetch, plus TLS verification, cancellation and no redirects. It is never an unguarded ambient fetch or request field. The separate trustedDocsHttpsFetch permits only its fixed provider origins; it does not establish arbitrary public-network safety. diagnostics is an optional trusted snapshot reader; absence is reported unavailable. Without either trusted transport web-eyes stays unavailable.
  * @returns {Promise<Response>} Bounded JSON with explicit refusals and unknown publication outcomes; no retries or Mac fallback. Publication retries require fresh exact Class 3 approval; owner-only reconcile_proposal reads provider state without retrying publication.
  */
-export async function handleCloudBroker(request, env, { access = null, bootstrap, networkFetch, approveRepoPublication = approveConsumedRepoPublication, authorizeClass3 = null, publicHttpsFetch = null, trustedDocsHttpsFetch = null, diagnostics = null, now = Date.now }) {
+export async function handleCloudBroker(request, env, { access = null, bootstrap, networkFetch, approveRepoPublication = approveConsumedRepoPublication, authorizeClass3 = null, publicHttpsFetch = null, trustedDocsHttpsFetch = null, diagnostics = null, now = Date.now, repoDoorLevel: doorOverride = null /* the open door level: 'guarded' only makes the door stricter */ }) {
   let context
   try {
     const url = new URL(request.url)
@@ -2931,7 +3079,7 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     }
     // ---- READER-WINDOW end ----
     if (url.pathname === '/_host/web-eyes') return await webEyes(input, request, env, publicHttpsFetch, trustedDocsHttpsFetch, networkFetch)
-    context = { access, bootstrap, networkFetch, approveRepoPublication, authorizeClass3, request, signal: request.signal, now, publicHttpsFetch, trustedDocsHttpsFetch, diagnostics, mutationDispatched: false, repoMutationDispatched: false, refMutationDispatched: false }
+    context = { access, bootstrap, networkFetch, approveRepoPublication, authorizeClass3, request, signal: request.signal, now, publicHttpsFetch, trustedDocsHttpsFetch, diagnostics, mutationDispatched: false, repoMutationDispatched: false, refMutationDispatched: false, ...(doorOverride === 'guarded' ? { repoDoorLevel: 'guarded' } : {}) }
     const execute = async () => url.pathname === '/_host/selftest' ? await selftest(env, context)
       : url.pathname === '/_host/diagnostics' ? await diagnosticsReport(env, context)
       : url.pathname === '/_host/repo' ? await repo(input, env, context)
@@ -2973,7 +3121,7 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     if (context?.cloudflareMutationDispatched) return reply({ ok: false, code: 'CLOUDFLARE_MUTATION_OUTCOME_UNKNOWN', outcome: 'unknown', retry: 'read-cloudflare-state-before-any-new-request', requiresFreshClass3Approval: context.cloudflareMutationDispatched === 'protected', replaySafe: false, macFallback: false }, 503)
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED'
     if (code === 'READER_WINDOW') return readerWindowRefusalResponse()
-    return reply({ ok: false, code, macFallback: false, ...(code.startsWith('CLOUDFLARE_') && Object.values(CLOUDFLARE_NEXT).includes(error.next) ? { next: error.next } : {}), ...(['CLASS3_WEBAUTHN_REQUIRED', 'CLOUDFLARE_REASON_CHANGED'].includes(code) ? cloudflareProtectionReply(code, error.protection) : {}),...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(code === 'BROKER_TIMEOUT' && error?.phase === 'reads' ? { phase: 'reads', approvalSpent: false, mainMoved: false } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error), ...patchRefusalFacts(code, error, env),
+    return reply({ ok: false, code, macFallback: false, ...(code.startsWith('CLOUDFLARE_') && Object.values(CLOUDFLARE_NEXT).includes(error.next) ? { next: error.next } : {}), ...(['CLASS3_WEBAUTHN_REQUIRED', 'CLOUDFLARE_REASON_CHANGED'].includes(code) ? cloudflareProtectionReply(code, error.protection) : {}),...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: error.next === PROPOSAL_GATE_CI_NEXT ? PROPOSAL_GATE_CI_NEXT : PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(code === 'BROKER_TIMEOUT' && error?.phase === 'reads' ? { phase: 'reads', approvalSpent: false, mainMoved: false } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error), ...patchRefusalFacts(code, error, env),
       ...(code === 'EXEC_RATE_LIMITED' && Number.isSafeInteger(error.retryAt) ? { retryAt: error.retryAt, limit: error.limit } : {}) }, [400, 403, 404, 405, 408, 409, 413, 429, 502, 503, 507].includes(error?.status) ? error.status : 503) // 429 and retryAt
   }
 }
@@ -3423,7 +3571,7 @@ export async function cloudWakeMandateAct(principal, act, env, { seedId, network
       }
       if (shaped.act === 'commit') {
         const result = await branchOperation({ action: 'commit', branch: shaped.branch, expectedHeadSha: shaped.expectedHeadSha, message: shaped.message,
-          changes: shaped.changes.map(change => ({ ...change })) }, env, context)
+          changes: shaped.changes.map(change => ({ ...change })) }, env, context, { facts: false }) // HANDS hook: the act answers headSha and paths only
         return { ok: true, act: 'commit', branch: shaped.branch, headSha: result.headSha, paths: result.paths }
       }
       if (shaped.act === 'apply_patch') {

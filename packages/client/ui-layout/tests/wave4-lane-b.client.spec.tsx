@@ -21,6 +21,12 @@ import { NOTICES_SURFACE, resetNoticesForTests } from '../src/client/spatial/por
 import { parseLiveMessage } from '../src/client/spatial/work/autonomy.ts'
 import { resetApprovalsForTests } from '../src/client/spatial/portal/touch-id-timing.ts'
 
+// The default door level is 'open'. This file's card tests (.github/ refused, a rename out of it) pin
+// the GUARDED level: the card reads REPO_DOOR_LEVEL from this module (repo-proposal-frozen.client.spec.tsx tests the open card).
+vi.mock('../src/client/spatial/aumlok/frozen-paths.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('../src/client/spatial/aumlok/frozen-paths.ts')>()), REPO_DOOR_LEVEL: 'guarded',
+}))
+
 /** The card's check is older than FRESH_CHECK_MS, so the click checks again first (Safari's fast path does not apply). */
 const ageCards = (): void => { const real = Date.now.bind(Date); vi.spyOn(Date, 'now').mockImplementation(() => real() + 31_000) }
 

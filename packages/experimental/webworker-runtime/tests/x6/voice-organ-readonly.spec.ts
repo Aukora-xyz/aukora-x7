@@ -179,6 +179,22 @@ function loadSuperagent(code: string, fs: unknown, outward: string[]): { apply: 
   return evaluate(processShim, undefined) as { apply: (ctx: Json) => void }
 }
 
+/** Any other ES organ with a plain `apply` export: every `export` keyword in front of a declaration is dropped (nothing
+ * else is rewritten); an import, a re-export or a default export is refused, and it gets no require and no builtin. */
+function loadEsOrgan(code: string, fs: unknown, outward: string[]): { apply: (ctx: Json) => void } {
+  const body = code.replace(/^(\s*)export (?=(?:const|let|function|async function|class) )/gm, '$1')
+  if (/^\s*(?:export|import)\s/m.test(body)) throw new Error('T6: an ES organ has another module statement')
+  const processShim = {
+    getBuiltinModule(name: string): unknown {
+      if (name === 'node:fs') return fs
+      outward.push(`builtin:${name}`)
+      return null
+    },
+  }
+  const evaluate = compileFunction(`${body}\nreturn { apply }`, ['process', 'require']) as (...args: unknown[]) => unknown
+  return evaluate(processShim, undefined) as { apply: (ctx: Json) => void }
+}
+
 /** Digest of the whole tree: every directory, every file's path, size and SHA-256. */
 function treeDigest(vfs: MemoryVfs): string {
   const hash = createHash('sha256')
@@ -556,6 +572,9 @@ const SWITCH_TABLE: Readonly<Record<string, readonly SwitchRow[]>> = {
     effects: 'OUTWARD: checkHostHead (b:140-142), then returns the effect ledger (b:148-149)',
     motor_memory: 'OUTWARD: checkHostHead (b:140-142), then returns motor memory (b:151-152)' },
   voice: 'OUT: no mode is a pure read' }],
+  'auma-kernel': [{ tool: 'auma_kernel', via: 'apply', selector: 'whole', actions: {
+    '*': 'READ: one fixed path in her home (b:6, b:32), its digest checked against the pin (b:46-61); no argument, no write, no fetch (SOURCE at epoch 179)' },
+  voice: 'OUT: not pinned (her own organ, added at epoch 177 by the owner\'s add-organs approval; never run under T6)' }],
   'auma-eyes': [{ tool: 'auma_eyes', via: 'canonical', selector: 'action', absent: 'projection (b:56)', actions: {
     projection: 'OUTWARD: POST /_host/eyes (b:17, b:57)',
     screenshot: 'OUTWARD+CHANGES: POST /_host/eyes, then writes two latest.png captures (b:66-69)' }, voice: `${CANON}; posts to the host` }],
@@ -636,6 +655,12 @@ function registered(organId: string): Array<{ tool: string; via: SwitchRow['via'
     loadSuperagent(code, probe.fs, probe.outward).apply(ctx)
     return [...tools].map(([tool, def]) => ({ tool, via: 'apply' as const, inputSchema: def.inputSchema }))
   }
+  // An ES organ that exports `apply` as a const (auma-kernel: `export const apply = setup`) is mounted through apply
+  // by the loader exactly like the two above (unwrapPluginExport: `typeof rec.apply === 'function'`).
+  if (/^\s*export const apply\s*=/m.test(code)) {
+    loadEsOrgan(code, probe.fs, probe.outward).apply(ctx)
+    return [...tools].map(([tool, def]) => ({ tool, via: 'apply' as const, inputSchema: def.inputSchema }))
+  }
   if (/^\s*export\s/m.test(code)) return []
   type Exported = { name?: unknown; run?: unknown; setup?: (c: Json) => unknown; parameters?: Json }
   const exported = loadCommonJs(code, probe.fs, probe.outward) as Exported
@@ -651,7 +676,7 @@ describe('the switch table covers every organ in the mirror (brief step 1)', () 
   it('names every HEAD entry and every seed organ file, with the tools each one actually registers', () => {
     const seedFiles = readdirSync(path.join(MIRROR, 'auma/seed/organs')).filter(name => name.endsWith('.js')).map(name => name.slice(0, -3))
     expect(seedFiles.length).toBe(21)
-    expect(Object.keys(HEAD.entries).length).toBe(27)
+    expect(Object.keys(HEAD.entries).length).toBe(28) // 27 at epoch 173; auma-kernel added by the owner's add-organs approval (epoch 177)
     expect(Object.keys(SWITCH_TABLE).sort()).toEqual([...new Set([...Object.keys(HEAD.entries), ...seedFiles])].sort())
     for (const [organId, rows] of Object.entries(SWITCH_TABLE)) {
       const found = registered(organId)

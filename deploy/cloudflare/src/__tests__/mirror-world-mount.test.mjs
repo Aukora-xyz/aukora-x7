@@ -305,9 +305,11 @@ test('under WRITER_LEASE=enforce: what HEAD does with a yielded wake checkpoint:
   assert.equal(result.status, 'success', 'the wake step goes on')
   const toolRows = [...head.data].filter(([key]) => key.startsWith('head:transcript:row:')).map(([, row]) => row).filter(row => row.role === 'tool').map(row => JSON.parse(row.content))
   const checkpoint = toolRows.find(row => row.tool_call_id === 'checkpoint')
-  // The refusal also names the mirror's own closed code, and the step's toolRefusals carry it.
-  assert.deepEqual(JSON.parse(checkpoint.content), { ok: false, code: 'CLOUD_WAKE_CHECKPOINT_UNAVAILABLE', mirrorCode: 'MIRROR_WAKE_WRITER_LIVE' })
-  assert.deepEqual(result.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_writer_live' }])
+  // The refusal also names a closed code, and the step's toolRefusals carry it.
+  // HEAD now refuses every wake checkpoint before the mirror (MIRROR_WAKE_CHECKPOINT_PAUSED); the
+  // mirror's own yield under enforce (MIRROR_WAKE_WRITER_LIVE) is asserted on the route itself in the first MUST 1d above.
+  assert.deepEqual(JSON.parse(checkpoint.content), { ok: false, code: 'CLOUD_WAKE_CHECKPOINT_UNAVAILABLE', mirrorCode: 'MIRROR_WAKE_CHECKPOINT_PAUSED' })
+  assert.deepEqual(result.toolRefusals, [{ tool: 'appendWakeCheckpoint', code: 'cloud_wake_checkpoint_unavailable', mirrorCode: 'mirror_wake_checkpoint_paused' }])
   assert.deepEqual(h.storage.snapshot(), before, 'MIRROR unchanged: no checkpoint file, no wake receipt, no fence move')
 })
 

@@ -16,6 +16,13 @@ import { parseRepoProposal, repoProposalProblems, type RepoProposal } from '../s
 import * as deploy from '../../../../deploy/ci/frozen-paths.mjs'
 
 const edge = deploy as typeof page
+
+// The default door level is 'open'. The card's tests below pin the GUARDED level: the card reads
+// REPO_DOOR_LEVEL from this module, so the module's level is set to 'guarded' here (its judgements keep their own
+// default, the real one, which the equality test compares at both levels). The open card has its own tests at the end.
+vi.mock('../src/client/spatial/aumlok/frozen-paths.ts', async importOriginal => ({
+  ...(await importOriginal<typeof import('../src/client/spatial/aumlok/frozen-paths.ts')>()), REPO_DOOR_LEVEL: 'guarded',
+}))
 /** The edge's judgement returns { code, next } and takes its twin flag as an option; the page's returns the code only. */
 type EdgeRefusal = (path: unknown, status: string, options: { twin: boolean }) => { code: string } | null
 const edgeRefusal = (deploy as { proposalPathRefusal: EdgeRefusal }).proposalPathRefusal
@@ -30,12 +37,17 @@ const problemsOf = async (changedFiles: readonly Record<string, unknown>[]): Pro
   (await repoProposalProblems(await proposalOf(changedFiles), ORIGIN)).problems
 
 describe('the page keeps the same frozen list as the edge and CI', () => {
-  it('every entry is equal', () => {
+  it('every entry is equal', async () => {
     for (const name of ['FROZEN_DIRECTORIES', 'DECISION_6_FILES', 'FROZEN_FILES', 'FROZEN_ABSENT_FILES', 'FROZEN_ORGAN_IDS', 'FROZEN_ORGAN_FILES', 'FROZEN_TEST_DIRECTORIES',
-      'FROZEN_TEST_FILES', 'OPEN_PATHS', 'OPEN_NEW_PATHS', 'CLOSED_INSIDE_OPEN', 'CLOSED_NAMES', 'CLOSED_SEGMENTS'] as const) {
+      'FROZEN_TEST_FILES', 'OPEN_PATHS', 'OPEN_NEW_PATHS', 'CLOSED_INSIDE_OPEN', 'OPEN_INSIDE_CLOSED', 'CLOSED_NAMES', 'CLOSED_SEGMENTS'] as const) {
       expect([...page[name]], name).toEqual([...edge[name]])
     }
     expect(page.FROZEN_ORGAN_IDS).toHaveLength(15)
+    // The one level line: the page's copy equals the edge's (read unmocked), and so do the levels kept built.
+    const actual = await vi.importActual<typeof page>('../src/client/spatial/aumlok/frozen-paths.ts')
+    expect(actual.REPO_DOOR_LEVEL).toBe((deploy as { REPO_DOOR_LEVEL: string }).REPO_DOOR_LEVEL)
+    expect(actual.REPO_DOOR_LEVEL).toBe('open')
+    expect([...page.REPO_DOOR_LEVELS]).toEqual([...(deploy as { REPO_DOOR_LEVELS: readonly string[] }).REPO_DOOR_LEVELS])
   })
 
   it('every judgement is equal, odd spellings included', () => {
@@ -59,17 +71,56 @@ describe('the page keeps the same frozen list as the edge and CI', () => {
       'apps/web/public/x/README.md', 'docs/auma/CLAUDE.md',
       // Review: Markdown opened by README name only; every agent instruction file closed by name.
       'apps/web/README.md', 'packages/client/ui-layout/README.zh.md', 'packages/client/ui-layout/AGENTS.override.md', 'packages/client/ui-layout/GEMINI.md',
-      'packages/client/ui-layout/CLAUDE.local.md', 'packages/client/ui-layout/src/AGENTS.override.md']
+      'packages/client/ui-layout/CLAUDE.local.md', 'packages/client/ui-layout/src/AGENTS.override.md',
+      // Her thread sync files open, the rest of her storage closed (by the folder pattern since the fence).
+      'packages/experimental/webworker-runtime/src/storage/thread-writer.ts', 'packages/experimental/webworker-runtime/src/storage/thread-sync.ts',
+      'packages/experimental/webworker-runtime/src/storage/thread-sync-plan.ts', 'packages/experimental/webworker-runtime/src/storage/thread-store-types.ts',
+      'packages/experimental/webworker-runtime/src/storage/idb-persist.ts', 'packages/experimental/webworker-runtime/src/storage/Memory.ts',
+      'packages/experimental/webworker-runtime/src/storage/sub/x.ts', 'packages/experimental/webworker-runtime/src/storage/other.ts',
+      // The folder closed by default again, the four open by exact, case-sensitive path.
+      'packages/experimental/webworker-runtime/src/storage/brand-new-file.ts', 'packages/experimental/webworker-runtime/src/storage/x/y.ts',
+      'packages/experimental/webworker-runtime/src/storage/Thread-Writer.ts', 'packages/experimental/webworker-runtime/src/storage/THREAD-SYNC.TS',
+      'packages/experimental/webworker-runtime/src/storage/thread-writer.tsx', 'packages/experimental/webworker-runtime/src/worker-host.ts',
+      'packages/experimental/webworker-runtime/src/x6/self-state.ts',
+      // Review: a parent-folder case variant of the four.
+      'packages/experimental/webworker-runtime/src/Storage/thread-writer.ts', 'packages/experimental/webworker-runtime/src/STORAGE/thread-sync.ts',
+      // The judges' imports, the approval cards and the pins, closed by exact path in any case.
+      ...['apps/identity/host.ts', 'apps/identity/webauthn.ts', 'aumlok/aumlok-ceremony.ts', 'portal/touch-id-timing.ts', 'portal/OrganSetCell.tsx',
+        'portal/NightGrantCell.tsx', 'portal/OutwardApprovalCell.tsx', 'portal/CodeDiffRow.tsx', 'portal/organsetcell.tsx', 'apps/identity/WebAuthn.ts',
+        // Independent read of an earlier commit: what those cards and the binding ceremony read.
+        'aumlok/outward-class3.ts', 'aumlok/night-grant.ts', 'aumlok/organ-set.ts', 'portal/organ-code-diff.ts', 'aumlok/head-promotion.ts',
+        'aumlok/aumlok-root.ts', 'aumlok/AUMLOK-Root.ts', 'aumlok/outward-sent.ts', 'aumlok/binding-bridge.ts']
+        .map(name => `packages/client/ui-layout/src/client/spatial/${name}`),
+      'packages/experimental/webworker-runtime/src/x6/scion-pins.ts', 'packages/experimental/webworker-runtime/src/x6/voice-organ-pins.ts',
+      'packages/experimental/webworker-runtime/src/x6/Scion-Pins.ts', 'packages/client/ui-layout/src/client/spatial/apps/identity/devices.ts']
+    // At both door levels, and at each one's default (the real line on both sides).
+    paths.push('.env', 'server/.env', 'apps/web/src/.npmrc', 'server/owner-key.mjs', 'mirror/home/auma/private/x.md', 'deploy/cloudflare/src/secret.mjs',
+      'apps/web/src/spatial-tokens.css', 'apps/web/node_modules/x.js', 'native/system/x.c', '.github/CODEOWNERS', 'AGENTS.md')
+    type LevelRefusal = (path: unknown, status: string, options: { twin: boolean; level?: string }) => { code: string } | null
+    const edgeLevelRefusal = deploy as { proposalPathRefusal: LevelRefusal }
+    const edgeSecret = (deploy as { isSecretShapedRepoPath: (path: unknown) => boolean }).isSecretShapedRepoPath
     for (const path of paths) {
-      expect(page.isFrozenRepoPath(path), JSON.stringify(path)).toBe(edge.isFrozenRepoPath(path))
-      expect(page.isFrozenTestPath(path), JSON.stringify(path)).toBe(edge.isFrozenTestPath(path))
       expect(page.frozenJudgedForm(path), JSON.stringify(path)).toBe(edge.frozenJudgedForm(path))
       expect(page.isPlainRepoPath(path), JSON.stringify(path)).toBe(edge.isPlainRepoPath(path))
+      expect(page.isSecretShapedRepoPath(path), JSON.stringify(path)).toBe(edgeSecret(path))
+      expect(page.isFrozenRepoPath(path), JSON.stringify(path)).toBe(edge.isFrozenRepoPath(path))
+      expect(page.isFrozenTestPath(path), JSON.stringify(path)).toBe(edge.isFrozenTestPath(path))
+      for (const level of ['open', 'guarded'] as const) {
+        expect(page.isFrozenRepoPath(path, level), `${JSON.stringify(path)} ${level}`).toBe(edge.isFrozenRepoPath(path, level))
+        expect(page.isFrozenTestPath(path, level), `${JSON.stringify(path)} ${level}`).toBe(edge.isFrozenTestPath(path, level))
+      }
       for (const status of ['added', 'modified', 'removed'] as const) {
         expect(page.isOpenRepoPath(path, status), `${JSON.stringify(path)} ${status}`).toBe(edge.isOpenRepoPath(path, status))
+        for (const level of ['open', 'guarded'] as const) {
+          expect(page.isOpenRepoPath(path, status, level), `${JSON.stringify(path)} ${status} ${level}`).toBe(edge.isOpenRepoPath(path, status, level))
+        }
         for (const twin of [false, true]) {
           expect(page.proposalPathRefusal(path, status, twin), `${JSON.stringify(path)} ${status} ${String(twin)}`)
             .toBe(edgeRefusal(path, status, { twin })?.code ?? null)
+          for (const level of ['open', 'guarded'] as const) {
+            expect(page.proposalPathRefusal(path, status, twin, level), `${JSON.stringify(path)} ${status} ${String(twin)} ${level}`)
+              .toBe(edgeLevelRefusal.proposalPathRefusal(path, status, { twin, level })?.code ?? null)
+          }
         }
       }
     }
@@ -183,5 +234,35 @@ describe('the card itself', () => {
     expect(container.querySelector('[data-repo-proposal-approve]')).toBeNull()
     expect(container.textContent).toContain('CANNOT MERGE')
     expect(calls.every(url => url === '/_head/promotion-status')).toBe(true)
+  })
+})
+
+describe('the card at the open door level', () => {
+  const openProblems = async (changedFiles: readonly Record<string, unknown>[]): Promise<readonly string[]> =>
+    (await repoProposalProblems(await proposalOf(changedFiles), ORIGIN, 'open')).problems
+
+  it('the six the owner named, the workflows and a test main has: no problem, so his passkey is asked', async () => {
+    expect(await openProblems([
+      { path: 'deploy/cloudflare/src/worker.mjs', status: 'modified', t2Protected: true },
+      { path: '.github/workflows/proposal-checks.yml', status: 'modified', t2Protected: true },
+      { path: 'deploy/ci/frozen-paths.mjs', status: 'modified', t2Protected: true },
+      { path: 'deploy/cloudflare/src/__tests__/repo-brokers.test.mjs', status: 'removed', t2Protected: true },
+      { path: 'packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx', status: 'modified' },
+      { path: 'packages/experimental/webworker-runtime/src/storage/idb-persist.ts', status: 'modified' },
+      { path: 'server/scrub.mjs', previousPath: 'server/build-preview.mjs', status: 'renamed' },
+    ])).toEqual([])
+  })
+
+  it('a credential-shaped path, a name that is not plain and a case twin still give a problem; the terms are still checked', async () => {
+    const secret = await openProblems([{ path: 'server/.env', status: 'added' }])
+    expect(secret).toHaveLength(1); expect(secret[0]).toContain('server/.env'); expect(secret[0]).toContain('credential file')
+    const plain = await openProblems([{ path: 'deploy/cloudflare/src/\u017figned-action.mjs', status: 'added' }])
+    expect(plain).toHaveLength(1); expect(plain[0]).toContain('not plain')
+    const twins = await openProblems([{ path: 'deploy/cloudflare/src/Worker.mjs', status: 'added' }, { path: 'deploy/cloudflare/src/worker.mjs', status: 'modified' }])
+    expect(twins).toHaveLength(1); expect(twins[0]).toContain('not plain')
+    for (const words of [secret, plain, twins]) expect(words.join(' ')).not.toMatch(/token/iu)
+    const proposal = await proposalOf([{ path: 'deploy/cloudflare/src/worker.mjs', status: 'modified' }])
+    const wrong = { ...proposal, binding: { ...proposal.binding, bodySha256: 'e'.repeat(64) } }
+    expect((await repoProposalProblems(wrong, ORIGIN, 'open')).problems).toEqual(['the passkey terms HEAD recorded are not the hash of the merge request it serves, so nothing is asked'])
   })
 })

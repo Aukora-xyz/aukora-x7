@@ -6,6 +6,7 @@ import ToolRuntime, * as dshTools from '../../../../core/tools/src/index.ts'
 import { persistence } from '../../src/storage/idb-persist.ts'
 import { STAGED_HEAD_PROMOTION_PATH, type BallEntryRecord, type BallManifest } from '../../src/x6/ball-loader.ts'
 import { FakeSocket, headManifestIdCanon, mountE4, sha256, type Responder } from './e4-fixture.ts'
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 
 const contexts: Context[] = []
 afterEach(async () => {
@@ -57,6 +58,9 @@ const snapshots = () => (globalThis as SnapshotServices).__X6_SERVICES__!.snapsh
 async function promotionFixture(organs: Organ[]) {
   const m: Mounted = await boot(organs, { respond: (call) => {
     if (call.path === '/_head/lease') {
+      // HEAD requires a reservation before an ordinary replacement; the shared budget stand-in answers it.
+      const budget = idPromotionBudgetReply(call.body)
+      if (budget) return budget
       const body = call.body as { ownerPeerId: string }
       return Response.json({ ok: true, ballId: m.head.ball.ballId,
         lease: { ownerPeerId: body.ownerPeerId, generation: 1, expiresAt: Date.now() + 30_000 } })

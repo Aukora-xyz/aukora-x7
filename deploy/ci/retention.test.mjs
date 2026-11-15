@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ADDED_TEST_RULE, PACKED_NAMES_MAX_BYTES, VITEST_EXACT_RUNNER, addedRun, addedVerdict, baselineVerdict, duplicateNames, holdFiles, main, nodeResults, packNames, protectedRun, protectedRunArguments, retentionVerdict, unpackNames, vitestResults } from './retention.mjs'
+import { ADDED_TEST_RULE, PACKED_NAMES_MAX_BYTES, PACKED_NAMES_MAX_PARTS, carriedNames, packNameParts, partEnvNames, VITEST_EXACT_RUNNER, addedRun, addedVerdict, baselineVerdict, duplicateNames, holdFiles, main, nodeResults, packNames, protectedRun, protectedRunArguments, retentionVerdict, unpackNames, vitestResults } from './retention.mjs'
 
 // Review (SHOULD): the in-process judge calls below must not append fixture verdicts to the summary of the job
 // that runs this file (deploy-x61.yml and proposal-gate.yml run deploy/ci/*.test.mjs on GitHub).
@@ -21,6 +21,13 @@ delete process.env.GITHUB_STEP_SUMMARY
 const ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const JUDGE = fileURLToPath(new URL('./retention.mjs', import.meta.url))
 const WORKFLOW = readFileSync(join(ROOT, '.github/workflows/proposal-checks.yml'), 'utf8')
+/** Main's fence for these fixtures, at the GUARDED door level: the protected and added-test jobs run
+ * only when main's level is not 'open', so their fixtures pin 'guarded' explicitly (the line must be there to set). */
+const GUARDED_FENCE = (() => {
+  const source = readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8'), line = /^export const REPO_DOOR_LEVEL = '(?:open|guarded)'$/m
+  assert.match(source, line)
+  return source.replace(line, "export const REPO_DOOR_LEVEL = 'guarded'")
+})()
 const passed = name => ({ status: 'passed', name })
 
 test('identical lists pass; one added test passes', () => {
@@ -134,7 +141,7 @@ test("the edge job puts main's tests and configuration back: an added test, an a
     git('init', '-q', '-b', 'main')
     put('deploy/ci/retention.mjs', 'main judge\n'); put('deploy/cloudflare/src/__tests__/old.test.mjs', 'old\n'); put('package.json', '{"main":true}\n'); put('vitest.config.ts', 'main\n')
     // Main's judge, which the step reads to remove every added test file.
-    put('deploy/ci/frozen-paths.mjs', readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8'))
+    put('deploy/ci/frozen-paths.mjs', GUARDED_FENCE)
     git('add', '-A'); git('commit', '-q', '-m', 'main')
     const mainSha = git('rev-parse', 'HEAD').trim()
     git('checkout', '-q', '-b', 'auma/proposal/fixture')
@@ -194,11 +201,13 @@ test("under the runner's bash -e, a red baseline still names its red tests and w
 
 test('`checks` reads each job\'s result only, and the baseline names never ride on a command line', () => {
   const checks = WORKFLOW.split('\n  checks:\n')[1]
-  assert.doesNotMatch(checks.replace(/#[^\n]*/g, ''), /toJSON|outputs\.(?!red\b)/)
+  // The fence's one-word door level ('open' or 'guarded') is the only other output read here.
+  assert.doesNotMatch(checks.replace(/#[^\n]*/g, ''), /toJSON|outputs\.(?!red\b|level\b)/)
+  assert.doesNotMatch(checks.replace(/#[^\n]*/g, ''), /outputs\.level\b(?! \}\})|needs\.(?!fence\b)[a-z'\[\]-]+\.outputs\.level/)
   const { script, env } = jobStep('checks', 'Every job green')
   assert.deepEqual(env, { FENCE: '${{ needs.fence.result }}', BASELINE: '${{ needs.baseline.result }}', EDGE: '${{ needs.edge.result }}', UI: '${{ needs.ui.result }}',
     BOOT: '${{ needs.boot.result }}', NEW_NODE_TESTS: "${{ needs['new-node-tests'].result }}", NEW_VITEST_TESTS: "${{ needs['new-vitest-tests'].result }}",
-    RED: '${{ needs.baseline.outputs.red }}' })
+    RED: '${{ needs.baseline.outputs.red }}', LEVEL: '${{ needs.fence.outputs.level }}' })
   const all = { FENCE: 'success', BASELINE: 'success', EDGE: 'success', UI: 'success', BOOT: 'success', NEW_NODE_TESTS: 'success', NEW_VITEST_TESTS: 'success' }
   const run = extra => runnerBash(script, { env: { PATH: process.env.PATH, ...all, ...extra } })
   assert.equal(run({}).status, 0)
@@ -206,6 +215,13 @@ test('`checks` reads each job\'s result only, and the baseline names never ride 
   assert.equal(red.status, 1); assert.match(red.stdout, /::error::main's own baseline is red: deploy\/a\.test\.mjs::B3 case/)
   assert.equal(run({ NEW_NODE_TESTS: '' }).status, 1, 'a missing result is a failure')
   assert.equal(run({ NEW_VITEST_TESTS: 'skipped' }).status, 1, 'a skipped added-test job is a failure')
+  // Any level but 'open' requires every job, as above; at 'open' the fence alone, and a red fence is still red.
+  assert.equal(run({ LEVEL: 'guarded', NEW_VITEST_TESTS: 'skipped' }).status, 1)
+  assert.equal(run({ LEVEL: 'wide', BASELINE: 'skipped' }).status, 1)
+  const skipped = { BASELINE: 'skipped', EDGE: 'skipped', UI: 'skipped', BOOT: 'skipped', NEW_NODE_TESTS: 'skipped', NEW_VITEST_TESTS: 'skipped' }
+  assert.equal(run({ LEVEL: 'open', ...skipped }).status, 0)
+  assert.equal(run({ LEVEL: 'open', ...skipped, FENCE: 'failure' }).status, 1)
+  assert.equal(run({ LEVEL: 'open', ...skipped, FENCE: '' }).status, 1)
   // Each protected job hands main's packed names to main's judge by the environment, not as an argument (its one judging
   // step, protected-run,).
   for (const [suite, names] of [['edge', { BASELINE_EDGE: 'edge', BASELINE_MESSAGES: 'messages' }], ['ui', { BASELINE: 'ui' }], ['boot', { BASELINE: 'boot' }]]) {
@@ -238,7 +254,7 @@ test('Each protected job removes EVERY test file the proposal added, also one in
     'packages/client/ui-layout/tests/new.client.spec.tsx', 'packages/experimental/webworker-runtime/tests/x6/new.spec.ts', 'deploy/cloudflare/src/__tests__/auma-zz-new.test.mjs']
   try {
     git('init', '-q', '-b', 'main')
-    put('deploy/ci/retention.mjs', 'main judge\n'); put('deploy/ci/frozen-paths.mjs', readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8'))
+    put('deploy/ci/retention.mjs', 'main judge\n'); put('deploy/ci/frozen-paths.mjs', GUARDED_FENCE)
     put('packages/client/ui-layout/tests/old.client.spec.tsx', 'old\n'); put('packages/experimental/webworker-runtime/tests/x6/large-store-boot.spec.ts', 'old\n')
     put('deploy/cloudflare/src/__tests__/old.test.mjs', 'old\n'); put('packages/client/ui-x/src/x.ts', 'old\n')
     git('add', '-A'); git('commit', '-q', '-m', 'main')
@@ -278,19 +294,45 @@ test('a baseline with two tests of one identity in one file is refused, naming t
   } finally { box.remove() }
 })
 
-test('packed names over the stated cap are refused with the job and the size, never truncated', () => {
+test('parts: no string passes the cap and no name is dropped: a large list rides in parts; over the maximum it is refused', () => {
   assert.equal(PACKED_NAMES_MAX_BYTES, 120 * 1024)
-  // The outside review's probe: 5,000 SHA-labelled names pack to about 244 KB.
-  const names = Array.from({ length: 5000 }, (_, index) => `deploy/a.test.mjs::case ${createHash('sha256').update(String(index)).digest('hex')}`)
+  assert.equal(PACKED_NAMES_MAX_PARTS, 4)
+  // The outside review's probe: 5,000 SHA-labelled names pack to about 244 KB: too large for one string, so three parts.
+  const label = index => `deploy/a.test.mjs::case ${createHash('sha256').update(String(index)).digest('hex')}`
+  const names = Array.from({ length: 5000 }, (_, index) => label(index))
   const size = Buffer.byteLength(packNames([...names].sort()))
   assert.ok(size > PACKED_NAMES_MAX_BYTES, String(size))
+  const rows = list => list.map(name => JSON.stringify({ status: 'passed', file: 'deploy/a.test.mjs', name: name.split('::')[1] })).join('\n') + '\n'
   const box = runnerTemp(), lines = []
   try {
-    writeFileSync(join(box.temp, 'r.jsonl'), names.map(name => JSON.stringify({ status: 'passed', file: 'deploy/a.test.mjs', name: name.split('::')[1] })).join('\n') + '\n')
-    assert.equal(main(['baseline', '--suite', 'edge', '--node', join(box.temp, 'r.jsonl'), '--root', box.work, '--exit', '0'], line => lines.push(line)), 1)
-    assert.equal(lines.length, 1, 'no packed list is printed at all')
-    assert.equal(lines[0], `::error::retention edge: the packed passed names of job edge are ${size} bytes, over the cap of ${PACKED_NAMES_MAX_BYTES} bytes; they are not truncated: split the suite or carry the names another way`)
-    // A compare handed an over-cap list refuses the same way.
+    writeFileSync(join(box.temp, 'r.jsonl'), rows(names))
+    assert.equal(main(['baseline', '--suite', 'edge', '--node', join(box.temp, 'r.jsonl'), '--root', box.work, '--exit', '0'], line => lines.push(line)), 0)
+    assert.ok(lines.length > 1 && lines.length <= PACKED_NAMES_MAX_PARTS, String(lines.length))
+    for (const [index, line] of lines.entries()) {
+      assert.ok(Buffer.byteLength(line) <= PACKED_NAMES_MAX_BYTES, `part ${index + 1} is within the cap`)
+      assert.ok(line.startsWith(`${index + 1}/${lines.length}:`), 'each part says which of how many it is')
+    }
+    // Read back from the environment names the comparing job uses: every name, in order, none dropped.
+    const carriedEnv = Object.fromEntries(partEnvNames('BASELINE_EDGE').map((key, index) => [key, lines[index] ?? '']))
+    assert.deepEqual(carriedNames(carriedEnv, 'BASELINE_EDGE').names, [...names].sort())
+    assert.deepEqual(packNameParts([...names].sort()), lines)
+    // A part that is missing, repeated, out of order or left over gives NO names (the run then fails), never fewer.
+    assert.deepEqual(carriedNames({ ...carriedEnv, BASELINE_EDGE_2: '' }, 'BASELINE_EDGE').names, [])
+    assert.deepEqual(carriedNames({ ...carriedEnv, BASELINE_EDGE_2: carriedEnv.BASELINE_EDGE }, 'BASELINE_EDGE').names, [])
+    assert.deepEqual(carriedNames({ ...carriedEnv, BASELINE_EDGE: carriedEnv.BASELINE_EDGE_2, BASELINE_EDGE_2: carriedEnv.BASELINE_EDGE }, 'BASELINE_EDGE').names, [])
+    assert.deepEqual(carriedNames({ BASELINE_EDGE: packNames(['a::b']), BASELINE_EDGE_2: packNames(['c::d']) }, 'BASELINE_EDGE').names, [])
+    // A list that fits one string keeps the old single plain form.
+    assert.deepEqual(packNameParts(['a::b']), [packNames(['a::b'])])
+    assert.deepEqual(carriedNames({ BASELINE_EDGE: packNames(['a::b']) }, 'BASELINE_EDGE').names, ['a::b'])
+    // Too large even for the maximum number of parts: refused with the job and the size, nothing printed but the error.
+    const huge = Array.from({ length: 30000 }, (_, index) => label(index)), hugeLines = []
+    const hugeSize = Buffer.byteLength(packNames([...huge].sort()))
+    assert.ok(hugeSize > PACKED_NAMES_MAX_PARTS * PACKED_NAMES_MAX_BYTES, String(hugeSize))
+    writeFileSync(join(box.temp, 'h.jsonl'), rows(huge))
+    assert.equal(main(['baseline', '--suite', 'edge', '--node', join(box.temp, 'h.jsonl'), '--root', box.work, '--exit', '0'], line => hugeLines.push(line)), 1)
+    assert.equal(hugeLines.length, 1, 'no packed list is printed at all')
+    assert.equal(hugeLines[0], `::error::retention edge: the packed passed names of job edge are ${hugeSize} bytes, over the cap of ${PACKED_NAMES_MAX_BYTES} bytes; they are not truncated: split the suite or carry the names another way`)
+    // A compare handed ONE string over the cap refuses as before.
     const printed = []
     assert.equal(main(['compare', '--suite', 'ui', '--baseline', packNames(names), '--node', join(box.temp, 'r.jsonl'), '--root', box.work, '--exit', '0'], line => printed.push(line)), 1)
     assert.match(printed[0], /^::error::retention ui: the packed passed names of job ui are \d+ bytes, over the cap/)
@@ -334,7 +376,7 @@ function addedFixture(added, { main: mainFiles = {} } = {}) {
   const git = (...args) => execFileSync('git', args, { cwd: work, env, encoding: 'utf8' })
   const put = (path, text) => { mkdirSync(dirname(join(work, path)), { recursive: true }); writeFileSync(join(work, path), text) }
   git('init', '-q', '-b', 'main')
-  put('deploy/ci/retention.mjs', readFileSync(JUDGE, 'utf8')); put('deploy/ci/frozen-paths.mjs', readFileSync(join(ROOT, 'deploy/ci/frozen-paths.mjs'), 'utf8'))
+  put('deploy/ci/retention.mjs', readFileSync(JUDGE, 'utf8')); put('deploy/ci/frozen-paths.mjs', GUARDED_FENCE)
   put('vitest.config.ts', 'export default {}\n'); put('packages/client/ui-layout/tests/old.client.spec.tsx', 'old\n'); put('packages/client/ui-layout/tests/helper.ts', 'main helper\n')
   put('deploy/cloudflare/src/__tests__/old.test.mjs', 'old\n')
   for (const [path, text] of Object.entries(mainFiles)) put(path, text)

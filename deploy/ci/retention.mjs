@@ -188,6 +188,47 @@ export const unpackNames = packed => { const text = gunzipSync(Buffer.from(Strin
  * list is never truncated (a truncated list would drop names from what must be kept).
  */
 export const PACKED_NAMES_MAX_BYTES = 120 * 1024
+/**
+ * PARTS: main's edge suite outgrew one string (128,392 packed bytes) and every proposal's baseline went
+ * red. Nothing is truncated and no string ever passes the cap: a list too large for one string is carried in up to
+ * PACKED_NAMES_MAX_PARTS strings, each packed on its own and each within the cap. A single part keeps the old format (plain
+ * base64). Several parts each begin `<index>/<count>:` so the job that compares knows how many it must hold: a missing,
+ * repeated or out-of-order part gives NO names (the run then fails "the baseline holds no passed test"), never fewer.
+ * The parts ride in `<NAME>`, `<NAME>_2` … `<NAME>_<count>`. A list that does not fit the maximum still fails.
+ */
+export const PACKED_NAMES_MAX_PARTS = 4
+export const partEnvNames = name => [name, ...Array.from({ length: PACKED_NAMES_MAX_PARTS - 1 }, (_, index) => `${name}_${index + 2}`)]
+/** The fewest parts (1..MAX) whose strings each fit the cap; null when even MAX parts do not. */
+export function packNameParts(names) {
+  const single = packNames(names)
+  if (Buffer.byteLength(single) <= PACKED_NAMES_MAX_BYTES) return [single]
+  for (let count = 2; count <= PACKED_NAMES_MAX_PARTS; count++) {
+    const size = Math.ceil(names.length / count), parts = []
+    for (let index = 0; index < count; index++) parts.push(`${index + 1}/${count}:${packNames(names.slice(index * size, (index + 1) * size))}`)
+    if (parts.every(part => Buffer.byteLength(part) <= PACKED_NAMES_MAX_BYTES)) return parts
+  }
+  return null
+}
+/** Every carried part of one baseline, read from an environment. `{ names }`, or `{ tooLarge: bytes }` for a string over the
+ * cap. Fails closed: anything but one plain string, or exactly parts 1..count in order, gives no names. */
+export function carriedNames(source, name) {
+  const keys = partEnvNames(name), first = String(source[keys[0]] ?? '').trim()
+  for (const key of keys) { const bytes = Buffer.byteLength(String(source[key] ?? '')); if (bytes > PACKED_NAMES_MAX_BYTES) return { tooLarge: bytes } }
+  const head = /^1\/([2-9]):/.exec(first)
+  try {
+    if (!head) return keys.slice(1).some(key => String(source[key] ?? '').trim() !== '') ? { names: [] } : { names: unpackNames(first) }
+    const count = Number(head[1]), names = []
+    if (count > PACKED_NAMES_MAX_PARTS) return { names: [] }
+    for (let index = 0; index < keys.length; index++) {
+      const value = String(source[keys[index]] ?? '').trim()
+      if (index >= count) { if (value !== '') return { names: [] }; continue }
+      const prefix = `${index + 1}/${count}:`
+      if (!value.startsWith(prefix)) return { names: [] }
+      names.push(...unpackNames(value.slice(prefix.length)))
+    }
+    return { names }
+  } catch (_error) { return { names: [] } }
+}
 const packedTooLarge = (suite, bytes) => `::error::retention ${suite}: the packed passed names of job ${suite} are ${bytes} bytes, over the cap of ${PACKED_NAMES_MAX_BYTES} bytes; they are not truncated: split the suite or carry the names another way`
 
 /**
@@ -247,7 +288,8 @@ export async function addedRun({ suite, runner, fence, main, head, root, print, 
     own[fence] = sha256(fenceBytes)
     judge = await import('data:text/javascript;base64,' + fenceBytes.toString('base64'))
     const diff = execFileSync('git', ['diff', '--no-renames', '--no-ext-diff', '--name-status', '-z', `${main}...${head}`], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-    inventory = judge.addedTestFiles(diff)[runner]
+    // The added-run jobs run only at the guarded door level (proposal-checks.yml), so main's fence judges at 'guarded'.
+    inventory = judge.addedTestFiles(diff, 'guarded')[runner]
   } catch (error) { return fail(`the inventory could not be read from git (${error?.message ?? error})`) }
   if (!Array.isArray(inventory)) return fail('the fence gave no inventory')
   // Decided before the run, never after it: no added file of this runner means nothing runs.
@@ -448,16 +490,15 @@ export function protectedRun({ runs, root, hold, print, spawn = spawnSync, self 
   for (const run of runs) {
     if (!/^[a-z][a-z0-9-]{0,40}$/.test(run?.suite ?? '') || !['node', 'vitest'].includes(run.runner) || !/^[A-Z][A-Z0-9_]{0,63}$/.test(run.baselineEnv ?? '')
       || !Array.isArray(run.args) || !run.args.length || !run.args.every(arg => typeof arg === 'string' && arg !== '')) return fail('each run needs --suite, --runner node|vitest, --baseline-env <NAME> and its runner arguments after --')
-    const carried = source[run.baselineEnv] ?? ''
-    if (Buffer.byteLength(carried) > PACKED_NAMES_MAX_BYTES) { print(packedTooLarge(run.suite, Buffer.byteLength(carried))); return 1 }
-    let names
-    try { names = unpackNames(carried) } catch (_error) { names = [] }
+    const carried = carriedNames(source, run.baselineEnv)
+    if (carried.tooLarge !== undefined) { print(packedTooLarge(run.suite, carried.tooLarge)); return 1 }
+    const names = carried.names
     if (!names.length) return fail(`${run.suite}: the baseline holds no passed test (${run.baselineEnv}); nothing was run`)
     held.push({ ...run, names })
   }
   const env = { ...source }
   delete env.NODE_TEST_CONTEXT
-  for (const run of runs) delete env[run.baselineEnv]
+  for (const run of runs) for (const key of partEnvNames(run.baselineEnv)) delete env[key]
   const reporter = reporterOf(selfBytes)
   let restored
   try { restored = holdFiles(root, hold) } catch (error) { return fail(`the files the job put back could not be read (${error?.message ?? error}); nothing was run`) }
@@ -568,15 +609,14 @@ export function main(argv, print = line => console.log(line)) {
   if (command === 'baseline') {
     const verdict = baselineVerdict(results, exitCode)
     if (!verdict.ok) { print(`::error::retention ${suite}: ${verdict.reason}`); return 1 }
-    const packed = packNames(verdict.passed), bytes = Buffer.byteLength(packed)
-    if (bytes > PACKED_NAMES_MAX_BYTES) { print(packedTooLarge(suite, bytes)); return 1 }
-    print(packed)
+    const parts = packNameParts(verdict.passed)
+    if (parts === null) { print(packedTooLarge(suite, Buffer.byteLength(packNames(verdict.passed)))); return 1 }
+    for (const part of parts) print(part) // one line per part: the job writes line n to the output `<suite>` (n = 1) or `<suite>_<n>`
     return 0
   }
-  const carried = (baselineEnv !== undefined ? process.env[baselineEnv] : baseline) ?? ''
-  if (Buffer.byteLength(carried) > PACKED_NAMES_MAX_BYTES) { print(packedTooLarge(suite, Buffer.byteLength(carried))); return 1 }
-  let names
-  try { names = unpackNames(carried) } catch (_error) { names = [] }
+  const carried = carriedNames(baselineEnv !== undefined ? process.env : { BASELINE: baseline ?? '' }, baselineEnv ?? 'BASELINE')
+  if (carried.tooLarge !== undefined) { print(packedTooLarge(suite, carried.tooLarge)); return 1 }
+  const names = carried.names
   const verdict = retentionVerdict(names, results, exitCode)
   if (!verdict.ok) { print(`::error::retention ${suite}: ${verdict.reason}`); for (const name of verdict.missing) print(`missing: ${name}`); return 1 }
   print(`retention ${suite}: all ${names.length} test(s) that passed on main passed here`)

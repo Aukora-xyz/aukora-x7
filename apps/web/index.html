@@ -9,6 +9,11 @@
     <meta name="apple-mobile-web-app-title" content="AUKORA" />
     <link rel="icon" type="image/png" href="/aukora-icon-96.png" />
     <title>AUKORA</title>
+    <!-- Never a white frame while she starts: until a stylesheet paints, the canvas is the browser's dark one; the
+         shell's first stylesheet (packages/client/web/src/base.css) then paints the Spatial night under the boot page,
+         and the theme presenter's own color-scheme replaces this default. No inline style here: the Mac host serves
+         this page only without one (server/asset-cache.mjs UNSUPPORTED_RUNTIME_HTML). -->
+    <meta name="color-scheme" content="dark" />
   </head>
   <body>
     <div id="root"></div>

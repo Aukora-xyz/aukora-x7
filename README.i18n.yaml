@@ -3,14 +3,14 @@
 # After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write README.md
 /aukora:
-  en: dc938dd5029f865b
-  zh: e6150b39c4d6c2db
+  en: 4df08fa19fae8f4a
+  zh: f917e36f8e09f0cc
 /aukora/what-is-built-and-how-far-it-is-proven:
-  en: eae214f64ef6e751
-  zh: d937cd8a6adcff45
+  en: 4f43d2e8cf1b06b5
+  zh: af5c6bdb0982c676
 /aukora/the-rule-and-where-it-stops:
-  en: af919396d0503f7b
-  zh: 32f6476cf30a1333
+  en: c6228b4a8f717815
+  zh: 3ad3790750b28184
 /aukora/the-rule-and-where-it-stops/one-picture:
   en: 69877cf7cdcbd3f9
   zh: 98df971af678b78d
@@ -18,11 +18,11 @@
   en: 1bb052f36a1cc115
   zh: aee7aebf85b0930e
 /aukora/what-is-deliberately-not-done:
-  en: bbb094d58eb866a0
-  zh: b6079fe74ee712b7
+  en: 0cc563edee630af3
+  zh: e4f960b7ce867f41
 /aukora/where-it-is-going:
-  en: 87a8d96e17806316
-  zh: 4a4c8873e5541610
+  en: b6e949b0ad30931a
+  zh: d4679bd4c9b53c76
 /aukora/go-deeper:
   en: 97fed875af0f01dc
   zh: 2fe79126a4a09606

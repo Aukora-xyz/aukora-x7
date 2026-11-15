@@ -70,7 +70,11 @@ it('ships install metadata with the built web application', async () => {
     // `standalone` keeps the phone's status bar; `fullscreen` hides it and the
     // navigation bar, which strands a chat surface with no clock or battery.
     display: 'standalone',
-    background_color: '#111520',
+    // Moved pin (2026-11-15): was '#111520'. The splash is the first frame of the installed app, so it is the colour
+    // the next frame paints: the boot page and the Spatial canvas, --aukora-background rgb(11, 13, 24) = #0b0d18
+    // (packages/client/web/tests/boot-page-look.client.spec.ts holds the two equal). theme_color stays #111520: after
+    // boot the Spatial theme presenter writes theme-color from the body's background, the dark --dsw-alias-bg-base.
+    background_color: '#0b0d18',
     theme_color: '#111520',
     icons: [
       { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },

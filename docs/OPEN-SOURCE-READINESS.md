@@ -63,7 +63,7 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 ### 8. Deployment values are placeholders written into code
 
-- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 2866), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
+- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3014), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
 - A cloud deployment from this tree into a fresh account is UNVERIFIED.
 - By: the maintainers.
 

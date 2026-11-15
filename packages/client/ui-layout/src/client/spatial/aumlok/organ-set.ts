@@ -121,46 +121,90 @@ export async function organSetBodyOf(input: {
     parentBallId: typeof staged.parentBallId === 'string' ? staged.parentBallId : null, organs }
 }
 
+/** What HEAD holds, as a removal of ONE ordinary organ this page can offer. */
+export type OrganRemoveRead =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'offer'; readonly body: OrganRemoveBody }
+  /** HEAD holds a removal this page cannot confirm: shown with the reason, never offered. */
+  | { readonly kind: 'blocked'; readonly why: string; readonly claimed: Readonly<Record<string, unknown>> | null }
+  | { readonly kind: 'unread'; readonly why: string }
+
 /**
- * What HEAD holds, as an organ set this page can offer.
+ * What HEAD holds, read once: as an organ set (adds) and as a removal of one organ. HEAD records at most one of the two
+ * bodies for a Pearl; each is offered only when this page recomputes it byte for byte from the published head and the staged
+ * bytes. The published head is fetched only when HEAD claims one of them.
  * @param signal - aborts the reads.
  * @param fetchImpl - the page's fetch (tests pass their own).
  */
-export async function readOrganSet(signal: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch): Promise<OrganSetRead> {
+export async function readOrganChange(signal: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch): Promise<{
+  readonly set: OrganSetRead
+  readonly remove: OrganRemoveRead
+}> {
+  const none = { kind: 'none' } as const
   let raw: unknown
   try {
     const response = await fetchImpl(PROMOTION_STATUS_PATH, { credentials: 'same-origin', cache: 'no-store', signal })
-    if (response.status === 404 || response.status === 501) return { kind: 'none' }
-    if (!response.ok) return { kind: 'unread', why: `HEAD answered ${String(response.status)}` }
+    if (response.status === 404 || response.status === 501) return { set: none, remove: none }
+    if (!response.ok) { const unread = { kind: 'unread', why: `HEAD answered ${String(response.status)}` } as const; return { set: unread, remove: unread } }
     const text = await response.text()
-    if (text.length > PROMOTION_STATUS_MAX_BYTES) return { kind: 'unread', why: 'HEAD\'s answer was too large' }
+    if (text.length > PROMOTION_STATUS_MAX_BYTES) { const unread = { kind: 'unread', why: 'HEAD\'s answer was too large' } as const; return { set: unread, remove: unread } }
     raw = JSON.parse(text)
   } catch {
-    return { kind: 'unread', why: 'HEAD did not answer in a form this page reads' }
+    const unread = { kind: 'unread', why: 'HEAD did not answer in a form this page reads' } as const
+    return { set: unread, remove: unread }
   }
   const parsed = await parseHeadStaged(raw)
-  if (parsed.kind !== 'staged') return parsed.kind === 'unread' ? { kind: 'unread', why: parsed.why } : { kind: 'none' }
-  const claimed = parsed.record.organSet ?? null
-  if (claimed === null) return { kind: 'none' }
+  if (parsed.kind !== 'staged') {
+    const read = parsed.kind === 'unread' ? { kind: 'unread', why: parsed.why } as const : none
+    return { set: read, remove: read }
+  }
+  const claimedSet = parsed.record.organSet ?? null
+  const claimedRemove = parsed.record.organRemove ?? null
+  if (claimedSet === null && claimedRemove === null) return { set: none, remove: none }
+  const blocked = (why: string, setWhy = why) => ({
+    set: claimedSet === null ? none : { kind: 'blocked', why: setWhy, claimed: claimedSet } as const,
+    remove: claimedRemove === null ? none : { kind: 'blocked', why, claimed: claimedRemove } as const,
+  })
   const promotion = parsed.record.promotion
-  if (promotion === null) return { kind: 'blocked', why: 'HEAD served no staged bytes for it, so its organs cannot be checked here', claimed }
+  if (promotion === null) return blocked('HEAD served no staged bytes for it, so the change cannot be checked here',
+    'HEAD served no staged bytes for it, so its organs cannot be checked here')
   let published: unknown
   try {
     const response = await fetchImpl('/_head/ball', { credentials: 'same-origin', cache: 'no-store', signal })
     published = response.ok ? await response.json() : null
   } catch { published = null }
   const head = isRecord(published) && isRecord(published.ball) ? published.ball : published
-  if (!isRecord(head)) return { kind: 'blocked', why: 'the published Pearl was not read, so the change cannot be checked', claimed }
+  if (!isRecord(head)) return blocked('the published Pearl was not read, so the change cannot be checked')
   const stagedBall = promotion.body.ball
-  const codeBySha = isRecord(promotion.body.codeBySha) ? promotion.body.codeBySha : null
-  const publishedCode = isRecord(published) && isRecord(published.codeBySha) ? published.codeBySha : null
-  const computed = isRecord(stagedBall) ? await organSetBodyOf({ published: head, staged: stagedBall, codeBySha, publishedCode })
-    : 'the staged Pearl was not readable'
-  if (typeof computed === 'string') return { kind: 'blocked', why: computed, claimed }
-  if (canonicalJson(computed) !== canonicalJson(claimed)) {
-    return { kind: 'blocked', why: 'HEAD\'s list differs from the list this page computes from the staged bytes, so nothing is asked', claimed }
+  let set: OrganSetRead = none
+  if (claimedSet !== null) {
+    const codeBySha = isRecord(promotion.body.codeBySha) ? promotion.body.codeBySha : null
+    const publishedCode = isRecord(published) && isRecord(published.codeBySha) ? published.codeBySha : null
+    const computed = isRecord(stagedBall) ? await organSetBodyOf({ published: head, staged: stagedBall, codeBySha, publishedCode })
+      : 'the staged Pearl was not readable'
+    set = typeof computed === 'string' ? { kind: 'blocked', why: computed, claimed: claimedSet }
+      : canonicalJson(computed) !== canonicalJson(claimedSet)
+        ? { kind: 'blocked', why: 'HEAD\'s list differs from the list this page computes from the staged bytes, so nothing is asked', claimed: claimedSet }
+        : { kind: 'offer', body: computed }
   }
-  return { kind: 'offer', body: computed }
+  let remove: OrganRemoveRead = none
+  if (claimedRemove !== null) {
+    const computed = isRecord(stagedBall) ? organRemoveBodyOf({ published: head, staged: stagedBall }) : 'the staged Pearl was not readable'
+    remove = typeof computed === 'string' ? { kind: 'blocked', why: computed, claimed: claimedRemove }
+      : canonicalJson(computed) !== canonicalJson(claimedRemove)
+        ? { kind: 'blocked', why: 'HEAD\'s removal differs from the one this page computes from the staged bytes, so nothing is asked', claimed: claimedRemove }
+        : { kind: 'offer', body: computed }
+  }
+  return { set, remove }
+}
+
+/**
+ * What HEAD holds, as an organ set this page can offer.
+ * @param signal - aborts the reads.
+ * @param fetchImpl - the page's fetch (tests pass their own).
+ */
+export async function readOrganSet(signal: AbortSignal, fetchImpl: typeof fetch = globalThis.fetch): Promise<OrganSetRead> {
+  return (await readOrganChange(signal, fetchImpl)).set
 }
 
 /** Whether two organ-set bodies are the same request, byte for byte (canonical JSON): the card and the chat card both use it. */
@@ -180,6 +224,81 @@ export function organWords(organ: OrganSetOrgan): string {
 export async function approveOrganSet(body: OrganSetBody, origin: string, deps: Class3Dependencies,
   fetchImpl: typeof fetch = globalThis.fetch): Promise<PromotionOutcome | { readonly kind: 'not-approved'; readonly reason: string }> {
   const action = await class3Action({ audience: origin, method: 'POST', pathname: HEAD_PROMOTE_PATH, body })
+  const approval = await approveClass3(action, deps)
+  if (!approval.ok) return { kind: 'not-approved', reason: approval.reason }
+  const sent: Readonly<Record<string, unknown>> = { ...body }
+  return promoteStagedOnHead({ ballId: body.ballId, token: approval.token, body: sent, signal: deps.signal,
+    approvalLeftMs: () => approval.hostRemainingMs - (performance.now() - approval.receivedAt), fetchImpl })
+}
+
+// ---- Removing ONE ordinary organ with one Touch ID (the mirror image of the add) ----
+export const ORGAN_REMOVE_SCHEMA = 'aukora.head-organ-remove.v1'
+/** The pathname a removal approval binds (owner-grant-policy.mjs ORGAN_REMOVE_PATH): never the add's, so neither approval can
+ * stand for the other. The body is still POSTed to /_head/promote. */
+export const ORGAN_REMOVE_PATH = '/_head/promote/organ-remove'
+
+/** The exact body a passkey approves to remove one organ (field names and order as HEAD builds it). */
+export interface OrganRemoveBody {
+  readonly schema: typeof ORGAN_REMOVE_SCHEMA
+  readonly ballId: string
+  readonly epoch: number
+  readonly parentBallId: string | null
+  readonly organ: { readonly organId: string; readonly sha256: string }
+}
+
+const REMOVE_FIELDS = ['id', 'specifier', 'disabled', 'config', 'previousSpecifiers', 'previousVersions', 'updatedAt', 'governance']
+
+/**
+ * Recompute the removal body from the published manifest and the staged one, by HEAD's rule (organ-set-rule.mjs
+ * `organRemoval`, copied; the shared vectors server/organ-remove-rule.vectors.json keep the two equal).
+ * @returns the body, or why the Pearl is not a plain removal of one ordinary organ this page can confirm.
+ */
+export function organRemoveBodyOf(input: {
+  readonly published: Readonly<Record<string, unknown>>
+  readonly staged: Readonly<Record<string, unknown>>
+}): OrganRemoveBody | string {
+  const { published, staged } = input
+  if (!isRecord(published.entries) || !isRecord(published.modules) || !isRecord(staged.entries) || !isRecord(staged.modules)) return 'a manifest was not readable'
+  for (const key of new Set([...Object.keys(published), ...Object.keys(staged)])) {
+    if (ROOT_FIELDS_MAY_DIFFER.includes(key)) continue
+    if (Object.hasOwn(published, key) !== Object.hasOwn(staged, key) || canonicalJson(published[key]) !== canonicalJson(staged[key])) {
+      return `it also changes the Pearl's ${key}`
+    }
+  }
+  if (staged.parentBallId !== published.ballId || staged.epoch !== Number(published.epoch) + 1) return 'it does not extend the published Pearl'
+  const before = published.entries, after = staged.entries
+  const added = Object.keys(after).find(id => !Object.hasOwn(before, id))
+  if (added !== undefined) return `it also adds ${added}`
+  const removed = Object.keys(before).filter(id => !Object.hasOwn(after, id))
+  if (removed.length !== 1) return removed.length === 0 ? 'it removes no organ' : `it removes ${String(removed.length)} organs; one approval removes one`
+  for (const id of Object.keys(after)) {
+    if (canonicalJson(before[id]) !== canonicalJson(after[id])) return `it also changes ${id}`
+  }
+  if (canonicalJson(published.modules) !== canonicalJson(staged.modules)) return 'it changes the Pearl\'s modules'
+  const id = removed[0] as string
+  const entry = before[id]
+  if (!/^[a-z][a-z0-9-]{0,40}$/.test(id) || !isRecord(entry)) return `${id} is not an organ this page can read`
+  if (isGovernanceEntry(id, entry)) return `${id} is a governance organ (removed only on the governance card)`
+  const specifier = typeof entry.specifier === 'string' ? entry.specifier : ''
+  if (Object.keys(entry).some(key => !REMOVE_FIELDS.includes(key)) || entry.id !== id || typeof entry.disabled !== 'boolean'
+    || !/^ball:[0-9a-f]{64}$/.test(specifier) || !Object.hasOwn(published.modules, specifier.slice(5))) return `${id} is not a plain ordinary organ`
+  if (typeof staged.ballId !== 'string' || !HEX_64.test(staged.ballId) || typeof staged.epoch !== 'number') return 'the Pearl has no id'
+  return { schema: ORGAN_REMOVE_SCHEMA, ballId: staged.ballId, epoch: staged.epoch,
+    parentBallId: typeof staged.parentBallId === 'string' ? staged.parentBallId : null, organ: { organId: id, sha256: specifier.slice(5) } }
+}
+
+/** Whether two removal bodies are the same request, byte for byte (canonical JSON). */
+export function sameOrganRemove(a: OrganRemoveBody, b: OrganRemoveBody): boolean {
+  return canonicalJson(a) === canonicalJson(b)
+}
+
+/**
+ * Ask the passkey for exactly this removal (bound to ORGAN_REMOVE_PATH), then have HEAD promote the Pearl it holds with it.
+ * @returns HEAD's outcome, or why nothing was sent.
+ */
+export async function approveOrganRemove(body: OrganRemoveBody, origin: string, deps: Class3Dependencies,
+  fetchImpl: typeof fetch = globalThis.fetch): Promise<PromotionOutcome | { readonly kind: 'not-approved'; readonly reason: string }> {
+  const action = await class3Action({ audience: origin, method: 'POST', pathname: ORGAN_REMOVE_PATH, body })
   const approval = await approveClass3(action, deps)
   if (!approval.ok) return { kind: 'not-approved', reason: approval.reason }
   const sent: Readonly<Record<string, unknown>> = { ...body }

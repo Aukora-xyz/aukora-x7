@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Copyright (c) 2026 The Aukora authors
 /**
- * THE REPO PROPOSAL CARD (Wave 4, Wall 2): a branch Auma staged for merging into main, shown with every commit and file it
+ * THE REPO PROPOSAL CARD: a branch Auma staged for merging into main, shown with every commit and file it
  * changes and its CI, merged on one Touch ID (`aumlok/repo-proposal.ts`). The card shows only while a proposal is staged,
  * or with the outcome of the owner's approval.
  * @module portal/RepoProposalCell
@@ -12,11 +12,11 @@ import {
   needsReconcile, readPromotionAnswer, reconcileHeld, repoProposalProblems, shownAttemptIds,
   type ForgettableRelease, type HeldAttempt, type RepoProposal, type RepoProposalRead,
 } from '../aumlok/repo-proposal.ts'
-import type { Class3Action, Class3Dependencies } from '../aumlok/class3-approval.ts'
+import { CLASS3_APPROVAL_HEADER, type Class3Action, type Class3Dependencies } from '../aumlok/class3-approval.ts'
 import { FieldTable, Lead, PortalButton, PortalCell, RecordList, RecordRow, StatusPill, type Tone } from '../primitives/index.ts'
 import { useDebounced, useLiveEvents } from '../work/autonomy.ts'
 import { beginApproval, endApproval, freshFor, mergeApprovalKey, passkeyDidNotComplete, TAP_AGAIN } from './touch-id-timing.ts'
-import { clockText } from './notices.ts'
+import { approvalsChanged, clockText } from './notices.ts'
 
 export interface RepoProposalCellProps {
   readonly active: boolean
@@ -27,6 +27,11 @@ export interface RepoProposalCellProps {
   readonly fetchImpl?: typeof fetch
   /** Told whether the card shows, so the waiting section above it shows only when something does. */
   readonly onShown?: (shown: boolean) => void
+  /**
+   * Told whether a proposal on the card still waits for the owner (staged and not merged, or one this page cannot
+   * read), so the header counts what waits, not what is shown: a card showing "Merged" waits for nothing.
+   */
+  readonly onWaiting?: (waiting: boolean) => void
 }
 
 interface Checked {
@@ -42,6 +47,8 @@ type CardRead = { readonly kind: 'quiet' } | { readonly kind: 'staged'; readonly
  * `forget`: at the bound, the oldest kept release a release may forget. */
 interface Outcome {
   readonly state: 'working' | 'merged' | 'released' | 'refused' | 'unclear'
+  /** While working: reading HEAD again, waiting for the fingerprint, or the approved request is with the host. */
+  readonly step?: 'reading' | 'fingerprint' | 'merging'
   readonly text: string
   readonly about: string
   readonly attemptId?: string
@@ -63,6 +70,18 @@ const checksNote = (proposal: RepoProposal): string | null => (proposal.ciStatus
       + 'Approving checks them again now; if they are not green, nothing is spent and nothing merges.')
 
 const short = (sha: string): string => sha.slice(0, 12)
+
+/** The button's one label, whatever step the approval is at (TAP_AGAIN names it). */
+const APPROVE_LABEL = 'Approve with Touch ID'
+const WAITING_WORDS = 'Waiting for Touch ID…'
+const REREADING_WORDS = 'Reading the proposal again before asking for your passkey…'
+/**
+ * THE MINUTE OF SILENCE: after the passkey answers, the approved request goes to the host, which checks main and the
+ * branch and merges through GitHub before it answers; the card used to keep saying "Waiting for Touch ID…" all that time.
+ */
+const MERGING_WORDS = 'Touch ID approved it. Merging: the host has the approved request and is merging it now…'
+/** Her title on the card's main block: two lines at most (every word of it is in "What she says it does"). */
+const TWO_LINES = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', overflowWrap: 'anywhere' } as const
 
 async function readCard(signal: AbortSignal, fetchImpl: typeof fetch | undefined): Promise<CardRead> {
   const { repo, body } = await readPromotionAnswer(signal, fetchImpl)
@@ -90,7 +109,7 @@ async function checkedRead(repo: RepoProposalRead, body: unknown): Promise<CardR
   return { kind: 'staged', checked: { proposal: repo.proposal, canonical: repo.canonical, problems, terms }, held: heldAttemptOf(body) }
 }
 
-export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImpl, onShown }: RepoProposalCellProps) {
+export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImpl, onShown, onWaiting }: RepoProposalCellProps) {
   const [read, setRead] = useState<CardRead>({ kind: 'quiet' })
   const [tick, setTick] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -143,6 +162,12 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
   const shows = !(checked === null && read.kind !== 'malformed' && shownOutcome === null)
   useEffect(() => { onShown?.(shows) }, [shows, onShown])
   useEffect(() => () => { onShown?.(false) }, [onShown])
+  // What waits is not what shows: a merged proposal still on the card, or a card left showing only an outcome, waits
+  // for nothing; a staged proposal, and one HEAD holds that this page cannot read, still do.
+  const mergedHere = shownOutcome?.state === 'merged'
+  const waiting = (checked !== null && !mergedHere) || read.kind === 'malformed'
+  useEffect(() => { onWaiting?.(waiting) }, [waiting, onWaiting])
+  useEffect(() => () => { onWaiting?.(false) }, [onWaiting])
   if (!shows) return null
 
   const approve = async (): Promise<void> => {
@@ -161,7 +186,17 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
     const controller = new AbortController()
     approval.current = controller
     const signal = controller.signal
-    setOutcome({ state: 'working', about: checked.canonical, text: fresh ? 'Waiting for Touch ID…' : 'Reading the proposal again before asking for your passkey…' })
+    setOutcome(fresh ? { state: 'working', step: 'fingerprint', about: checked.canonical, text: WAITING_WORDS }
+      : { state: 'working', step: 'reading', about: checked.canonical, text: REREADING_WORDS })
+    // THE MINUTE OF SILENCE: the approved request is the only call approveAndMerge makes through this fetch (the
+    // passkey ceremony uses its own host call), and it carries the approval. The moment it leaves, the passkey has answered
+    // and the host has it: the card says it is merging. The request is passed on exactly as given.
+    const sending: typeof fetch = (input, init) => {
+      if (!signal.aborted && new Headers(init?.headers).has(CLASS3_APPROVAL_HEADER)) {
+        setOutcome({ state: 'working', step: 'merging', about: checked.canonical, text: MERGING_WORDS })
+      }
+      return fetchImpl === undefined ? globalThis.fetch(input, init) : fetchImpl(input, init)
+    }
     try {
       // READ AGAIN AT THE CLICK (when the card's check is not fresh): the passkey is asked only for the proposal HEAD holds now.
       const recheckAt = Date.now()
@@ -179,8 +214,11 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
         return
       }
       // The re-check is the card's check now, so one more tap after a passkey Safari would not open goes straight to it.
-      if (!fresh) { setRead(now); setReadAt(recheckAt); setStale(null) }
-      const result = await approveAndMerge(now.checked.proposal, now.checked.terms, { ...ceremony, signal }, fetchImpl)
+      if (!fresh) {
+        setRead(now); setReadAt(recheckAt); setStale(null)
+        setOutcome({ state: 'working', step: 'fingerprint', about: checked.canonical, text: WAITING_WORDS })
+      }
+      const result = await approveAndMerge(now.checked.proposal, now.checked.terms, { ...ceremony, signal }, sending)
       // After the passkey: the card's other facts (CI, files) are read once more; a change is said beside the outcome.
       const after = await readCard(signal, fetchImpl)
       const drifted = after.kind === 'staged' && after.checked.canonical !== now.checked.canonical && result.kind !== 'merged'
@@ -189,6 +227,8 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
       setOutcome({ state: result.kind === 'merged' ? 'merged' : result.kind === 'unclear' ? 'unclear' : 'refused',
         text: tapAgain ? TAP_AGAIN : `${words}${drifted ? ' (The proposal changed meanwhile: read it again before approving.)' : ''}`,
         about: checked.canonical })
+      // Notices on this page reads HEAD again now, instead of at its next push or poll.
+      if (result.kind === 'merged') approvalsChanged()
     } catch (error) {
       setOutcome({ state: 'unclear', about: checked.canonical, text: `No clear answer (${error instanceof Error ? error.message : String(error)}). `
         + 'Refresh reads it again; check GitHub before approving again.' })
@@ -210,7 +250,7 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
     const controller = new AbortController()
     approval.current = controller
     const attemptId = attempt.attemptId
-    setOutcome({ state: 'working', about, text: 'Waiting for Touch ID…', attemptId })
+    setOutcome({ state: 'working', step: 'fingerprint', about, text: WAITING_WORDS, attemptId })
     try {
       const result = await approveAndRelease(attempt, { ...ceremony, signal: controller.signal }, fetchImpl, forget)
       const offer = result.forget === undefined ? {} : { forget: result.forget }
@@ -231,6 +271,13 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
   const checksFailed = proposal?.ciStatus === 'failed'
   const t2 = proposal === null ? 0 : proposal.changedFiles.filter(file => file.t2Protected).length
   const ready = checked !== null && checked.problems.length === 0 && checked.proposal.ciStatus !== 'failed'
+  // The card's one status line: under the button when the button shows, else where it always was, at the card's foot.
+  const buttonShown = checked !== null && checked.problems.length === 0
+  const outcomeLine = shownOutcome === null ? null : (
+    <Lead>
+      <span role="status" data-repo-proposal-outcome={shownOutcome.state} data-repo-proposal-step={shownOutcome.step}>{shownOutcome.text}</span>
+    </Lead>
+  )
   return (
     <PortalCell data-sovereignty-portal="repo-proposal">
       <PortalButton
@@ -273,36 +320,46 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
                 )}
               </Lead>
             )}
+            {/* Her title, two lines at most; every word of it, and her summary, under "What she says it does". */}
+            <Lead><span data-repo-proposal-title-line="" style={TWO_LINES} title={proposal.title}>{proposal.title}</span></Lead>
+            {/* THE FACTS HE APPROVES, short and always shown; the full commits are under "Exact commits". */}
+            <div data-repo-proposal-facts="">
+              <FieldTable rows={[
+                ['branch', <span key="branch" data-repo-proposal-branch="">{proposal.branch}</span>],
+                ['main moves', <span key="move" data-repo-proposal-move="">{`${short(proposal.baseSha)} → ${short(proposal.headSha)}`}</span>],
+                ['tree', <span key="tree" data-repo-proposal-tree="" title={proposal.treeSha}>{short(proposal.treeSha)}</span>],
+                ['checks on this commit', <span key="ci" data-repo-proposal-ci={proposal.ciStatus}><StatusPill tone={ci?.tone ?? 'muted'}>{ci?.text ?? ''}</StatusPill></span>],
+                ['files', `${String(proposal.changedFiles.length)} changed${t2 > 0 ? `, ${String(t2)} of them protected (T2)` : ''}`],
+                ...(proposal.stagedAt === null ? [] : [['staged on HEAD', new Date(proposal.stagedAt).toISOString()] as const]),
+              ]}
+              />
+            </div>
             {checked.problems.length > 0 ? (
               <Lead><span data-repo-proposal-problems="">{`No passkey is asked for: ${checked.problems.join(' · ')}`}</span></Lead>
             ) : (
               <>
-                <button type="button" className="x5-field" data-repo-proposal-approve="" disabled={busy || !ownerBound || checksFailed}
-                  onClick={() => { void approve() }}>
-                  {`Approve and Merge ${proposal.branch} with Touch ID`}
-                </button>
                 {ownerBound && checksFailed ? null : (
                   <Lead>
                     {ownerBound
-                      ? `Touch ID approves exactly this merge, once: main moves from ${short(proposal.baseSha)} to ${short(proposal.headSha)}. `
-                        + 'The host merges only if main and the branch are still exactly these commits.'
+                      ? <span data-repo-proposal-binding="">{`Touch ID approves exactly this merge, once: main moves from ${short(proposal.baseSha)} `
+                        + `to ${short(proposal.headSha)}. The host merges only if main and the branch are still exactly these commits.`}</span>
                       : 'No usable passkey is bound on this host, so nothing can approve it here.'}
                   </Lead>
                 )}
+                {/* THE ONE BUTTON, last in the main block; its step, its outcome or its refusal directly under it. */}
+                <button type="button" className="ak-action ak-action--primary" data-repo-proposal-approve="" aria-busy={busy}
+                  disabled={busy || !ownerBound || checksFailed || mergedHere} onClick={() => { void approve() }}>
+                  {APPROVE_LABEL}
+                </button>
+                {outcomeLine}
               </>
             )}
-            <FieldTable rows={[
-              ['proposal', proposal.title],
-              ...(proposal.summary === null ? [] : [['summary', proposal.summary] as const]),
-              ['branch', <span key="branch" data-repo-proposal-branch="">{proposal.branch}</span>],
-              ['main moves', <span key="move" data-repo-proposal-move="">{`${short(proposal.baseSha)} → ${short(proposal.headSha)}`}</span>],
-              ['tree', proposal.treeSha],
-              ['checks on this commit', <span key="ci" data-repo-proposal-ci={proposal.ciStatus}><StatusPill tone={ci?.tone ?? 'muted'}>{ci?.text ?? ''}</StatusPill></span>],
-              ['files', `${String(proposal.changedFiles.length)} changed${t2 > 0 ? `, ${String(t2)} of them protected (T2)` : ''}`],
-              ...(proposal.stagedAt === null ? [] : [['staged on HEAD', new Date(proposal.stagedAt).toISOString()] as const]),
-            ]}
-            />
             <RecordList>
+              <RecordRow tone="muted" title="What she says it does" summary={proposal.summary === null ? 'Her title, in full' : 'Her title and summary, in full'}>
+                <Lead><span data-repo-proposal-title="" style={{ overflowWrap: 'anywhere' }}>{proposal.title}</span></Lead>
+                {proposal.summary === null ? null
+                  : <Lead><span data-repo-proposal-summary="" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{proposal.summary}</span></Lead>}
+              </RecordRow>
               <RecordRow tone={t2 > 0 ? 'gold' : 'muted'} title="Changed files" summary={proposal.changedFiles.slice(0, 3).map(file => file.path).join(' · ')}>
                 <ul data-repo-proposal-files="" style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.6, overflowWrap: 'anywhere' }}>
                   {proposal.changedFiles.slice(0, CHANGED_FILES_SHOWN).map(file => (
@@ -316,12 +373,17 @@ export function RepoProposalCell({ active, round, ownerBound, ceremony, fetchImp
                 {proposal.changedFiles.length > CHANGED_FILES_SHOWN
                   ? <Lead>{`and ${String(proposal.changedFiles.length - CHANGED_FILES_SHOWN)} more files (not listed here)`}</Lead> : null}
               </RecordRow>
+              <RecordRow tone="muted" title="Exact commits" summary="main, the branch head and the tree, in full">
+                <div data-repo-proposal-exact="">
+                  <FieldTable rows={[['main (base)', proposal.baseSha], ['branch head', proposal.headSha], ['tree', proposal.treeSha]]} />
+                </div>
+              </RecordRow>
             </RecordList>
           </>
         )}
         {stale === null || checked === null ? null
           : <Lead><span role="status" data-repo-proposal-stale="">{`Not read again just now (${stale}): this is the proposal as last read.`}</span></Lead>}
-        {shownOutcome === null ? null : <Lead><span role="status" data-repo-proposal-outcome={shownOutcome.state}>{shownOutcome.text}</span></Lead>}
+        {buttonShown ? null : outcomeLine}
       </PortalButton>
     </PortalCell>
   )

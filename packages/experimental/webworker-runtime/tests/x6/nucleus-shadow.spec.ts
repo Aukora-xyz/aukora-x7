@@ -21,6 +21,7 @@ import { nucleusShadowView, projectSelfState, SELF_STATE_RESULT_BYTES } from '..
 import * as wasmCells from '../../src/x6/wasm-cells.ts'
 import { type CellHost } from '../../src/x6/wasm-cells.ts'
 import { FakeSocket, headManifestIdCanon, liveHead, mountE4, ORGAN_A2, PEARL_V2, putBall, sha256, type Call } from './e4-fixture.ts'
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 import { disposeCellHosts, realCellHost, REFLEX_BYTES, removedShadow, standInHost, VARIANTS, WRONG_REFLEX,
   type Variant } from './nucleus-fixture.ts'
 
@@ -220,6 +221,9 @@ function edgeAnswers(variant: Variant): (call: Call) => Response | null {
         binding: null, organSet: added.length ? { schema: 'aukora.head-organ-set.v1', organs: added.map(organId => ({ organId })) } : null } })
     }
     if (call.method === 'POST' && call.path === '/_head/lease') {
+      // HEAD requires a reservation before an ordinary replacement; the shared budget stand-in answers it.
+      const budget = idPromotionBudgetReply(call.body)
+      if (budget) return budget
       const body = call.body as { action: string; ownerPeerId: string }
       return Response.json(body.action === 'acquire'
         ? { ok: true, ballId: head.ballId, epoch: head.epoch,

@@ -78,7 +78,7 @@ import { organSetOutcomeWords } from './OrganSetCell.tsx'
 import { approveOrganSet, readOrganSet, sameOrganSet, type OrganSetBody } from '../aumlok/organ-set.ts'
 import { mergePromotionSources, promotionContextOf, publishedPearlOf, readHomePromotion } from './promotion-sources.ts'
 import {
-  headPromotionStateOf, landStepWords, parsePublishedHead, promotionOutcomeWords, promotionStateOf, type PromotionContext,
+  headPromotionStateOf, isHeldOrdinary, landStepWords, parsePublishedHead, promotionOutcomeWords, promotionStateOf, type PromotionContext,
   type PromotionState, type PublishedHead,
 } from './SovereigntySurface.tsx'
 
@@ -177,7 +177,9 @@ const pearlLine = (card: StagedCard): string =>
  * stands. A Pearl on HEAD already, one that needs no passkey, or a home that was not read draws nothing there, nor here.
  */
 const waitsInSovereignty = (state: PromotionState): boolean => state.kind === 'staged' || state.kind === 'malformed'
-  || state.kind === 'several' || (state.kind === 'unreadable' && state.staged === true) || state.kind === 'head-blocked'
+  || state.kind === 'several' || (state.kind === 'unreadable' && state.staged === true)
+  // A held ordinary change that needs nothing from him is not waiting on him (isHeldOrdinary).
+  || (state.kind === 'head-blocked' && !isHeldOrdinary(state))
 
 /** Whether a live mirror change may touch a file (the host did not say what changed, or named it). */
 const touches = (paths: readonly string[] | null, change: RegExp): boolean => paths === null || paths.length === 0
@@ -302,7 +304,7 @@ export async function readWaitingApprovals(signal: AbortSignal, fetchImpl: typeo
         if (await publishedPearlOf(state, null, held, false, await context.headIfRead()) !== null) return { ready, blocked }
         if (state.kind === 'staged' && state.reasons.length === 0 && state.source === 'head') ready.push(headPearl(state))
         else if (state.kind === 'not-class-3' && held.record.organSet != null) await organSet()
-        else blocked += 1
+        else if (!isHeldOrdinary(state)) blocked += 1
       } else blocked += 1
     }
     return { ready, blocked }

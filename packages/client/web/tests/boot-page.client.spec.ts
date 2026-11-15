@@ -14,21 +14,27 @@ describe('BootPage', () => {
   it('draws the loading skeleton before any plugin state arrives', () => {
     const { el } = mount()
     expect(el.firstElementChild?.getAttribute('data-dsh-boot')).toBe('')
-    expect(el.textContent).toContain('HARNESS')
+    // Moved pin (no inherited branding): was 'HARNESS', is 'AUKORA'.
+    expect(el.textContent).toContain('AUKORA')
+    expect(el.textContent).not.toContain('HARNESS')
     expect(el.textContent).toContain('Loading plugins…')
   })
 
   it('keeps loading while entries are active or loading', () => {
     const { el, page } = mount()
     page.setTotal(2)
+    // Moved pin (2026-11-15): the progress was the wheel's arc (--dsh-boot-arc 72deg, 180deg, 288deg); the turning
+    // trefoil carries none, so the same steps are pinned on the hint's count (0/2, 1/2, 2/2), and no arc is left.
     const spinner = el.querySelector<HTMLElement>('[data-dsh-boot-spinner]')
-    expect(spinner?.style.getPropertyValue('--dsh-boot-arc')).toBe('72deg')
+    expect(el.textContent).toContain('Loading plugins… 0/2')
     page.setState('a', 'active')
-    expect(spinner?.style.getPropertyValue('--dsh-boot-arc')).toBe('180deg')
+    expect(el.textContent).toContain('Loading plugins… 1/2')
     page.setState('b', 'loading')
     expect(el.querySelector('[data-dsh-boot-spinner]')).toBe(spinner)
+    expect(el.textContent).toContain('Loading plugins… 1/2')
     page.setState('b', 'active')
-    expect(spinner?.style.getPropertyValue('--dsh-boot-arc')).toBe('288deg')
+    expect(el.textContent).toContain('Loading plugins… 2/2')
+    expect(spinner?.style.getPropertyValue('--dsh-boot-arc')).toBe('')
     expect(el.textContent).toContain('Loading plugins…')
     expect(el.textContent).not.toContain('Failed to load plugins')
   })

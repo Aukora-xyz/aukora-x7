@@ -481,7 +481,11 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
       const origin = (globalThis as { location?: { origin?: string } }).location?.origin
       if (threadSync !== null && threadSync.role !== 'reader' && origin !== undefined) {
         void threadSync.settled
-          .then(({ mode }) => startThreadWriter({ vfs: mounted, persistence, net: writerNet(origin), boot: threadSync, mode }))
+          .then(({ mode }) => startThreadWriter({ vfs: mounted, persistence, net: writerNet(origin), boot: threadSync, mode,
+            // CARD 1 (her sender): the live path, asked for here and nowhere else, so every default in thread-writer.ts stays
+            // main's. 250 ms tick: a turn is acknowledged in under a second; 256 MiB: a conversation her cloud lacks is
+            // carried up in the 2 MiB pieces the loop already cuts.
+            live: true, limits: { tickMs: 250, createMaxBytes: 256 * 1024 * 1024 } }))
           .catch((error: unknown) => { console.warn('thread-writer: did not start', error) })
       }
     } catch (reason) {

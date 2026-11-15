@@ -21,7 +21,7 @@
 import {
   approveClass3, canonicalJson, class3Action, CLASS3_ACTION_SCHEMA, sendApprovedClass3, type Class3Action, type Class3Dependencies,
 } from './class3-approval.ts'
-import { caseTwinPaths, proposalPathRefusal, type ProposalPathCode } from './frozen-paths.ts'
+import { caseTwinPaths, doorLevel, proposalPathRefusal, REPO_DOOR_LEVEL, type ProposalPathCode, type RepoDoorLevel } from './frozen-paths.ts'
 
 export const REPO_PROPOSAL_SCHEMA = 'aukora.staged-repo-proposal.v1'
 /** Her branch namespace (the edge's AUMA_BRANCH_RE). Only a proposal branch is ever merged. */
@@ -122,10 +122,13 @@ export function touchesWorkflows(path: string): boolean {
  * passkey is asked only for terms this page computed itself, equal to the ones HEAD recorded.
  * @param proposal - the proposal as HEAD serves it.
  * @param audience - this page's origin.
+ * @param level - the door level (REPO_DOOR_LEVEL, deploy/ci/frozen-paths.mjs). At 'open' every path is hers to propose
+ * (.github/ included) but one that is not plain, a secret-shaped one or an installed-package folder; his passkey decides.
  * @returns the reasons, and the terms this page computed.
  */
-export async function repoProposalProblems(proposal: RepoProposal, audience: string)
+export async function repoProposalProblems(proposal: RepoProposal, audience: string, level: RepoDoorLevel = REPO_DOOR_LEVEL)
   : Promise<{ readonly problems: readonly string[]; readonly terms: Class3Action }> {
+  const open = doorLevel(level) === 'open'
   const problems: string[] = []
   const body = proposal.mergeBody
   if (!AUMA_PROPOSAL_BRANCH.test(proposal.branch)) problems.push(`the branch ${proposal.branch} is not one of her proposal branches (auma/proposal/…)`)
@@ -134,7 +137,7 @@ export async function repoProposalProblems(proposal: RepoProposal, audience: str
     problems.push('the merge request names other commits than the proposal it is shown with')
   }
   // A rename OUT of .github/ deletes a workflow there: the old path counts as much as the new one.
-  const workflows = proposal.changedFiles
+  const workflows = open ? [] : proposal.changedFiles
     .filter(file => touchesWorkflows(file.path) || (file.previousPath !== null && touchesWorkflows(file.previousPath)))
   if (workflows.length > 0) {
     problems.push(`it changes ${workflows.map(file => (file.previousPath === null ? file.path : `${file.previousPath} → ${file.path}`)).join(', ')}, `
@@ -153,8 +156,8 @@ export async function repoProposalProblems(proposal: RepoProposal, audience: str
   for (const file of proposal.changedFiles) {
     let worst: ProposalPathCode | null = null
     for (const [path, status] of sides(file)) {
-      if (touchesWorkflows(path)) continue
-      const code = proposalPathRefusal(path, status, twins.has(path))
+      if (!open && touchesWorkflows(path)) continue
+      const code = proposalPathRefusal(path, status, twins.has(path), level)
       if (code !== null && (worst === null || rank[code] < rank[worst])) worst = code
     }
     if (worst !== null) refused[worst].push(file)
@@ -168,7 +171,9 @@ export async function repoProposalProblems(proposal: RepoProposal, audience: str
       + 'which only a person with repo write may change (the judge, her ledger, the checks, the pins, or a test main already has)')
   }
   if (refused.REPO_PATH_NOT_OPEN.length > 0) {
-    problems.push(`it changes ${named(refused.REPO_PATH_NOT_OPEN)}, outside the paths a proposal may change, which only a person with repo write may change (ask on the relay)`)
+    problems.push(open
+      ? `it changes ${named(refused.REPO_PATH_NOT_OPEN)}, whose name has the shape of a credential file or an installed-package folder, which a proposal never changes`
+      : `it changes ${named(refused.REPO_PATH_NOT_OPEN)}, outside the paths a proposal may change, which only a person with repo write may change (ask on the relay)`)
   }
   const terms = await class3Action({ audience, method: 'POST', pathname: REPO_ROUTE, body })
   if (proposal.binding.audience !== audience) problems.push(`its passkey terms are for ${proposal.binding.audience}, not this page (${audience})`)

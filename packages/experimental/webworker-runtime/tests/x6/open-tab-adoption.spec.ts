@@ -12,6 +12,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { STAGED_HEAD_PROMOTION_PATH, STAGED_OUTWARD_PATH, type BallEntryRecord, type BallManifest } from '../../src/x6/ball-loader.ts'
 import { FakeSocket, ORGAN_A, headManifestIdCanon, mountE4, sha256, type Call } from './e4-fixture.ts'
+import { idPromotionBudgetReply } from './id-promotion-budget-fixture.ts'
 
 afterEach(() => { FakeSocket.instances.length = 0; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(resolve => setTimeout(resolve, 0)) }
@@ -239,6 +240,9 @@ describe('this tab adopts only the head it published', () => {
     const leases: string[] = []
     me = await openTab({ 'organ-a': ORGAN_A }, async (call) => {
       if (call.path === '/_head/lease' && call.method === 'POST') {
+        // HEAD requires a reservation before an ordinary replacement; the shared budget stand-in answers it.
+        const budget = idPromotionBudgetReply(call.body)
+        if (budget) return budget
         const body = call.body as { action: string; ownerPeerId: string }
         leases.push(body.action)
         const lease = { ownerPeerId: body.ownerPeerId, generation: 1, expiresAt: Date.now() + 30_000 }

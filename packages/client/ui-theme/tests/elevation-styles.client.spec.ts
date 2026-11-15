@@ -17,8 +17,11 @@ import { packageStylesheets, parseRules } from './stylesheet-scan.ts'
 const STROKE_COLOR = '--dsw-elevation-stroke-color'
 /** Shadow-token references that mark a rule as an elevated surface. */
 const ELEVATED_SHADOW = /--dsw-(?:shadow-lv|elevation-)/
-/** Neutral border tokens; the state palette (--dsw-alias-state-*) stays allowed. */
-const NEUTRAL_BORDER = /--dsw-alias-border-/
+/**
+ * Neutral border tokens; the state palette (--dsw-alias-state-*) stays allowed. The framework-free boot page cannot
+ * read the theme, so its own neutral edge (--dsh-boot-border, copied from --aukora-border) is held to the same rule.
+ */
+const NEUTRAL_BORDER = /--dsw-alias-border-|--dsh-boot-border\b/
 
 const sheetCss = readFileSync(
   fileURLToPath(new URL('../src/styles/gradient-shadow-text.css', import.meta.url)), 'utf8')
@@ -236,10 +239,10 @@ describe('neutral solid borders are hairlines', () => {
   /**
    * Spinner ring tracks, keyed `<basename> <selector>`: the border is the
    * drawn graphic (a rotating ring), not an outline, so it keeps its width.
+   * Empty since 2026-11-15: the boot page's ring ('boot-page.module.css
+   * .spinner') became the turning AUKORA trefoil and draws no border.
    */
-  const RING_TRACKS = new Set([
-    'boot-page.module.css .spinner',
-  ])
+  const RING_TRACKS = new Set<string>([])
 
   it('rejects a wide neutral border and a wide filled divider', () => {
     expect(wideNeutralBorders('.a { border: 1px solid var(--dsw-alias-border-l2); }'))

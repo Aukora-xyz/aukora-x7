@@ -75,7 +75,7 @@ export async function headPromotionBinding({ audience, ball, entryId, previous =
   return Object.freeze({ schema: 'aukora.class3.head-promotion.v1', audience, action: 'head.promote', ballId: ball.ballId, epoch: ball.epoch, organId, candidateSha256 })
 }
 
-export { codeOnlyUpdateCheck, ordinaryAddShapeOk, organAdditionSet, organSetOf, ORGAN_SET_MAX } from './organ-set-rule.mjs'
+export { codeOnlyUpdateCheck, ordinaryAddShapeOk, organAdditionSet, organRemoval, organSetOf, ORGAN_SET_MAX } from './organ-set-rule.mjs'
 
 export const ORGAN_SET_SCHEMA = 'aukora.head-organ-set.v1'
 export const ORGAN_SET_PATH = '/_head/promote'
@@ -86,6 +86,19 @@ export const ORGAN_SET_PATH = '/_head/promote'
 export function organSetPromotionBody(ball, organs, bytesOf) {
   return { schema: ORGAN_SET_SCHEMA, ballId: ball.ballId, epoch: ball.epoch, parentBallId: ball.parentBallId,
     organs: organs.map(organ => ({ organId: organ.organId, sha256: organ.sha256, bytes: bytesOf(organ.sha256) })) }
+}
+
+export const ORGAN_REMOVE_SCHEMA = 'aukora.head-organ-remove.v1'
+/** The pathname a removal approval binds. The body is still POSTed to /_head/promote, but the passkey binds
+ * this name, never ORGAN_SET_PATH: an add approval can never stand for a removal, nor the reverse (the schema in the body
+ * differs too). */
+export const ORGAN_REMOVE_PATH = '/_head/promote/organ-remove'
+
+/** The exact body an owner approves for removing ONE ordinary organ (`organRemoval`'s answer); ballId is the canonical id of
+ * the whole candidate manifest. */
+export function organRemovePromotionBody(ball, removal) {
+  return { schema: ORGAN_REMOVE_SCHEMA, ballId: ball.ballId, epoch: ball.epoch, parentBallId: ball.parentBallId,
+    organ: { organId: removal.organId, sha256: removal.sha256 } }
 }
 
 /** Return exactly the seven-field preimage used by the browser verifier. */

@@ -12,6 +12,18 @@
  * @module aumlok/frozen-paths
  */
 
+/**
+ * The door level, the page's copy of deploy/ci/frozen-paths.mjs REPO_DOOR_LEVEL (pinned equal by the spec).
+ * 'open': every path is hers to propose but a path that is not plain or canonical, a secret-shaped one and an
+ * installed-package folder; his passkey on the card is the gate. 'guarded': the lists below, as before the open level.
+ * The owner changes this line (in deploy/ci/frozen-paths.mjs and here).
+ */
+export type RepoDoorLevel = 'open' | 'guarded'
+export const REPO_DOOR_LEVEL: RepoDoorLevel = 'open'
+export const REPO_DOOR_LEVELS: readonly RepoDoorLevel[] = Object.freeze(['open', 'guarded'])
+/** A level as judged: anything but 'open' is the stricter 'guarded'. */
+export const doorLevel = (level: unknown): RepoDoorLevel => (level === 'open' ? 'open' : 'guarded')
+
 export const FROZEN_DIRECTORIES: readonly string[] = Object.freeze(['.github', 'deploy/ci'])
 
 export const DECISION_6_FILES: readonly string[] = Object.freeze([
@@ -161,7 +173,37 @@ export const CLOSED_INSIDE_OPEN: readonly string[] = Object.freeze([
   'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts',
   'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
   // ---- MANDATE block end ----
+  // What the frozen judges import is a judge too; closed by exact path, never by folder.
+  'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts',
+  'packages/client/ui-layout/src/client/spatial/apps/identity/webauthn.ts',
+  'packages/client/ui-layout/src/client/spatial/aumlok/aumlok-ceremony.ts',
+  'packages/client/ui-layout/src/client/spatial/portal/touch-id-timing.ts',
+  // The approval cards: each shows him what he approves with his fingerprint.
+  'packages/client/ui-layout/src/client/spatial/portal/OrganSetCell.tsx',
+  'packages/client/ui-layout/src/client/spatial/portal/NightGrantCell.tsx',
+  'packages/client/ui-layout/src/client/spatial/portal/OutwardApprovalCell.tsx',
+  'packages/client/ui-layout/src/client/spatial/portal/CodeDiffRow.tsx',
+  // The pins: she never changes the judge, the checks or the pins.
+  'packages/experimental/webworker-runtime/src/x6/scion-pins.ts',
+  'packages/experimental/webworker-runtime/src/x6/voice-organ-pins.ts',
+  // Independent read of an earlier commit: what those cards and the binding ceremony take their words, terms, diff and key from.
+  'packages/client/ui-layout/src/client/spatial/aumlok/outward-class3.ts',
+  'packages/client/ui-layout/src/client/spatial/aumlok/night-grant.ts',
+  'packages/client/ui-layout/src/client/spatial/aumlok/organ-set.ts',
+  'packages/client/ui-layout/src/client/spatial/portal/organ-code-diff.ts',
+  'packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts',
+  'packages/client/ui-layout/src/client/spatial/aumlok/aumlok-root.ts',
+  // Her storage: the whole folder, any name, subfolder or case spelling; her four thread sync files are opened again by
+  // exact path in OPEN_INSIDE_CLOSED.
   'packages/experimental/webworker-runtime/src/storage/**',
+])
+
+/** Open although a CLOSED_INSIDE_OPEN pattern covers them: exact, case-sensitive paths. */
+export const OPEN_INSIDE_CLOSED: readonly string[] = Object.freeze([
+  'packages/experimental/webworker-runtime/src/storage/thread-writer.ts',
+  'packages/experimental/webworker-runtime/src/storage/thread-sync.ts',
+  'packages/experimental/webworker-runtime/src/storage/thread-sync-plan.ts',
+  'packages/experimental/webworker-runtime/src/storage/thread-store-types.ts',
 ])
 
 export const CLOSED_NAMES: readonly string[] = Object.freeze(['package.json', 'tsconfig*.json', 'vite.config.*', 'vitest.*', '*.config.*', 'agents*.md', 'claude*.md', 'gemini*.md'])
@@ -187,8 +229,24 @@ const matcher = (patterns: readonly string[]): ((path: string) => boolean) => {
   const expressions = patterns.map(globRegExp)
   return path => expressions.some(expression => expression.test(path))
 }
-const openPath = matcher(OPEN_PATHS), openNewPath = matcher(OPEN_NEW_PATHS), closedInsideOpen = matcher(CLOSED_INSIDE_OPEN)
+// CLOSED_INSIDE_OPEN is matched against the lower-cased path, so its patterns are lower-cased too.
+const openPath = matcher(OPEN_PATHS), openNewPath = matcher(OPEN_NEW_PATHS)
+const closedInsideOpen = matcher(CLOSED_INSIDE_OPEN.map(entry => entry.toLowerCase()))
+const openInsideClosed = new Set(OPEN_INSIDE_CLOSED)
 const closedName = matcher(CLOSED_NAMES), closedSegment = matcher(CLOSED_SEGMENTS)
+
+const secretSegment = (part: string): boolean => (part.startsWith('.') && part !== '.github')
+  || /(?:private|secret|credential|password|keypair|vault|token)/iu.test(part)
+  || /(?:^|[._-])keys?(?:[._-]|$)/iu.test(part) || /^(?:id_rsa|id_ed25519)$/iu.test(part)
+
+/**
+ * Whether any segment of the path has a credential file's shape (refused at every level).
+ * @param path - repository-relative path.
+ * @returns true for a secret-shaped path.
+ */
+export function isSecretShapedRepoPath(path: unknown): boolean {
+  return typeof path !== 'string' || path.split('/').some(secretSegment)
+}
 
 /**
  * Whether a path holds only printable ASCII (no space, no control, nothing above U+007E).
@@ -240,20 +298,24 @@ export function frozenJudgedForm(path: unknown): string | null {
 /**
  * Whether a proposal may never change, add, delete or rename this path.
  * @param path - repository-relative path.
+ * @param level - the door level; at 'open' nothing is frozen but a path that is not canonical.
  * @returns true for a frozen path and for any path that is not canonical.
  */
-export function isFrozenRepoPath(path: unknown): boolean {
+export function isFrozenRepoPath(path: unknown, level: RepoDoorLevel = REPO_DOOR_LEVEL): boolean {
   const judged = frozenJudgedForm(path)
+  if (doorLevel(level) === 'open') return judged === null
   return judged === null || within(judged, FROZEN_DIRECTORIES) || exactFiles.has(judged)
 }
 
 /**
  * Whether a change or delete of this path (a test main already has) is refused; additions are free.
  * @param path - repository-relative path.
+ * @param level - the door level; at 'open' nothing is frozen but a path that is not canonical.
  * @returns true for a frozen test path and for any path that is not canonical.
  */
-export function isFrozenTestPath(path: unknown): boolean {
+export function isFrozenTestPath(path: unknown, level: RepoDoorLevel = REPO_DOOR_LEVEL): boolean {
   const judged = frozenJudgedForm(path)
+  if (doorLevel(level) === 'open') return judged === null
   return judged === null || within(judged, FROZEN_TEST_DIRECTORIES) || testFiles.has(judged)
 }
 
@@ -262,12 +324,16 @@ export function isFrozenTestPath(path: unknown): boolean {
  * segment, not closed inside an open folder. A pattern of OPEN_NEW_PATHS is open for 'added' only.
  * @param path - repository-relative path, exact case.
  * @param status - what the proposal does to it.
+ * @param level - the door level (REPO_DOOR_LEVEL).
  * @returns true when open.
  */
-export function isOpenRepoPath(path: unknown, status: 'added' | 'modified' | 'removed' = 'modified'): boolean {
+export function isOpenRepoPath(path: unknown, status: 'added' | 'modified' | 'removed' = 'modified', level: RepoDoorLevel = REPO_DOOR_LEVEL): boolean {
   if (!isPlainRepoPath(path) || frozenJudgedForm(path) === null) return false
   const parts = path.split('/')
-  if (parts.some(part => closedSegment(part.toLowerCase())) || closedName((parts.at(-1) ?? '').toLowerCase()) || closedInsideOpen(path.toLowerCase())) return false
+  if (doorLevel(level) === 'open') return !isSecretShapedRepoPath(path) && !parts.some(part => part.toLowerCase() === 'node_modules')
+  if (parts.some(part => closedSegment(part.toLowerCase())) || closedName((parts.at(-1) ?? '').toLowerCase())) return false
+  // OPEN_INSIDE_CLOSED lifts CLOSED_INSIDE_OPEN only, and only for the exact, case-sensitive path.
+  if (closedInsideOpen(path.toLowerCase()) && !openInsideClosed.has(path)) return false
   return openPath(path) || (status === 'added' && openNewPath(path))
 }
 
@@ -278,12 +344,18 @@ export type ProposalPathCode = 'REPO_PATH_NOT_PLAIN' | 'REPO_FROZEN_PATH_REFUSED
  * @param path - repository-relative path, exact case.
  * @param status - what the proposal does to it.
  * @param twin - whether the path has a case twin.
+ * @param level - the door level (REPO_DOOR_LEVEL).
  * @returns the refusal's code, or null when the path may change.
  */
-export function proposalPathRefusal(path: unknown, status: 'added' | 'modified' | 'removed', twin = false): ProposalPathCode | null {
+export function proposalPathRefusal(path: unknown, status: 'added' | 'modified' | 'removed', twin = false, level: RepoDoorLevel = REPO_DOOR_LEVEL)
+  : ProposalPathCode | null {
   if (!isPlainRepoPath(path) || twin) return 'REPO_PATH_NOT_PLAIN'
-  if (isFrozenRepoPath(path)) return 'REPO_FROZEN_PATH_REFUSED'
-  if (status !== 'added' && isFrozenTestPath(path)) return 'REPO_FROZEN_PATH_REFUSED'
-  if (!isOpenRepoPath(path, status)) return 'REPO_PATH_NOT_OPEN'
+  if (doorLevel(level) === 'open') {
+    if (frozenJudgedForm(path) === null) return 'REPO_PATH_NOT_PLAIN'
+    return isOpenRepoPath(path, status, 'open') ? null : 'REPO_PATH_NOT_OPEN'
+  }
+  if (isFrozenRepoPath(path, 'guarded')) return 'REPO_FROZEN_PATH_REFUSED'
+  if (status !== 'added' && isFrozenTestPath(path, 'guarded')) return 'REPO_FROZEN_PATH_REFUSED'
+  if (!isOpenRepoPath(path, status, 'guarded')) return 'REPO_PATH_NOT_OPEN'
   return null
 }

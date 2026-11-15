@@ -573,12 +573,13 @@ describe('the shelf she holds', () => {
     // default, as kyber-cpu and pentora-codec are). cord-run.ts sits in the open runtime folder like every x6 module; closing
     // it as cell-handoff.ts is closed is a REQUEST to the owner of deploy/ci (HANDOFF-1).
     const { isFrozenRepoPath, isOpenRepoPath } = await import(new URL('deploy/ci/frozen-paths.mjs', REPO).href) as {
-      isFrozenRepoPath: (path: string) => boolean
-      isOpenRepoPath: (path: string, status: string) => boolean
+      isFrozenRepoPath: (path: string, level: string) => boolean
+      isOpenRepoPath: (path: string, status: string, level: string) => boolean
     }
     for (const path of ['apps/web/public/cells/cord-echo.wasm', 'apps/web/public/cells/cord-echo.wat', 'apps/web/public/cells/cord/fifo24.profile.json',
       'deploy/cloudflare/src/cord-echo-cell.mjs', 'deploy/cloudflare/src/kyber-cell.mjs']) {
-      expect(isFrozenRepoPath(path) || !isOpenRepoPath(path, 'modified'), path).toBe(true)
+      // The guarded door level pins these closed (since 2026-11-15 the default level is 'open').
+      expect(isFrozenRepoPath(path, 'guarded') || !isOpenRepoPath(path, 'modified', 'guarded'), path).toBe(true)
     }
     expect(e.touched).toEqual([])
   }, 60_000)

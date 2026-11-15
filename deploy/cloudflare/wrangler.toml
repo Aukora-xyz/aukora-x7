@@ -21,6 +21,22 @@ PUBLIC_HOST = "node.example.invalid"
 ACCESS_TEAM = "your_team.cloudflareaccess.com"
 ACCESS_AUD = ""
 OWNER_EMAIL = ""
+# Thread sync is ON. The boot document
+# then tells her app to run it (thread-sync-mode.mjs): a browser that never saved her becomes a read-only reader instead of
+# a second writer, and her one writer browser may copy each thread's new lines to her cloud (thread-writer.ts). Her own
+# Chrome is not an eligible writer until her sender card lands (its mirror fence is out of step); until then this sends nothing.
+THREAD_SYNC = "on"
+# How many bytes of conversation lines her cloud accepts per UTC day (world-budget.mjs; the default is
+# 128 MiB). A browser may hold hundreds of MB of conversations its cloud was never sent: at the default its first
+# copy would stop at 128 MiB and every new turn after it would be refused until the next UTC midnight. 1 GiB a day; the
+# world's total (2 GiB, VAULT_MAX_BYTES unset) is unchanged. The owner changes this line.
+THREAD_DAY_BYTES = "1073741824"
+# When her browser is out of step with her cloud's whole-home copy, nothing of her home but her conversations reaches
+# her cloud.
+# "chrome-wins": at her next boot her browser moves to her cloud's version, keeps every one of its own bytes (a backup
+# row is kept of anything it adopts from her cloud, and of her cloud's bytes it overrides), and then sends everything it
+# holds; her browser's copy wins. Never deletes. Values: unset (off), "report", "apply", "chrome-wins" (mirror-do.mjs).
+MIRROR_REBASE = "chrome-wins"
 OWNER_PUBLIC_KEY_HEX = ""
 SOURCE_REVISION = "0000000000000000000000000000000000000000"
 PROVIDER_BUDGET_WINDOW_MS = "60000"
@@ -57,7 +73,7 @@ CLOUD_WAKE_PROVIDER = "deepseek"
 # anything else keeps every step look-only. Nothing on this path merges, deploys, deletes or touches a secret.
 # Committed "0" (every step stays look-only) until two read-only no-tab steps, a clean stop and right
 # counts have been shown on the live build. Then this becomes "1" in a commit of its own.
-WAKE_ACTS_ENABLED = "0"
+WAKE_ACTS_ENABLED = "1"
 
 [[durable_objects.bindings]]
 name = "HEAD"

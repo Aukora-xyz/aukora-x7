@@ -31,7 +31,7 @@ import { Lead, PortalButton, StatusPill } from '../primitives/index.ts'
 import { ErrorLine } from '../x5/common.tsx'
 import css from './ThreadsLane.module.css'
 import { threadPlaceOf, type ThreadPlace } from '../meta-workspace.ts'
-import { useThreadSyncMarks } from './thread-sync-marks.ts'
+import { joinCloudRows, useThreadCloudRows, useThreadSyncMarks } from './thread-sync-marks.ts'
 
 // ── Structural views of the live stores (assignable from the real DSH types, no new dependency) ─────────────────────
 
@@ -343,6 +343,40 @@ function ThreadsLaneBody({
   // The name is selected once, when its field opens (not again when the window gets the focus back).
   const renameSelected = useRef<SessionId | null>(null)
   const cloud = useThreadSyncMarks()
+  // CARD 3a: every conversation her cloud's index holds (worker side, thread-sync.ts `cloudRows`). Null until her
+  // worker answers, and then the lane names what it has never pulled instead of showing only this browser's journals.
+  const cloudList = useThreadCloudRows()
+  const shortId = (id: string): string => (id.length > 16 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id)
+  // ad872eb2: the join key is the SESSION id, so the rows carry it and the lane joins on it here, in one place
+  // that a ui-layout spec can check. A blank, subagent or voice session is never called "only in this browser".
+  const joined = joinCloudRows(cloudList?.rows ?? [], ids.map(id => ({
+    id: String(id),
+    hidden: byId[id]?.blank === true || byId[id]?.origin === 'subagent' || String(id) === readVoiceSessionId(),
+  })))
+  const cloudById = joined.bySession
+  // Listed, not openable: over the size a reader pulls (card 3b opens one tail-first) or not in this browser at all.
+  // A row whose path this build cannot name arrives with an empty id: it is COUNTED, never listed as a conversation.
+  const unmatched = (cloudList?.rows ?? []).filter(row => row.id === '').length
+  const cloudOnly = joined.cloudOnly.filter(row => row.id !== '')
+  // An index row wins on a copy that is smaller here; nothing is deleted, it is marked.
+  const olderCopies = joined.olderCopies.filter(row => row.id !== '')
+  // "Only in this browser" is the one claim that must never be made wrongly, so it is withheld entirely while any index
+  // row could not be tied to a session id: an unmatched row could be the row for one of these conversations under a
+  // path this build does not read. Silence is honest; a guess is not.
+  const localOnly = unmatched > 0 ? [] : joined.localOnly
+  // A row her cloud has no title for yet stays a count, not a name.
+  const namedCloudOnly = cloudOnly.filter(row => row.title !== null).slice(0, 4)
+  const unnamedCloudOnly = cloudOnly.length - namedCloudOnly.length
+  const cloudNotes = cloudList === null || (cloudOnly.length === 0 && olderCopies.length === 0 && localOnly.length === 0)
+    ? null
+    : [
+        cloudOnly.length === 0 ? null
+          : `Also in her cloud, listed only: ${String(cloudOnly.length)} conversation(s)${namedCloudOnly.length === 0 ? '' : `, ${namedCloudOnly.map(row => `${row.title ?? ''} (${String(row.bytes)} bytes${row.long ? ', long' : ''})`).join('; ')}`}${unnamedCloudOnly === 0 ? '' : `, ${String(unnamedCloudOnly)} without a name from her cloud yet`}.`,
+        olderCopies.length === 0 ? null
+          : `Older copy here: ${olderCopies.slice(0, 3).map(row => `${row.title ?? shortId(row.id)} (${String(row.local)} of ${String(row.bytes)} bytes)`).join('; ')}.`,
+        localOnly.length === 0 ? null
+          : `Only in this browser, not in her index: ${localOnly.slice(0, 3).map(shortId).join('; ')}.`,
+      ].filter((line): line is string => line !== null).join(' ')
 
   // Card times read "5 min ago"; a minute tick keeps them honest without a re-render per second.
   useEffect(() => {
@@ -371,9 +405,11 @@ function ThreadsLaneBody({
     if (summary.blank && id !== current) return
     const status = statuses.get(id)
     const pinOrder = pinnedIds.indexOf(id)
+    // CARD 3a: her index row wins over this browser's fallback title and time, when it has one.
+    const known = cloudById.get(String(id))
     rows.push({
       id,
-      title: summary.displayTitle,
+      title: known?.title ?? summary.displayTitle,
       storedTitle: summary.title ?? null,
       running: status?.running ?? summary.running,
       waiting: status?.pendingInteraction !== undefined && status.pendingInteraction !== null,
@@ -381,7 +417,7 @@ function ThreadsLaneBody({
       pinned: pinOrder >= 0,
       archived: archivedIds.includes(id),
       blank: summary.blank,
-      updatedAt: summary.updatedAt,
+      updatedAt: known?.activeAt ?? summary.updatedAt,
       order,
       pinOrder,
       place: threadPlaceOf(summary.cwd),
@@ -669,6 +705,8 @@ function ThreadsLaneBody({
         {cloud === null || cloud.footer === '' ? null : (
           <p className={css.source} data-threads-cloud-note data-threads-cloud-role={cloud.role}>{cloud.footer}</p>
         )}
+        {/* CARD 3a: what her cloud's index holds that this browser does not, in this lane's own words (listing only). */}
+        {cloudNotes === null ? null : <p className={css.source} data-threads-cloud-rows>{cloudNotes}</p>}
       </div>
     </div>
   )

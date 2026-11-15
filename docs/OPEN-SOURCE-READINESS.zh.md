@@ -63,7 +63,7 @@
 
 ### 8. 部署值是写进代码里的占位符
 
-- `your-node`、`node.example.invalid` 和全零的账户 id 放在 `deploy/cloudflare/wrangler.toml` 里。同样的值，以及仓库占位符 `your_org_x/your-node`，也被写进了代码，其中包括 `server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、2866 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行）、`deploy/ci/deploy-guard.mjs`（第 44 行）和 `server/owner-grant.mjs`（第 116 行）。`grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 会把它们连同测试和文档全部列出。
+- `your-node`、`node.example.invalid` 和全零的账户 id 放在 `deploy/cloudflare/wrangler.toml` 里。同样的值，以及仓库占位符 `your_org_x/your-node`，也被写进了代码，其中包括 `server/deploy-cloudflare.mjs`（第 21、24 行）、`deploy/cloudflare/src/cloud-brokers.mjs`（第 19、3014 行）、`server/seed-cloudflare.mjs`（第 14 行）、`server/cloudflare-bootstrap-cli.mjs`（第 6 行）、`deploy/ci/deploy-guard.mjs`（第 44 行）和 `server/owner-grant.mjs`（第 116 行）。`grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` 会把它们连同测试和文档全部列出。
 - 从这棵树部署到一个新账户，是 UNVERIFIED。
 - 由谁来做：维护者。
 

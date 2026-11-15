@@ -64,7 +64,7 @@ export async function executeCloudBrowserBody({
     ? {
         wish_id: transcript.wish.wish_id ?? null,
         status: transcript.wish.status ?? null,
-        stepsCompleted: transcript.wish.stepsCompleted ?? 0,
+        stepsCompleted: transcript.wish.stepsCompleted ?? 0, stepsWithEvidence: transcript.wish.stepsWithEvidence ?? null, evidenceCountKnown: transcript.wish.evidenceCountKnown === true, // HEAD's wishEvidenceView, via read
         maxSteps: transcript.wish.maxSteps ?? 0,
       }
     : null

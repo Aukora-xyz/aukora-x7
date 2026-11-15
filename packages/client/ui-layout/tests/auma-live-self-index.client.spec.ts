@@ -48,7 +48,7 @@ const NOW = 1_762_900_000_000
 function index(organs: Array<{ id: string; disabled?: boolean }> = [{ id: 'seed-aura' }, { id: 'auma-eyes' }]) {
   return {
     schema: 'aukora.capability-index.v1', voiceAuthority: 'none', mutating: false, epoch: 169,
-    ballId: '7c01cb98514e4ae700000000000000000000000000000000000000000000beef',
+    ballId: '688d831c4e8e159b00000000000000000000000000000000000000000000beef',
     registeredTools: [
       { name: 'x6_capability_index', readOnly: true, mutating: false, description: 'Read-only resident index.', parameters: [] },
       { name: 'x6_repo', readOnly: false, mutating: true, description: 'Read and draft changes.', parameters: [] },
@@ -133,7 +133,7 @@ describe('the answers', () => {
     const tools = await ask('What tools do you have?', t)
     expect(tools).toMatchObject({ status: 'sourced', code: 'INVENTORY', voiceAuthority: 'none', mutating: false,
       text: 'I have 2 registered tools, 1 read-only and 1 that can change things, at epoch 169. Tools: x6_capability_index, x6_repo.' })
-    expect(tools?.sources).toEqual([{ sourceKind: 'capability-index', trust: 'derived', epoch: 169, ref: 'epoch 169 · ball 7c01cb98514e4ae7 · digest cdcdcdcdcdcdcdcd' }])
+    expect(tools?.sources).toEqual([{ sourceKind: 'capability-index', trust: 'derived', epoch: 169, ref: 'epoch 169 · ball 688d831c4e8e159b · digest cdcdcdcdcdcdcdcd' }])
     expect(t.calls).toEqual([{ path: '/__x6__/call-tool', body: { name: 'x6_capability_index', args: { action: 'snapshot' } } }])
     expect((await ask('which epoch are you on'))?.text).toBe("I'm at epoch 169, with 2 organs in my head.")
     expect((await ask('list your organs'))?.text).toBe('I have 2 mounted organs, at epoch 169. Organs: seed-aura, auma-eyes.')
