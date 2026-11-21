@@ -49,6 +49,7 @@ import {
 } from './image-layout.ts'
 import { parseImageManifest, type ImageManifest } from './image-manifest.ts'
 import { mountX6BallRuntime, type X6BallRuntime } from './x6/ball-loader.ts'
+import { declareInProcessWorkflows } from './x6/workflow-executor.ts'
 import { VOICE_LEVEL } from './x6/voice-marks.ts'
 import { eyesWithPageFallback } from './x6/page-eyes-bridge.ts'
 import { bufferedRequestBody, bufferedStreamInit, requestStreamsSupported } from './transport/stream-body.ts'
@@ -408,6 +409,8 @@ export function createWorkerHost(options: WorkerHostOptions): WorkerHost {
 
       const { patches, profile, environment } = prepareProfile(appBoot, mounted, manifest, root, processShim.env)
       const profileConfig = join(profile.dir, 'cordis.yml')
+      // No Node child here, so `workflow` runs in this worker (x6/workflow-executor.ts).
+      declareInProcessWorkflows()
       progress.enter('plugins')
       const ctx = await appBoot.boot(BIN_NAME, profileConfig, patches, async (hostCtx) => {
         hostCtx.provide('profileContext', profile)

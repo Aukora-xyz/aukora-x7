@@ -1,7 +1,5 @@
 # Good first contributions
 
-English | [中文](GOOD-FIRST-CONTRIBUTIONS.zh.md)
-
 Ten real starting tasks. Each is tied to a file in this tree and to a red test or a stated gap. None is done.
 
 **These are not opened as issues.** They live only on this page. Before you start one, open an issue or a draft pull request that names its number here, so two people do not do the same work. When one is done, the pull request that closes it also removes it from this page.
@@ -24,7 +22,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 3. Find out why `node-stubs.spec.ts` fails
 
-- **Red:** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)" (the case built at line 96), found by the recorded run (of an earlier tree).
+- **Red:** `packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`, "execa refuses 1 called symbol(s)" (the case built at line 97), found by the recorded run (of an earlier tree).
 - **Done:** the called symbol and the cause are named; the stub or the test is fixed with the cause in the commit, or the row says why not.
 - **Check:** `pnpm exec vitest run packages/experimental/webworker-runtime/tests/node/node-stubs.spec.ts`.
 
@@ -60,7 +58,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 ## 9. One source for deployment values
 
-- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3014), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
+- **Gap:** the placeholders `your-node`, `node.example.invalid` and `your_org_x/your-node` are written into code as well as `deploy/cloudflare/wrangler.toml`: `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3269), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), and more (the grep below lists them). A fresh-account deployment is UNVERIFIED.
 - **Done:** every non-test code file that the grep below lists reads the values from one configuration source.
 - **Check:** `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists only that configuration, tests and documentation, and `node --test deploy/ci/*.test.mjs` has no failure (KNOWN-RED-TESTS.md lists none there).
 
@@ -74,7 +72,7 @@ Three words used below: an organ is one replaceable module of Auma, the AI in th
 
 - The restore rehearsal's open item "clock rollback across restart" (`deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs`, line 148). This touches the authority files and needs a second reviewer ([CONTRIBUTING.md](../CONTRIBUTING.md), rule 6).
 - A test that calls the compiler (`packages/experimental/webworker-runtime/src/x6/scion.ts`) and one that calls the self-build step (`mirror/home/auma/seed/organs/seed-cycle.js`). No test calls either today, so both are UNVERIFIED on every page. `scion.ts` is on the authority list, so rule 6 applies.
-- Read the Chinese twins of the new front pages (`*.zh.md`) against their English pages and report where they differ; where they do, the English page applies.
+- Read an inherited Chinese page (`*.zh.md`) against its English page and report where they differ; where they do, the English page applies. The project's own front pages have no Chinese twin (the owner's ruling of 2026-11-21).
 - Run test files that are outside the recorded commands, starting with `deploy/cloudflare/src/__tests__/owner-login-lockout.spec.ts` (command in `deploy/cloudflare/README.md`, line 173) and `apps/web/src/spatial/superagent/manifest.spec.ts`, and report the results.
 - Bring the older label words in [START-HERE.md](START-HERE.md) and [ARCHITECTURE-ACTUAL.md](ARCHITECTURE-ACTUAL.md) to the five labels above.
 - Replace the inherited Chinese issue and pull request templates in `.github/` with templates for this project.

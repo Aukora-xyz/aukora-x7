@@ -111,6 +111,23 @@ export const RUNTIME_WRITE_SET: readonly WriteSetEntry[] = Object.freeze([
     pathPattern: '/dsh/home/auma/{prompt-sections.json,HANDOFF.md,WISH.md}, /dsh/home/auma-one/HANDOFF.md, /dsh/workspace/HANDOFF.md, cordis.patch.yml',
     match: '^(/dsh/home/auma/(prompt-sections\\.json|HANDOFF\\.md|WISH\\.md)|/dsh/home/auma-one/HANDOFF\\.md|/dsh/workspace/HANDOFF\\.md|/dsh/home/profiles/web/cordis\\.patch\\.yml)$',
     transitionKinds: [], writers: w(BL, 'PROMPT_SECTIONS_PATH', 'CORDIS_PATCH_PATH', 'HANDOFF_PATH', 'AUMA_ONE_HANDOFF_PATH', 'WORKSPACE_HANDOFF_PATH', 'WISH_PATH') },
+  // Her voice scratch space (voice-scratch.ts): notes her fast voice writes, confined to its folder; nothing in
+  // it is run, imported, staged or obeyed.
+  { id: 'voice-scratch', class: 'continuity', pathPattern: '/dsh/home/auma/voice-scratch/<name>[/<name>...] (at most 4 deep)',
+    match: '^/dsh/home/auma/voice-scratch(/[A-Za-z0-9][A-Za-z0-9._-]{0,63}){1,4}$', transitionKinds: [], writers: w('voice-scratch.ts', 'target') },
+  // the voice memory and the one memory: her voice memory and her timeline (storage/voice-memory.ts, storage/memory-timeline.ts), each a
+  // chain file that only grows and a words file; written by their one-queue stores, never by a tool of hers.
+  { id: 'voice-memory', class: 'continuity', pathPattern: '/dsh/home/auma/voice/{chain,words}.v1.jsonl',
+    match: '^/dsh/home/auma/voice/(chain|words)\\.v1\\.jsonl$', transitionKinds: [], writers: [],
+    via: 'storage/voice-memory.ts createVoiceMemoryStore (the page-only route /__x6__/voice-memory)' },
+  { id: 'memory-timeline', class: 'continuity', pathPattern: '/dsh/home/auma/timeline/{chain,words}.v1.jsonl',
+    match: '^/dsh/home/auma/timeline/(chain|words)\\.v1\\.jsonl$', transitionKinds: [], writers: [],
+    via: 'storage/memory-timeline.ts createTimelineStore (the turn capture and voice pointers)' },
+  // The heard cursor (the highest timeline seq each conversation was given), one small file written whole through
+  // the same store's queue when a block is logged; never by a tool of hers.
+  { id: 'memory-heard-cursor', class: 'continuity', pathPattern: '/dsh/home/auma/timeline/heard.v1.json',
+    match: '^/dsh/home/auma/timeline/heard\\.v1\\.json$', transitionKinds: [], writers: [],
+    via: 'storage/memory-timeline.ts createTimelineStore saveHeard (createHeardFeed, when a block is logged)' },
   { id: 'page-eyes-captures', class: 'observation', pathPattern: '/dsh/home/{auma,auma-one}/captures/{latest.png,latest-projection.json,ring/*.png}',
     match: '^/dsh/home/(auma|auma-one)/captures/(latest\\.png|latest-projection\\.json|ring/[A-Za-z0-9-]{1,80}\\.png)$', transitionKinds: [],
     writers: w('page-eyes-bridge.ts', 'path', '`${CAPTURE_RING_DIR}/${name}`') },

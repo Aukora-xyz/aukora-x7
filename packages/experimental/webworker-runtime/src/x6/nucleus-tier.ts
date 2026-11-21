@@ -27,7 +27,7 @@ export const NUCLEUS_TIER_T1 = 256
  */
 export const NUCLEUS_TIER_PROTECTED = Object.freeze(['seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
   'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map', 'seed-judge', 'gate-judge', 'grant-ledger',
-  'aumlok-identity', 'aumlok-keys', 'auma-scion', 'seed-boot'])
+  'aumlok-identity', 'aumlok-keys', 'auma-scion', 'seed-boot', 'auma-kernel'])
 
 export type NucleusTierFactName = typeof NUCLEUS_TIER_FACT_NAMES[number]
 export type NucleusTierFacts =

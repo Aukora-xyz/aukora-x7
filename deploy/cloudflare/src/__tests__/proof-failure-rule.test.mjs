@@ -138,6 +138,8 @@ const NOT_IDENTITY = {
   'world-holder.mjs': 'installation-key proofs (which browser is her body): a 403 KEY_PROOF_INVALID refusal, no owner budget, no session; the owner\'s passkey for a move is judged in aumlok.mjs and head-do.mjs',
   // Lead's classification at the landing of the managed voice: the file imports neither the one rule nor the gate lockout.
   'voice-provider-speech-engine.mjs': 'the voice provider\'s Speech Engine JWT (HMAC) at /door/voice-brain: a refusal answered as an unknown path, no owner budget, no session',
+  // Lead's classification at the witness landing (the per-connection handshake lane): imported by nothing, so no owner budget is reachable.
+  'fresh-link.mjs': 'experimental per-connection handshake (FRESHLINK v0), imported by nothing: one handshake refusal code, no owner budget, no session',
 }
 /**
  * The verification primitives in this codebase, by the callee's source text:

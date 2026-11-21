@@ -7,6 +7,7 @@ import { createWorker } from '../worker.mjs'
 import { X61HeadDurableObject, bootstrapPackage, canonicalBootstrap, digest, manifestId } from '../head-do.mjs'
 import { MirrorDO } from '../mirror-do.mjs'
 import { recoveryRestoreKit } from '../recovery-restore.mjs'
+import { openFromShards, sealToShards } from '../sealed-shards.mjs'
 import { RECOVERY_RESTORE_PAGE, RECOVERY_RESTORE_INTROS, recoveryRestorePageMode } from '../recovery-restore-page.mjs'
 import { composeRecoveryRestorePageScript, recoveryRestorePageScriptModule } from '../recovery-restore-page.generate.mjs'
 import { applyMirrorEntries } from '../mirror-do.mjs'
@@ -982,4 +983,52 @@ test('the restore kit and the in-app check answer the longest takeover-and-tilde
       assert.ok(elapsed < 50, `${copy}: took ${elapsed.toFixed(1)} ms`)
     }
   }
+})
+
+test('a recovery file locked and cut 3 of 5 comes back from the pieces that are left and restores into an empty world', async t => {
+  const source = world(t), { ball } = await seed(source, { epoch: 171, receipts: 4, note: 'she remembers being scattered' })
+  // The file exactly as the Continuity screen writes it.
+  const capture = await captureRecoverySnapshot(new AbortController().signal, { fetchImpl: source.fetchImpl, origin: ORIGIN, now: () => 1794000000000 })
+  const file = new TextEncoder().encode(capture.json)
+  const sourceLive = await kit.liveState(source.fetchImpl, ORIGIN)
+  const secret = crypto.getRandomValues(new Uint8Array(32))
+  const sealed = await sealToShards(file, { secret, k: 3, n: 5 })
+  assert.equal(sealed.ok, true, JSON.stringify(sealed))
+  // Five places, one piece each. No piece holds a readable line of the file.
+  const places = sealed.shards.map((bytes, index) => ({ index, bytes: Uint8Array.from(bytes) }))
+  for (const place of places) assert.equal(Buffer.from(place.bytes).includes(Buffer.from('aukora.recovery-snapshot')), false)
+  // Place 0 is gone and place 1 hands back a changed piece: three good pieces are left.
+  const spoiled = { index: 1, bytes: Uint8Array.from(places[1].bytes) }
+  spoiled.bytes[7] ^= 1
+  const opened = await openFromShards({ manifest: sealed.manifestJson, shards: [places[4], spoiled, places[2], places[3]], secret })
+  assert.equal(opened.ok, true, JSON.stringify({ ...opened, plain: undefined }))
+  assert.deepEqual(opened.used, [2, 3, 4])
+  assert.deepEqual(opened.rejected, [{ index: 1, why: 'hash' }])
+  assert.equal(opened.manifestSha256, sealed.manifestSha256)
+  assert.equal(Buffer.compare(Buffer.from(opened.plain), Buffer.from(file)), 0, 'the file comes back byte for byte')
+  // One more place gone: it does not open. A stranger with every piece and another secret: it does not open.
+  const fewer = await openFromShards({ manifest: sealed.manifestJson, shards: [places[4], spoiled, places[2]], secret })
+  assert.equal(fewer.code, 'SHARDS_TOO_FEW')
+  assert.equal(fewer.good, 2)
+  const stranger = await openFromShards({ manifest: sealed.manifestJson, shards: places, secret: crypto.getRandomValues(new Uint8Array(32)) })
+  assert.equal(stranger.code, 'SHARDS_SECRET')
+
+  // The file that came back restores into an EMPTY world, through the same kit and the same checks as any recovery file.
+  const snapshot = JSON.parse(new TextDecoder().decode(opened.plain))
+  const target = world(t)
+  assert.equal((await target.fetchImpl('/__x6/status')).status, 503)
+  const preview = await kit.previewRestore({ fetchImpl: target.fetchImpl, origin: ORIGIN, snapshot })
+  assert.equal(preview.ok, true, JSON.stringify(preview))
+  assert.equal(preview.action, 'restore')
+  assert.equal(preview.live.kind, 'empty')
+  const restored = await kit.applyRestore({ fetchImpl: target.fetchImpl, origin: ORIGIN, preview, confirm: true })
+  assert.equal(restored.ok, true, JSON.stringify(restored))
+  assert.equal(restored.after.head.epoch, 171)
+  assert.equal(restored.after.head.ballId, ball.ballId)
+  assert.deepEqual(restored.after.highWater, sourceLive.highWater)
+  assert.equal(restored.after.highWater.receiptCount, 4)
+  assert.equal(restored.after.mirrorSha256, sourceLive.mirrorSha256)
+  const read = async (edge, path) => (await edge.fetchImpl(path)).json()
+  assert.deepEqual((await read(target, '/_mirror/export')).entries, (await read(source, '/_mirror/export')).entries)
+  assert.deepEqual((await read(target, '/_head/ball')).head, (await read(source, '/_head/ball')).head)
 })

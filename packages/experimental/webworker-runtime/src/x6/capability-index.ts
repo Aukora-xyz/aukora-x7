@@ -82,7 +82,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 
 const clip = (value: unknown, max: number): string => typeof value === 'string' ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : ''
 
-function summarizeParameters(parameters: unknown): CapabilityToolSummary['parameters'] {
+export function summarizeParameters(parameters: unknown): CapabilityToolSummary['parameters'] {
   if (!record(parameters)) return []
   // JSON-schema shape `{ type: 'object', properties, required }` or the defineTool map `{ name: { type, required, enum } }`.
   const properties = record(parameters.properties) ? parameters.properties : parameters
@@ -121,6 +121,29 @@ export function classifyToolMutation(
   const readOnly = READ_ONLY_TOOLS.has(name) || whole || (actions !== undefined ? actions.write.length === 0
     : (declaration.readOnly === true && declaration.mutating !== true) || READ_VERB.test(tail))
   return { readOnly, mutating: !readOnly, ...(actions ? { actions } : {}) }
+}
+
+/**
+ * What `classifyToolMutation`'s answer for this tool rests on. `actions`: a closed action enum, judged per
+ * action. `listed`: a read-only tool named in READ_ONLY_TOOLS, or a whole-tool row of the voice switch table. `declared`:
+ * the tool's own definition says `readOnly: true` (and not `mutating`) and it takes no `action`, `subAction`, `kind` or
+ * `type`. `name`: ONLY the last segment of its name is a read verb, a heuristic that is never a safety rule. `none`: it is
+ * not classed a read at all.
+ */
+export type CapabilityReadBasis = 'actions' | 'listed' | 'declared' | 'name' | 'none'
+export function classifyReadBasis(
+  name: string,
+  parameters: CapabilityToolSummary['parameters'],
+  declaration: { readonly readOnly?: unknown; readonly mutating?: unknown } = {},
+): CapabilityReadBasis {
+  const row = Object.hasOwn(VOICE_SWITCH_TABLE, name) ? VOICE_SWITCH_TABLE[name] : undefined
+  if (READ_ONLY_TOOLS.has(name) || (row?.selector === 'whole' && Object.hasOwn(row.values, '*'))) return 'listed'
+  if (parameters.some(parameter => (parameter.name === 'action' || parameter.name === 'subAction') && parameter.enum)) return 'actions'
+  // Review fix: a declaration counts for a single-purpose tool only; a tool with an open `action` (no closed enum) may act
+  // by an argument the declaration cannot see, as the brief's rule asks (a declaration with a closed action enum).
+  if (declaration.readOnly === true && declaration.mutating !== true
+    && !parameters.some(parameter => ['action', 'subAction', 'kind', 'type'].includes(parameter.name))) return 'declared'
+  return READ_VERB.test(name.replace(/^x6_/, '').split(/[_-]/).pop() ?? '') ? 'name' : 'none'
 }
 
 function deepFreeze<T>(value: T): T {

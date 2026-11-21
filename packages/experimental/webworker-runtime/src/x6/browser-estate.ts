@@ -15,6 +15,8 @@ import type { MemoryVfs } from '../storage/memory.ts'
 import { sha256HexSync } from '../module-system/module-loader.ts'
 import { CELL_BROWSER_FUEL_CAP, CELL_EXECUTION_TIMEOUT_MS, CELL_MAX_MEMORY_PAGES, CELL_PINS, SKILL_MAX_FUEL, SKILL_MAX_MEMORY_PAGES, WASM_PAGE_BYTES } from './wasm-cells.ts'
 import { withholdSecrets } from './secret-shapes.ts'
+/** The same secret-shape filter, for her fast voice's `recall` (ball-loader.ts reaches it through this module). */
+export { withholdSecrets }
 import { parseRow, rawNeedle, titleOf, WORD_ROWS, wordsOf } from './thread-rows.ts'
 
 export const ESTATE_SECTIONS = Object.freeze(['vfs', 'sessions', 'search', 'persistence', 'cordis', 'wasm', 'receipts'] as const)
@@ -46,7 +48,10 @@ export const PRIVATE_ROOT = '/dsh/home/auma/private'
 export const SESSIONS_ROOT = '/dsh/home/sessions'
 const RECEIPTS_PATH = '/dsh/home/auma/seed/receipts.v3.jsonl'
 const CHECKPOINTS_PATH = '/dsh/home/auma/seed/checkpoints.v1.jsonl'
+/** Also `.env` files (`.env`, `.env.local`), `.npmrc`, SSH keys without an extension (`id_rsa`,
+ * `id_ed25519`, `id_ecdsa`) and `*.token` files. The rule is tested against the file's NAME only. */
 const SENSITIVE_NAME = /(?:keypair|private[-_.]?key|secret|credential|password|\.pem$|\.key$|\.p12$|session\.cap$)/i
+const SENSITIVE_FILE = /(?:^\.env(?:\..*)?$|\.npmrc$|^id_(?:rsa|ed25519|ecdsa|dsa)$|\.token$)/i
 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
@@ -54,7 +59,7 @@ const record = (value: unknown): value is Record<string, unknown> => value !== n
 export function estateRedaction(path: string): 'private' | 'sensitive-name' | null {
   if (path === PRIVATE_ROOT || path.startsWith(PRIVATE_ROOT + '/')) return 'private'
   const name = path.slice(path.lastIndexOf('/') + 1)
-  return SENSITIVE_NAME.test(name) ? 'sensitive-name' : null
+  return SENSITIVE_NAME.test(name) || SENSITIVE_FILE.test(name) ? 'sensitive-name' : null
 }
 
 /** Decode a session directory name to the workspace it belongs to; legacy forms are named. */

@@ -26,7 +26,7 @@ import { keysCardOf } from '../src/client/spatial/portal/sovereignty-cards.ts'
 import { en, zh } from '../src/client/spatial/locales.ts'
 import type { FileRead } from '../src/client/spatial/work/WorkSurface.tsx'
 
-const HEAD = '7c01cb98514e4ae7a6aaa0dc29653282d94bc4717b85a18968b47aa4310120a8'
+const HEAD = 'b962ac2552628d01966c828fcbe6ead446314d0ee234feeacd60b91a113b5d51'
 const SOURCE = '5ba508cc0f1e2d3c4b5a69788796a5b4c3d2e1f0'
 /** The edge's `unsupported` list as deploy/cloudflare/src/worker.mjs answers it today (public web fetch bound). */
 const TODAY_UNSUPPORTED = ['native-shell', 'local-repository', 'eyes', 'no-tab-agent-loop', 'runtime-recovery', 'cold-r2-backup',
@@ -246,8 +246,8 @@ describe('durability strip projection', () => {
     const first = tiles({ head: { kind: 'idle' }, aumlok: { kind: 'reading' }, receipts: null, facts: { kind: 'reading' }, host: { kind: 'reading' },
       status: { kind: 'reading' }, health: { kind: 'reading' } })
     expect(first.every(entry => entry.state === 'reading' && entry.value === 'reading…')).toBe(true)
-    const mac = tiles({ host: { kind: 'local', host: '127.0.0.1:3099' }, head: { kind: 'ok', value: { epoch: '12', ballId: HEAD, buildSha: '7c493845' } } })
-    expect(tile(mac, 'source')).toMatchObject({ name: 'Mac checkout', value: '7c493845', state: 'live', tone: 'blue' })
+    const mac = tiles({ host: { kind: 'local', host: '127.0.0.1:3099' }, head: { kind: 'ok', value: { epoch: '12', ballId: HEAD, buildSha: '688d831c' } } })
+    expect(tile(mac, 'source')).toMatchObject({ name: 'Mac checkout', value: '688d831c', state: 'live', tone: 'blue' })
     expect(tile(mac, 'cold-backup')).toMatchObject({ state: 'unavailable', detail: 'the Mac host serves no /api/health' })
     expect(tile(mac, 'spend')).toMatchObject({ state: 'unavailable', detail: 'the Mac host serves no /api/health' })
     const macUnknown = tiles({ host: { kind: 'local', host: '127.0.0.1:3099' }, head: { kind: 'ok', value: { epoch: '12', ballId: HEAD, buildSha: 'unknown' } } })

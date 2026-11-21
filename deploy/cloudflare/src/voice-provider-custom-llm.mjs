@@ -12,7 +12,7 @@
  * party only; VOICE-PROVIDER.md section A).
  */
 
-import { CONVERSATION_ID_RE, PROVIDER_HISTORY_MAX, PROVIDER_TRANSCRIPT_MAX_CHARS } from './voice-provider-speech-engine.mjs'
+import { CONVERSATION_ID_RE, PROVIDER_HISTORY_MAX, PROVIDER_ENTRY_MAX_CHARS } from './voice-provider-speech-engine.mjs'
 
 export const CUSTOM_LLM_ROUTES = Object.freeze(['/door/voice-llm', '/door/voice-llm/chat/completions'])
 export const CUSTOM_LLM_CONVERSATION_HEADER = 'x-aukora-voice-conversation'
@@ -51,7 +51,9 @@ export async function toBridgeEvents(bodyText, headers) {
   if (!users.length) return null
   const text = users.at(-1).trim()
   return {
-    events: [{ kind: 'init', conv }, { kind: 'transcript', eventId: users.length, text: text.length <= PROVIDER_TRANSCRIPT_MAX_CHARS ? text : '' }],
+    // The history's shape as the speech-engine adapter says it (its last message's role; how many are his).
+    events: [{ kind: 'init', conv }, { kind: 'transcript', eventId: users.length, text: text.length <= PROVIDER_ENTRY_MAX_CHARS ? text : '',
+      tail: { user: 'user', assistant: 'agent' }[body.messages.at(-1).role], users: users.length }],
     hash: await sha256Hex(JSON.stringify(users)),
   }
 }

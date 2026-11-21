@@ -84,6 +84,16 @@ export const CLOUD_REPO_LOG_LIMITS = Object.freeze({ commits: 100, defaultCommit
  * files are read back through GitHub's contents API (githubFileAt), which carries content only up to 1 MB. */
 export const CLOUD_REPO_BRANCH_LIMITS = Object.freeze({ fileBytes: 512 * 1024, publicationBytes: 4 * 1024 * 1024, files: 64, requestBytes: 3 * 4 * 1024 * 1024 + 32 * 1024 })
 
+/** Her largest source files (ball-loader.ts is about 614 KB) are read, searched, edited and
+ * patched up to `fileBytes` (2 MiB). Cause of the old BROKER_BODY_TOO_LARGE: every file was read through the contents API
+ * with a response bound sized for 512 KiB (githubFileAt), and that API carries no content past 1 MB. A file over 512 KiB
+ * is now read through the git blob API by its tree sha (`/git/blobs/{sha}`), its bytes checked against that sha.
+ * `edit` and `apply_patch` RESULTS may be up to 2 MiB (the request carries only the edit or the patch; the edge reads,
+ * applies and commits, and answers facts and a bounded hunk); a full-content `write`/`commit` keeps 512 KiB per file
+ * (CLOUD_REPO_BRANCH_LIMITS), and so does an edit kept as a draft in her tab (no `message`), since that draft is the file. */
+export const CLOUD_REPO_LARGE_FILE_LIMITS = Object.freeze({ fileBytes: 2 * 1024 * 1024, encodedResponseBytes: Math.ceil(2 * 1024 * 1024 / 3) * 4 + 64 * 1024 + 64 * 1024 })
+const LARGE_EDIT_NEXT = 'This file is over 512 KiB, the most a draft in your tab holds: send the same edit with `message` and it lands on your branch in one call (up to 2 MiB), or use apply_patch.'
+
 /** Exact-byte inspection admits whole safe UTF-8 source files before exposing any slice or digest. */
 export const CLOUD_REPO_BYTE_LIMITS = Object.freeze({ sliceBytes: 4096, defaultSliceBytes: 256 })
 
@@ -418,12 +428,12 @@ function decodeFile(b64, env) {
   return decodeFileBytes(b64, env).content
 }
 
-function decodeFileBytes(b64, env, allowNonText = false) {
-  if (typeof b64 !== 'string' || b64.length > Math.ceil(CLOUD_REPO_READ_LIMITS.fileBytes / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) fail('BROKER_CONTENT_INVALID', 502)
+function decodeFileBytes(b64, env, allowNonText = false, maximum = CLOUD_REPO_READ_LIMITS.fileBytes) {
+  if (typeof b64 !== 'string' || b64.length > Math.ceil(maximum / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(b64)) fail('BROKER_CONTENT_INVALID', 502)
   let content, bytes
   try {
     const binary = atob(b64)
-    if (binary.length > CLOUD_REPO_READ_LIMITS.fileBytes || btoa(binary) !== b64) fail('BROKER_CONTENT_INVALID', 502)
+    if (binary.length > maximum || btoa(binary) !== b64) fail('BROKER_CONTENT_INVALID', 502)
     bytes = Uint8Array.from(binary, char => char.charCodeAt(0))
   } catch (_error) { fail('BROKER_CONTENT_INVALID', 502) }
   try { content = decoder.decode(bytes) }
@@ -432,7 +442,7 @@ function decodeFileBytes(b64, env, allowNonText = false) {
     fail('BROKER_CONTENT_INVALID', 502)
   }
   if (allowNonText && content.includes('\u0000')) return { byteLength: bytes.length, nonText: 'binary' }
-  return { bytes, content: safeText(content, env, CLOUD_REPO_READ_LIMITS.fileBytes) }
+  return { bytes, content: safeText(content, env, maximum) }
 }
 
 async function byteInspection(input, env, context, branch = 'main' /* the branch reads: main or her own branch (repoRef) */) {
@@ -529,10 +539,29 @@ async function githubFileAt(path, pinned, env, networkFetch, signal, allowNonTex
   if (!remotePathAllowed(path, level)) fail('REPO_PRIVATE_FALLBACK_REFUSED', 403)
   safeText(path, env, 1024)
   const entry = regularFile(pinned.tree, path)
+  if (entry.size !== undefined && entry.size > CLOUD_REPO_READ_LIMITS.fileBytes) return await githubLargeFileAt(entry, pinned, env, networkFetch, signal, allowNonText)
   const value = await github(env, networkFetch, '/contents/' + encodePath(path) + '?ref=' + pinned.commitSha, signal, CLOUD_REPO_READ_LIMITS.encodedResponseBytes)
   if (!record(value) || value.type !== 'file' || value.path !== path || value.encoding !== 'base64' || typeof value.content !== 'string' || value.submodule_git_url || value.target || value.sha !== entry.sha) fail('BROKER_CONTENT_INVALID', 502)
   const decoded = decodeFileBytes(value.content.replace(/\n/g, ''), env, allowNonText)
   return { ...(decoded.nonText ? decoded : { content: decoded.content }), sha: value.sha, commitSha: pinned.commitSha }
+}
+
+/** One file over 512 KiB and at most 2 MiB, read through the git blob API by the sha its pinned tree names (the
+ * caller has already judged the path and its tree entry). The bytes must hash to that sha and match its size; the text
+ * passes the same screen as any read. Over 2 MiB answers REPO_FILE_TOO_LARGE with the limit, and nothing is fetched. */
+async function githubLargeFileAt(entry, pinned, env, networkFetch, signal, allowNonText) {
+  if (entry.size > CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes) fail('REPO_FILE_TOO_LARGE', 413, { limitBytes: CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes })
+  if (!SHA.test(entry.sha)) fail('REPO_TREE_INVALID', 502)
+  const value = await github(env, networkFetch, '/git/blobs/' + entry.sha, signal, CLOUD_REPO_LARGE_FILE_LIMITS.encodedResponseBytes)
+  if (!record(value) || value.sha !== entry.sha || value.encoding !== 'base64' || typeof value.content !== 'string' || value.size !== entry.size) fail('BROKER_CONTENT_INVALID', 502)
+  const decoded = decodeFileBytes(value.content.replace(/\n/g, ''), env, allowNonText, CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes)
+  if (decoded.nonText) {
+    if (decoded.byteLength !== entry.size) fail('BROKER_CONTENT_INVALID', 502)
+    return { ...decoded, sha: entry.sha, commitSha: pinned.commitSha }
+  }
+  if (decoded.bytes.length !== entry.size) fail('BROKER_CONTENT_INVALID', 502)
+  if (await gitBlobSha(decoded.bytes) !== entry.sha) fail('REPO_BLOB_HASH_MISMATCH', 502)
+  return { content: decoded.content, sha: entry.sha, commitSha: pinned.commitSha }
 }
 
 const treePath = path => typeof path === 'string' && path.length > 0 && path.length <= 1024
@@ -724,7 +753,25 @@ const validAumaBranch = branch => typeof branch === 'string' && AUMA_BRANCH_RE.t
 const validProposalBranch = branch => validAumaBranch(branch) && /^auma\/proposal\/[a-z0-9][a-z0-9._-]{1,60}$/.test(branch)
 const repoRef = value => value === undefined ? 'main' : value === 'main' || validAumaBranch(value) ? value : fail('REPO_BRANCH_REFUSED', 403)
 const ordered = values => [...values].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
-const exactFields = (input, fields) => { if (Object.keys(input).some(key => !fields.includes(key))) fail('BROKER_QUERY_INVALID') }
+// The refusal names the field it did not expect and the fields this action takes (names only, screened in
+// the reply by queryFieldFacts), so an extra field is never mistaken for a size limit: content always rides the body.
+const exactFields = (input, fields) => {
+  const unexpected = Object.keys(input).filter(key => !fields.includes(key))
+  if (unexpected.length) fail('BROKER_QUERY_INVALID', 400, { unexpected, allowed: fields })
+}
+/** The names a BROKER_QUERY_INVALID answer may carry: at most 8 plain field names, none secret-shaped. */
+function queryFieldFacts(error, env) {
+  if (!Array.isArray(error?.unexpected) || !Array.isArray(error?.allowed)) return {}
+  const named = error.unexpected.filter(key => /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(key) && !outwardTextCarriesSecret(key, env)).slice(0, 8)
+  return { unexpected: named, ...(named.length < error.unexpected.length ? { unexpectedUnnamed: error.unexpected.length - named.length } : {}),
+    allowed: error.allowed.filter(key => key !== 'ownerSession'), next: QUERY_FIELD_NEXT }
+}
+const QUERY_FIELD_NEXT = 'Send this action again with only the allowed fields; the unexpected one is not part of it. Size is not the cause: content travels in the request body.'
+/** One file's content on her branch is at most fileBytes (512 KiB); larger answers a size code that says so. */
+function branchFileBytes(text) {
+  if (typeof text === 'string' && size(text) > CLOUD_REPO_BRANCH_LIMITS.fileBytes) fail('REPO_FILE_TOO_LARGE', 413, { limitBytes: CLOUD_REPO_BRANCH_LIMITS.fileBytes })
+  return text
+}
 
 function requireOwner(env, context) {
   // The wake-mandate actor (module-private, built only by cloudWakeMandateAct) passes this check for exactly
@@ -958,26 +1005,90 @@ async function mirrorInventory(env, context) {
   return { ...value, paths: [...value.homeFiles.map(path => 'mirror/home/' + path), ...value.workspaceFiles].filter(path => repoPathAllowed(path) && liveMirrorPath(path)) }
 }
 
+// ---- REPOSITORY-READS block begin: reads by bytes, search bounded and paged ----
+/** A page of `text` by UTF-8 BYTES: [offset, offset + length) moved back to whole-character boundaries (a start inside a
+ * character begins at that character, so nothing is skipped; an end inside one stops before it, so nothing is cut), at
+ * least one whole character when any remain. Without offset and length: the whole text. Always answers `offset` (bytes),
+ * `length` (bytes in this page), `totalBytes`, `nextOffset` (byte of the next page, or null) and `truncated`. */
+function bytePage(text, offset = 0, length) {
+  const bytes = encoder.encode(text), total = bytes.length
+  const boundary = at => { while (at > 0 && at < total && (bytes[at] & 0xc0) === 0x80) at--; return at }
+  if (offset > total) fail('REPO_BYTE_RANGE_INVALID', 400)
+  const start = boundary(offset)
+  let end = length === undefined ? total : boundary(Math.min(total, start + length))
+  if (end === start && start < total) { end = start + 1; while (end < total && (bytes[end] & 0xc0) === 0x80) end++ }
+  const content = start === 0 && end === total ? text : decoder.decode(bytes.subarray(start, end))
+  return { content, offset: start, length: end - start, totalBytes: total, nextOffset: end < total ? end : null, truncated: end < total, unit: 'bytes' }
+}
+
+/** Search pages: files are read `readsAhead` at once and judged in path order; a page stops at the file, byte and
+ * match bounds (CLOUD_REPO_PROPOSAL_LIMITS) or when `budgetMs` has passed (or the call's deadline is `answerMarginMs`
+ * away), and answers `truncated: true` with `next`, the cursor to send back. Cause of the old BROKER_TIMEOUT: one GitHub
+ * read per file, strictly one after another, up to 128 under a 30 s deadline, and nothing answered when it fired; and a
+ * file past the 512 KiB read bound ended the whole search (BROKER_BODY_TOO_LARGE). It is now skipped as `too_large`. */
+export const CLOUD_REPO_SEARCH_LIMITS = Object.freeze({ readsAhead: 8, budgetMs: 20000, answerMarginMs: 4000 })
+const SEARCH_NEXT_HINT = 'more files remain: send the same search with `cursor` set to `next` to continue, or a narrower `prefix`'
+
+/** A search cursor { path, line }: continue at `path` (files after it follow in path order) from 0-based line `line`. */
+function searchCursor(value, level) {
+  if (value === undefined) return null
+  if (!record(value) || Object.keys(value).some(key => !['path', 'line'].includes(key)) || typeof value.path !== 'string' || !canonicalPath(value.path, level)
+    || !Number.isSafeInteger(value.line) || value.line < 0) fail('REPO_SEARCH_CURSOR_INVALID')
+  return { path: value.path, line: value.line }
+}
+// ---- REPOSITORY-READS block end ----
+
+/** First-party source, by its extension, outside vendored, generated or minified places. */
+function firstPartySource(path) {
+  if (/(?:^|\/)(?:node_modules|vendor|third_party|dist|build|coverage)\//.test(path) || /(?:^|\/)public\/assets\//.test(path) || /\.min\.[a-z]+$/.test(path)
+    || /(?:^|\/)(?:pnpm-lock\.yaml|package-lock\.json|yarn\.lock|Cargo\.lock)$/.test(path)) return false
+  return /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs|json|css|html|md|rs|toml|yml|yaml|sh|wat)$/.test(path)
+}
+
 async function searchRepository(input, env, context) {
-  exactFields(input, ['action', 'query', 'regex', 'caseSensitive', 'prefix', 'branch', 'maxMatches'])
+  exactFields(input, ['action', 'query', 'regex', 'caseSensitive', 'prefix', 'branch', 'maxMatches', 'cursor'])
   const ref = repoRef(input.branch), matchesLine = searchMatcher(input, env), maxMatches = input.maxMatches ?? 200
   const level = repoDoorLevel(context)
   if (!Number.isInteger(maxMatches) || maxMatches < 1 || maxMatches > 200) fail('REPO_SEARCH_QUERY_INVALID')
   if (input.prefix !== undefined && (!canonicalPath(input.prefix, level) || !(sourceRoots.has(input.prefix) || repoPathAllowed(input.prefix, level)))) fail('REPO_PATH_REFUSED', 403)
+  const cursor = searchCursor(input.cursor, level)
   return await withDeadline(context.signal, async signal => {
     const local = { ...context, signal }, pinned = await pinnedTree(ref, env, context.networkFetch, signal)
     const inventory = ref === 'main' ? await mirrorInventory(env, local) : null
     const candidates = new Set([...pinned.tree.entries.values()].filter(entry => remotePathAllowed(entry.path, level) && entry.type === 'blob' && ['100644', '100755'].includes(entry.mode)).map(entry => entry.path))
     for (const path of inventory?.paths ?? []) candidates.add(path)
-    const paths = ordered(candidates).filter(path => input.prefix === undefined || path === input.prefix || path.startsWith(input.prefix + '/'))
+    const paths = ordered(candidates).filter(path => (input.prefix === undefined || path === input.prefix || path.startsWith(input.prefix + '/')) && (cursor === null || path >= cursor.path))
     const matches = [], skippedPaths = []; let scannedBytes = 0, projectedBytes = 0, filesScanned = 0, truncated = pinned.tree.truncated, skippedFiles = 0, skippedBytes = 0
     let screenedOut = 0, withheld = 0
-    for (const path of paths) {
-      if (filesScanned >= CLOUD_REPO_PROPOSAL_LIMITS.searchFiles || scannedBytes >= CLOUD_REPO_PROPOSAL_LIMITS.searchBytes) { truncated = true; break }
+    // ---- REPOSITORY-READS block begin: reads ahead, judged in order; a page stops on its bounds or its time and says where ----
+    let next = null
+    const stop = new AbortController(), onAbort = () => stop.abort()
+    signal.addEventListener('abort', onAbort, { once: true })
+    const reading = { ...local, signal: stop.signal }, ahead = new Map()
+    const stopAt = Math.min(Date.now() + CLOUD_REPO_SEARCH_LIMITS.budgetMs, (Number.isFinite(context.deadlineAt) ? context.deadlineAt : Infinity) - CLOUD_REPO_SEARCH_LIMITS.answerMarginMs)
+    // the large-file reads hook: a file over 512 KiB and at most 2 MiB is searched (read whole through the blob API, so its line
+    // numbers are the file's own) when the search names it (`prefix` is its path) or it is first-party source; only a
+    // file over 2 MiB, or a large file that is neither, is skipped as too_large.
+    const tooLarge = path => {
+      if (ref === 'main' && liveMirrorPath(path)) return false
+      const bytes = pinned.tree.entries.get(path)?.size ?? 0
+      if (bytes <= CLOUD_REPO_READ_LIMITS.fileBytes) return false
+      return bytes > CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes || !(input.prefix === path || firstPartySource(path))
+    }
+    const begin = index => { if (index < paths.length && !ahead.has(index)) ahead.set(index, tooLarge(paths[index]) ? Promise.resolve({ value: { tooLarge: true } }) : settled(sourceText(paths[index], 'auto', ref, env, reading, pinned, true))) }
+    const skip = (path, reason) => {
+      const skipped = { path: safeText(path, env, 1024), reason }, bytes = size(JSON.stringify(skipped))
+      if (skippedPaths.length < 32 && skippedBytes + bytes <= 8192) { skippedPaths.push(skipped); skippedBytes += bytes }
+    }
+    try {
+    files: for (const [index, path] of paths.entries()) {
+      if (filesScanned >= CLOUD_REPO_PROPOSAL_LIMITS.searchFiles || scannedBytes >= CLOUD_REPO_PROPOSAL_LIMITS.searchBytes || Date.now() >= stopAt) { truncated = true; next = { path, line: path === cursor?.path ? cursor.line : 0 }; break }
+      for (let later = index; later < index + CLOUD_REPO_SEARCH_LIMITS.readsAhead; later++) begin(later)
       let value
-      try { value = await sourceText(path, 'auto', ref, env, local, pinned, true) }
+      try { value = await judged(ahead.get(index)) }
       catch (error) {
         if (['REPO_PATH_DELETED', 'REPO_FILE_REQUIRED'].includes(error?.code)) continue
+        if (['BROKER_BODY_TOO_LARGE', 'REPO_FILE_TOO_LARGE'].includes(error?.code)) { skippedFiles++; skip(path, 'too_large'); continue }
         // A file whose text has a credential's SHAPE (the repo's own test fixtures carry fake
         // ones, so a search of deploy/cloudflare/src ended BROKER_PRIVATE_CONTENT_REFUSED at the first) is withheld, never
         // shown, and the search goes on. A file carrying a configured secret's VALUE still refuses the whole answer.
@@ -988,31 +1099,32 @@ async function searchRepository(input, env, context) {
           continue
         }
         throw error
-      }
+      } finally { ahead.delete(index) }
+      if (value.tooLarge) { skippedFiles++; skip(path, 'too_large'); continue }
       if (value.source === 'mirror' && (value.lineageId !== inventory.lineageId || value.revision !== inventory.revision)) fail('REPO_MIRROR_CHANGED', 409)
-      filesScanned++; scannedBytes += value.nonText ? value.byteLength : size(value.content)
-      if (scannedBytes > CLOUD_REPO_PROPOSAL_LIMITS.searchBytes) { truncated = true; break }
-      if (value.nonText) {
-        skippedFiles++
-        const skipped = { path: safeText(path, env, 1024), reason: value.nonText }, bytes = size(JSON.stringify(skipped))
-        if (skippedPaths.length < 32 && skippedBytes + bytes <= 8192) { skippedPaths.push(skipped); skippedBytes += bytes }
-        continue
-      }
+      const fileBytes = value.nonText ? value.byteLength : size(value.content)
+      // the repository reads hook: a file that would pass the byte bound is left for the next page (named in `next`), not counted.
+      if (filesScanned > 0 && scannedBytes + fileBytes > CLOUD_REPO_PROPOSAL_LIMITS.searchBytes) { truncated = true; next = { path, line: path === cursor?.path ? cursor.line : 0 }; break }
+      filesScanned++; scannedBytes += fileBytes
+      if (value.nonText) { skippedFiles++; skip(path, value.nonText); continue }
       // The cloud wake screens each file's EXACT bytes here, the same bytes its lines are taken from (an independent
       // review: a later re-read of mutable content could release a line whose original file held a credential).
       if (typeof context.screenFile === 'function' && context.screenFile(value.content) !== true) { screenedOut++; continue }
       const lines = value.content.split('\n')
-      for (let index = 0; index < lines.length; index++) {
-        if (!matchesLine(lines[index])) continue
-        const match = { path, line: index + 1, text: lines[index] }
+      for (let line = path === cursor?.path ? cursor.line : 0; line < lines.length; line++) {
+        if (!matchesLine(lines[line])) continue
+        const match = { path, line: line + 1, text: lines[line] }
         const bytes = size(JSON.stringify(match))
-        if (matches.length === maxMatches || projectedBytes + bytes > CLOUD_REPO_TREE_LIMITS.projectedBytes) { truncated = true; break }
+        if (matches.length === maxMatches || projectedBytes + bytes > CLOUD_REPO_TREE_LIMITS.projectedBytes) { truncated = true; next = { path, line }; break files }
         matches.push(match); projectedBytes += bytes
       }
-      if (matches.length === maxMatches || projectedBytes >= CLOUD_REPO_TREE_LIMITS.projectedBytes) { truncated = true; break }
+      if ((matches.length === maxMatches || projectedBytes >= CLOUD_REPO_TREE_LIMITS.projectedBytes) && index + 1 < paths.length) { truncated = true; next = { path: paths[index + 1], line: 0 }; break }
     }
+    } finally { stop.abort(); signal.removeEventListener('abort', onAbort) }
     return { ok: true, matches, truncated, filesScanned, skippedFiles, skippedPaths, skippedPathsTruncated: skippedFiles + withheld > skippedPaths.length,
-      ...(withheld ? { withheld } : {}), ...(typeof context.screenFile === 'function' ? { screenedOut } : {}) }
+      ...(withheld ? { withheld } : {}), ...(typeof context.screenFile === 'function' ? { screenedOut } : {}),
+      ...(next ? { next, nextHint: SEARCH_NEXT_HINT } : {}) }
+    // ---- REPOSITORY-READS block end ----
   })
 }
 
@@ -1080,9 +1192,9 @@ async function branchOperation(input, env, context, { facts = true } = {}) { // 
   let content, path, files, prior // HANDS hook: `prior`, the file an edit already read
   const level = repoDoorLevel(context)
   if (input.action !== 'commit') path = branchPath(input.path, env, level)
-  if (input.action === 'write') content = safeText(input.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
+  if (input.action === 'write') content = safeText(branchFileBytes(input.content), env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
   if (input.action === 'edit') {
-    safeText(input.oldString, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes); safeText(input.newString, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
+    safeText(branchFileBytes(input.oldString), env, CLOUD_REPO_BRANCH_LIMITS.fileBytes); safeText(branchFileBytes(input.newString), env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
     if (!input.oldString) fail('REPO_EDIT_TARGET_EMPTY')
   }
   if (input.action === 'commit') {
@@ -1090,7 +1202,7 @@ async function branchOperation(input, env, context, { facts = true } = {}) { // 
     files = input.changes.map(change => {
       if (!record(change)) fail('REPO_CHANGE_INVALID')
       exactFields(change, ['path', 'content'])
-      return { path: branchPath(change.path, env, level), content: safeText(change.content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) }
+      return { path: branchPath(change.path, env, level), content: safeText(branchFileBytes(change.content), env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) }
     })
     if (new Set(files.map(file => file.path)).size !== files.length || files.reduce((total, file) => total + size(file.content), 0) > CLOUD_REPO_BRANCH_LIMITS.publicationBytes) fail('REPO_CHANGE_INVALID')
   }
@@ -1103,7 +1215,12 @@ async function branchOperation(input, env, context, { facts = true } = {}) { // 
     const index = prior.indexOf(input.oldString)
     if (index === -1) fail('REPO_EDIT_TARGET_NOT_FOUND', 409)
     if (prior.indexOf(input.oldString, index + input.oldString.length) !== -1) fail('REPO_EDIT_TARGET_AMBIGUOUS', 409)
-    content = safeText(prior.slice(0, index) + input.newString + prior.slice(index + input.oldString.length), env, CLOUD_REPO_BRANCH_LIMITS.fileBytes)
+    // the large-file reads hook: an edit that lands (`message`) may leave a file of up to 2 MiB; one kept as a draft in her tab is the
+    // whole file in the answer, so it keeps 512 KiB and says how to land it in one call.
+    const edited = prior.slice(0, index) + input.newString + prior.slice(index + input.oldString.length)
+    if (input.message === undefined && size(edited) > CLOUD_REPO_BRANCH_LIMITS.fileBytes) fail('REPO_FILE_TOO_LARGE', 413, { limitBytes: CLOUD_REPO_BRANCH_LIMITS.fileBytes, next: LARGE_EDIT_NEXT })
+    if (size(edited) > CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes) fail('REPO_FILE_TOO_LARGE', 413, { limitBytes: CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes })
+    content = safeText(edited, env, CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes)
   }
   if (input.action !== 'commit') files = [{ path, content }]
   for (const file of files) regularFile(pinned.tree, file.path, true)
@@ -1366,19 +1483,125 @@ async function mergeBinding(input, context) {
 
 async function stageProposal(input, env, context) {
   requireOwner(env, context)
-  exactFields(input, ['action', 'branch', 'title', 'summary', 'ownerSession'])
+  exactFields(input, ['action', 'branch', 'title', 'summary', 'ownerSession', 'allowRebase'])
   if (!validProposalBranch(input.branch)) fail('REPO_BRANCH_REFUSED', 403)
+  if (input.allowRebase !== undefined && typeof input.allowRebase !== 'boolean') fail('BROKER_QUERY_INVALID')
   const title = safeText(input.title, env, 200), summary = input.summary === undefined ? undefined : safeText(input.summary, env, 4000)
   if (!title.trim() || /[\u0000-\u001f\u007f]/.test(title)) fail('REPO_PROPOSAL_TITLE_INVALID')
-  const evidence = await proposalEvidence(input.branch, env, context)
-  const mergeBody = { action: 'merge_proposal', baseSha: evidence.baseSha, branch: input.branch, headSha: evidence.headSha, treeSha: evidence.treeSha }
-  const proposal = { schema: 'aukora.staged-repo-proposal.v1', branch: input.branch, title, ...(summary === undefined ? {} : { summary }), ...evidence,
-    ciStatus: await proposalCi(input.branch, evidence.headSha, env, context), stagedAt: context.now(), mergeBody, binding: await mergeBinding(mergeBody, context) }
-  if (size(JSON.stringify(proposal)) > CLOUD_REPO_PROPOSAL_LIMITS.bytes) fail('REPO_PROPOSAL_TOO_LARGE', 413)
-  safeText(JSON.stringify(proposal), env, CLOUD_REPO_PROPOSAL_LIMITS.bytes)
-  await headProposal({ action: 'stage', proposal }, env, context)
-  return { ok: true, action: input.action, proposal }
+  // the repository reads hook: with allowRebase, main is first brought into her branch (one merge commit on HER branch); the card below
+  // is then read from the new head exactly as without it. Absent or false: nothing here runs.
+  const rebase = input.allowRebase === true ? await bringMainIntoProposal(input.branch, env, context) : null
+  try {
+    const evidence = await proposalEvidence(input.branch, env, context)
+    const mergeBody = { action: 'merge_proposal', baseSha: evidence.baseSha, branch: input.branch, headSha: evidence.headSha, treeSha: evidence.treeSha }
+    const proposal = { schema: 'aukora.staged-repo-proposal.v1', branch: input.branch, title, ...(summary === undefined ? {} : { summary }), ...evidence,
+      ciStatus: await proposalCi(input.branch, evidence.headSha, env, context), stagedAt: context.now(), mergeBody, binding: await mergeBinding(mergeBody, context) }
+    if (size(JSON.stringify(proposal)) > CLOUD_REPO_PROPOSAL_LIMITS.bytes) fail('REPO_PROPOSAL_TOO_LARGE', 413)
+    safeText(JSON.stringify(proposal), env, CLOUD_REPO_PROPOSAL_LIMITS.bytes)
+    await headProposal({ action: 'stage', proposal }, env, context)
+    return { ok: true, action: input.action, proposal, ...(input.allowRebase === true ? { rebase: rebaseAnswer(rebase) } : {}) }
+  } catch (error) {
+    // the repository reads hook: a refusal after the merge landed says her branch moved, so she never works from the old head.
+    if (rebase?.merged === true && error !== null && typeof error === 'object' && !Object.isFrozen(error)) error.branchMerged = rebase
+    throw error
+  }
 }
+
+// ---- REPOSITORY-READS block begin: stage_proposal { allowRebase: true } brings main into her proposal branch ----
+/** What she does after REBASE_CONFLICT: the conflict is hers to resolve on her branch; nothing was written or staged. */
+export const REBASE_CONFLICT_NEXT = 'main and your branch change the same files: nothing was merged, written or staged and your branch is unchanged; bring those files in line with main on your branch (read them on main, commit the resolution), then stage_proposal again'
+/** What the card shows right after a merge into her branch: a new head, whose checks start on the push. */
+export const REBASE_CI_NOTE = 'main was merged into your branch as one new commit; the card binds that new head and its checks start now, so ciStatus reads none or pending until proposal-gate finishes; stage_proposal again (allowRebase is then a no-op) to refresh it'
+/** At most this many conflicting paths are named; the rest are counted. */
+export const REBASE_CONFLICT_NAMED_LIMIT = 50
+
+/** The reply's rebase facts: merged (with the old and new head and main's head) or not needed. */
+function rebaseAnswer(rebase) {
+  return rebase?.merged === true ? { merged: true, fromHeadSha: rebase.from, headSha: rebase.to, mainSha: rebase.main, mergeBaseSha: rebase.mergeBase, ciNote: REBASE_CI_NOTE }
+    : { merged: false, reason: 'main is already in this branch, or the branch carries nothing of yours: staged exactly as without allowRebase' }
+}
+
+/** Paths changed on both sides since the merge base, and differently: the files the host's merge can conflict on (file
+ * level, so a superset of its line-level conflicts). Named only when the path is one her door may read and carries no
+ * secret shape; the rest are counted. Null when a tree came back incomplete. */
+function rebaseConflictPaths(base, ours, theirs, env, level) {
+  if (base.tree.truncated || ours.tree.truncated || theirs.tree.truncated) return null
+  const same = (a, b) => a === b || (a !== undefined && b !== undefined && a.sha === b.sha && a.mode === b.mode && a.type === b.type)
+  const conflicts = []
+  for (const path of ordered(new Set([...base.tree.entries.keys(), ...ours.tree.entries.keys(), ...theirs.tree.entries.keys()]))) {
+    const b = base.tree.entries.get(path), o = ours.tree.entries.get(path), t = theirs.tree.entries.get(path)
+    if ([b, o, t].every(entry => entry === undefined || entry.type === 'tree')) continue
+    if (!same(o, b) && !same(t, b) && !same(o, t)) conflicts.push(path)
+  }
+  const named = conflicts.filter(path => remotePathAllowed(path, level) && !outwardTextCarriesSecret(path, env)).slice(0, REBASE_CONFLICT_NAMED_LIMIT)
+  return { named, unnamed: conflicts.length - named.length }
+}
+
+/**
+ * Bring main into her proposal branch with GitHub's own merge (POST /merges, base = HER branch, head = main's
+ * exact head sha): one merge commit on her branch, authored by the broker as her branch commits are; never a force push,
+ * never a write to main (the base is a validated auma/proposal/* name, and nothing here names main as a base).
+ * Not needed (main already in the branch, or the branch carries nothing of hers): answers merged: false, writes nothing.
+ * Before any write, every path she changed since the merge base is judged by the same fence as stage (paths only).
+ * A conflict (409) writes nothing: REBASE_CONFLICT with the paths changed on both sides (the host does not name its
+ * conflicts; computed from the three trees), her branch head re-read and unchanged.
+ * @returns {Promise<{ merged: boolean, from?: string, to?: string, main?: string, mergeBase?: string }>}
+ */
+async function bringMainIntoProposal(branch, env, context) {
+  const { networkFetch, signal } = context
+  if (!validProposalBranch(branch)) fail('REPO_BRANCH_REFUSED', 403)
+  const mainSha = await branchHead('main', env, context), headSha = await branchHead(branch, env, context)
+  if (mainSha === headSha) return { merged: false }
+  const value = await github(env, networkFetch, `/compare/${mainSha}...${headSha}`, signal, 8 * 1024 * 1024)
+  if (!record(value) || value.base_commit?.sha !== mainSha || !SHA.test(value.merge_base_commit?.sha ?? '') || !['ahead', 'behind', 'identical', 'diverged'].includes(value.status)
+    || !Number.isSafeInteger(value.ahead_by) || !Number.isSafeInteger(value.behind_by) || value.ahead_by < 0 || value.behind_by < 0) fail('BROKER_RESPONSE_INVALID', 502)
+  if (value.status !== 'diverged') return { merged: false }
+  const mergeBase = value.merge_base_commit.sha, level = repoDoorLevel(context)
+  const base = await pinnedTree(mergeBase, env, networkFetch, signal), ours = await pinnedTree(headSha, env, networkFetch, signal)
+  await inspectedChanges(base, ours, env, context, true, { pathsOnly: true })
+  requireOwner(env, context)
+  if (signal.aborted) fail('BROKER_TIMEOUT', 408)
+  context.refMutationDispatched = true
+  let response
+  try {
+    response = await withDeadline(signal, async limited => await networkFetch(`https://api.github.com/repos/${REPOSITORY}/merges`, {
+      method: 'POST', headers: githubHeaders(env), redirect: 'error', signal: limited,
+      body: JSON.stringify({ base: branch, head: mainSha, commit_message: `Merge main ${mainSha.slice(0, 12)} into ${branch}` }) }))
+  } catch (_error) { fail('REPO_REF_OUTCOME_UNKNOWN', 503) }
+  if (!response.redirected && (response.status === 204 || response.status >= 400 && response.status < 500)) {
+    // A known answer: GitHub wrote nothing (409 conflict, 204 nothing to merge, any other 4xx refusal).
+    void response.body?.cancel().catch(_error => {})
+    context.refMutationDispatched = false
+    if (response.status === 204) return { merged: false }
+    if (response.status !== 409) fail('BROKER_UPSTREAM_FAILED', 502)
+    if (await branchHead(branch, env, context) !== headSha) { context.refMutationDispatched = true; fail('REPO_REF_OUTCOME_UNKNOWN', 503) }
+    const theirs = await pinnedTree(mainSha, env, networkFetch, signal)
+    fail('REBASE_CONFLICT', 409, { rebaseConflict: { paths: rebaseConflictPaths(base, ours, theirs, env, level), headSha, mainSha } })
+  }
+  if (response.redirected || response.status !== 201) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
+  const commit = await withDeadline(signal, async limited => await boundedJson(response, CLOUD_BROKER_LIMITS.responseBytes, limited))
+  if (!record(commit) || !SHA.test(commit.sha ?? '') || !Array.isArray(commit.parents) || commit.parents.length !== 2
+    || commit.parents[0]?.sha !== headSha || commit.parents[1]?.sha !== mainSha) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
+  if (await branchHead(branch, env, context) !== commit.sha) fail('REPO_REF_OUTCOME_UNKNOWN', 503)
+  context.refMutationDispatched = false
+  return { merged: true, from: headSha, to: commit.sha, main: mainSha, mergeBase }
+}
+
+/** The reply facts of REBASE_CONFLICT and of a refusal after a landed merge (branchMerged); shas checked, paths screened above. */
+function rebaseReplyFacts(code, error) {
+  const shas = value => typeof value === 'string' && SHA.test(value)
+  const facts = {}
+  const conflict = error?.rebaseConflict
+  if (code === 'REBASE_CONFLICT' && record(conflict) && shas(conflict.headSha) && shas(conflict.mainSha)) {
+    const paths = conflict.paths
+    Object.assign(facts, { staged: false, merged: false, branchUnchanged: true, headSha: conflict.headSha, mainSha: conflict.mainSha, next: REBASE_CONFLICT_NEXT,
+      conflictsNamedByHost: false, ...(paths === null ? { conflicts: [], conflictsComputed: false } : { conflicts: paths.named.filter(path => typeof path === 'string'), conflictsComputed: true, conflictsSource: 'files changed on both sides since the merge base', ...(paths.unnamed > 0 ? { conflictsUnnamed: paths.unnamed } : {}) }) })
+  }
+  const merged = error?.branchMerged
+  if (record(merged) && merged.merged === true && shas(merged.from) && shas(merged.to) && shas(merged.main)) facts.branchMerged = { fromHeadSha: merged.from, headSha: merged.to, mainSha: merged.main }
+  return facts
+}
+// ---- REPOSITORY-READS block end ----
 
 // ---- MERGE block begin: withdraw_proposal ----
 /** The staged merge card taken back: { action: 'withdraw_proposal', branch, headSha } names the card (HEAD refuses
@@ -1909,11 +2132,38 @@ async function execRunOf(id, env, context) {
   return run
 }
 
-async function execJobs(id, env, context) {
+async function execJobs(id, env, context, { progress = false } = {}) { // the repository reads hook: `progress` (exec_logs only)
   const value = await github(env, context.networkFetch, `/actions/runs/${id}/jobs?per_page=10`, context.signal, 1024 * 1024)
   if (!record(value) || !Array.isArray(value.jobs) || value.jobs.length > 10) fail('BROKER_RESPONSE_INVALID', 502)
-  return value.jobs.map(job => projectJob(job, env, id))
+  const jobs = value.jobs.map(job => projectJob(job, env, id))
+  return progress ? jobs.map((job, index) => ({ ...job, progress: execJobProgress(value.jobs[index], env) })) : jobs
 }
+
+// ---- REPOSITORY-READS block begin: exec logs answer for her own runs in every state ----
+/** Why `x6_exec logs` answered BROKER_NOT_FOUND for a live run (SOURCE): jobLogs maps GitHub's 404 to BROKER_NOT_FOUND, and
+ * GitHub has no log object for a job until it has finished (and briefly after); a queued run has no job at all. A run of
+ * hers that exists now answers EXEC_LOG_NOT_READY with its state and step progress instead. */
+export const EXEC_LOG_NOT_READY_NEXT = 'GitHub keeps no log for a job until it has finished; the run is yours and alive: ask again when status says completed (the step progress here shows how far it is)'
+/** How far a job is: steps finished, steps in all, and the step running now (screened; null when withheld or none). */
+function execJobProgress(job, env) {
+  const steps = job.steps.filter(record)
+  const current = steps.find(step => step.status === 'in_progress')
+  let currentStep = null
+  if (typeof current?.name === 'string') { try { currentStep = safeText(current.name, env, 200) } catch (_error) { currentStep = null } }
+  return { stepsDone: steps.filter(step => step.status === 'completed').length, stepsTotal: steps.length, currentStep }
+}
+const EXEC_RUN_STATES = ['queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending']
+/** The facts an EXEC_LOG_NOT_READY answer carries: run id, its state, and its job's progress; each checked by type. */
+function execLogReplyFacts(code, error) {
+  const facts = error?.execLog
+  if (code !== 'EXEC_LOG_NOT_READY' || !record(facts) || !Number.isSafeInteger(facts.run) || !EXEC_RUN_STATES.includes(facts.status)) return {}
+  const count = value => Number.isSafeInteger(value) && value >= 0 && value <= 1000
+  return { run: facts.run, status: facts.status, conclusion: RUN_CONCLUSIONS.includes(facts.conclusion) ? facts.conclusion : null, reason: ['no-job-yet', 'log-not-published'].includes(facts.reason) ? facts.reason : 'log-not-published',
+    ...(Number.isSafeInteger(facts.jobId) ? { jobId: facts.jobId } : {}), ...(EXEC_RUN_STATES.includes(facts.jobStatus) ? { jobStatus: facts.jobStatus } : {}),
+    ...(count(facts.stepsDone) && count(facts.stepsTotal) ? { stepsDone: facts.stepsDone, stepsTotal: facts.stepsTotal } : {}),
+    ...(typeof facts.currentStep === 'string' && facts.currentStep.length <= 200 ? { currentStep: facts.currentStep } : {}), next: EXEC_LOG_NOT_READY_NEXT }
+}
+// ---- REPOSITORY-READS block end ----
 
 /** Her exec door: start auma-exec.yml with validated inputs, and read, cancel or list its runs. No passkey: an
  * owner session, the input shape and the hour and day bounds. Every other workflow keeps its rule in `repo` below. */
@@ -1966,10 +2216,18 @@ async function execDoor(input, env, context) {
     return { ok: true, action: 'exec_run', run, jobs, stdout: `${run.id} ${run.status}${run.conclusion ? '/' + run.conclusion : ''}`, stderr: '' }
   }
   if (input.action === 'exec_logs') {
-    const jobs = await execJobs(id, env, context)
+    const jobs = await execJobs(id, env, context, { progress: true })
     const job = input.job === undefined ? jobs[0] : jobs.find(item => item.id === input.job)
+    // the repository reads hook: a run of hers with no job yet (queued) is not "not found": it says so, with its state.
+    if (!job && input.job === undefined) fail('EXEC_LOG_NOT_READY', 409, { execLog: { run: run.id, status: run.status, conclusion: run.conclusion, reason: 'no-job-yet' } })
     if (!job) fail('EXEC_JOB_NOT_FOUND', 404)
-    const logs = await jobLogs(job.id, env, context, { tail: true })
+    let logs
+    try { logs = await jobLogs(job.id, env, context, { tail: true }) }
+    catch (error) {
+      // the repository reads hook: GitHub answers 404 for the log of a job that is running (or just finished, not yet published).
+      if (error?.code !== 'BROKER_NOT_FOUND') throw error
+      fail('EXEC_LOG_NOT_READY', 409, { execLog: { run: run.id, status: run.status, conclusion: run.conclusion, reason: 'log-not-published', jobId: job.id, jobStatus: job.status, ...job.progress } })
+    }
     // The tail is carried once, in `log`; the earlier part stays on GitHub at the run's page.
     return { ok: true, action: 'exec_logs', run: run.id, status: run.status, conclusion: run.conclusion, jobId: job.id, log: logs.log, truncated: logs.truncated,
       ...(logs.truncated ? { earlier: `the earlier lines are on GitHub: ${run.url}` } : {}),
@@ -2149,7 +2407,8 @@ async function applyPatch(input, env, context) {
       if (content !== '') fail('PATCH_CONTEXT_MISMATCH', 409, { path: file.path, hunk: file.hunks.length })
       deletions.push(file.path)
     } else {
-      files.push({ path: file.path, content: safeText(content, env, CLOUD_REPO_BRANCH_LIMITS.fileBytes) })
+      if (size(content) > CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes) fail('REPO_FILE_TOO_LARGE', 413, { limitBytes: CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes })
+      files.push({ path: file.path, content: safeText(content, env, CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes) })
       total += size(content)
     }
     answer.push({ path: file.path, status: file.status })
@@ -2208,13 +2467,9 @@ async function repo(input, env, context) {
     if (!Number.isSafeInteger(offset) || offset < 0 || (length !== undefined && (!Number.isSafeInteger(length) || length < 1 || length > CLOUD_REPO_READ_LIMITS.rangeLength))) fail('REPO_BYTE_RANGE_INVALID')
     const level = repoDoorLevel(context)
     const path = requirePath(input.path, false, level)
-    const sliceContent = fullResult => {
-      if (input.offset === undefined && input.length === undefined) return fullResult
-      const totalBytes = size(fullResult.content)
-      const content = fullResult.content.slice(offset, length === undefined ? undefined : offset + length)
-      const nextOffset = (length !== undefined && offset + length < fullResult.content.length) ? offset + length : null
-      return { ...fullResult, content, offset, length: content.length, totalBytes, totalLength: fullResult.content.length, nextOffset, truncated: nextOffset !== null }
-    }
+    // the repository reads hook: offset and length count UTF-8 BYTES; the page ends on a whole character (bytePage) and every answer
+    // says totalBytes, nextOffset and truncated. No line is ever cut: a long line simply continues on the next page.
+    const sliceContent = fullResult => ({ ...fullResult, ...bytePage(fullResult.content, offset, length) })
     if (branch === 'main' && liveMirrorPath(path)) {
       const mirror = await mirrorRead(path, env, bootstrap.head.seedId, signal)
       if (mirror.kind === 'gone') fail('REPO_PATH_DELETED', 404)
@@ -3122,7 +3377,9 @@ export async function handleCloudBroker(request, env, { access = null, bootstrap
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,80}$/.test(error.code) ? error.code : 'CLOUD_BROKER_FAILED'
     if (code === 'READER_WINDOW') return readerWindowRefusalResponse()
     return reply({ ok: false, code, macFallback: false, ...(code.startsWith('CLOUDFLARE_') && Object.values(CLOUDFLARE_NEXT).includes(error.next) ? { next: error.next } : {}), ...(['CLASS3_WEBAUTHN_REQUIRED', 'CLOUDFLARE_REASON_CHANGED'].includes(code) ? cloudflareProtectionReply(code, error.protection) : {}),...(error?.tier ? { tier: error.tier, protectedPath: error.protectedPath } : {}), ...(code === 'REPO_PROPOSAL_REQUIRED' ? { protectedPath: error.protectedPath, next: [WORKFLOW_PATH_NEXT, OWNER_MACHINE_PATH_NEXT].includes(error.next) ? error.next : DEPLOYED_PATH_NEXT } : {}), ...(code === 'REPO_PROPOSAL_CI_NOT_PASSED' && CI_STATES.includes(error.ciStatus) ? { ciStatus: error.ciStatus, next: error.next === PROPOSAL_GATE_CI_NEXT ? PROPOSAL_GATE_CI_NEXT : PROPOSAL_CI_NEXT } : {}), ...(code === 'REPO_APPROVAL_SPENT_VOID' ? { next: APPROVAL_SPENT_VOID_NEXT } : {}), ...(code === 'BROKER_TIMEOUT' && error?.phase === 'reads' ? { phase: 'reads', approvalSpent: false, mainMoved: false } : {}), ...(['REPO_FROZEN_PATH_REFUSED', 'REPO_PATH_NOT_OPEN', 'REPO_PATH_NOT_PLAIN'].includes(code) && PROPOSAL_PATH_NEXTS.includes(error.next) && typeof error.protectedPath === 'string' ? { protectedPath: error.protectedPath, next: error.next } : {}), ...(error?.outcome === 'unknown' ? { outcome: 'unknown', retry: 'repeat-the-identical-request-to-reconcile', requiresFreshClass3Approval: true } : {}), ...mergeAttemptFacts(code, error), ...patchRefusalFacts(code, error, env),
-      ...(code === 'EXEC_RATE_LIMITED' && Number.isSafeInteger(error.retryAt) ? { retryAt: error.retryAt, limit: error.limit } : {}) }, [400, 403, 404, 405, 408, 409, 413, 429, 502, 503, 507].includes(error?.status) ? error.status : 503) // 429 and retryAt
+      ...(code === 'BROKER_QUERY_INVALID' ? queryFieldFacts(error, env) : {}), ...(code === 'REPO_FILE_TOO_LARGE' && [CLOUD_REPO_BRANCH_LIMITS.fileBytes, CLOUD_REPO_LARGE_FILE_LIMITS.fileBytes].includes(error.limitBytes) ? { limitBytes: error.limitBytes, ...(error.next === LARGE_EDIT_NEXT ? { next: LARGE_EDIT_NEXT } : {}) } : {}), // the body write hook; the large-file reads hook: the 2 MiB limit and the one-call next
+      ...(code === 'EXEC_RATE_LIMITED' && Number.isSafeInteger(error.retryAt) ? { retryAt: error.retryAt, limit: error.limit } : {}),
+      ...rebaseReplyFacts(code, error), ...execLogReplyFacts(code, error) /* the repository reads hooks */ }, [400, 403, 404, 405, 408, 409, 413, 429, 502, 503, 507].includes(error?.status) ? error.status : 503) // 429 and retryAt
   }
 }
 

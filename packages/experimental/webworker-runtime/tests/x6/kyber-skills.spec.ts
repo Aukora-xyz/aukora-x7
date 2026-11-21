@@ -459,7 +459,8 @@ describe('voice, classifications, the write set, her self-state, organs', () => 
     const two = await skill.execute({ action: 'keep', name: 'countdown-two', cell: 'kyber-cpu', program: { rom: COUNTDOWN_ROM },
       cases: [{ state: kyberState(0, 2), steps: 64 }] }) as J
     const state = await m.tool('x6_self_state').execute({}) as J
-    expect(Object.keys(state).slice(-4)).toEqual(['cellJournal', 'forgedCells', 'skills', 'unknown'])
+    // `spend` (her model steps by route, this page life) sits between `skills` and `unknown`.
+    expect(Object.keys(state).slice(-5)).toEqual(['cellJournal', 'forgedCells', 'skills', 'spend', 'unknown'])
     expect(state.skills).toEqual({ count: 2, kept: [{ name: 'countdown-two', id: two.id }, { name: 'add-ab', id: one.id }] })
     expect(new TextEncoder().encode(JSON.stringify(state)).byteLength).toBeLessThanOrEqual(SELF_STATE_RESULT_BYTES)
   }, 60_000)

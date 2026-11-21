@@ -2,6 +2,7 @@
  * Selection, immutable content and fencing grants share one durable transaction.
  * No local filesystem, imported HEAD, R2, or implicit seed is consulted.
  */
+import { NIGHTLY_PAGE_ROUTE, nightlyPageResponse } from './nightly-copy.mjs'
 import { handleMessagesRequest, readMessagesStatus, provisionMessagesIdentity, predictionUnavailable, createWakeProbeRunner, createWakeAuraReader, isWakeProbeExecutor } from './messages-store.mjs'
 import { computeAura, overdueWakeRatio, validateAuraVector } from '../../../server/aura-rules.mjs'
 import { computeAuraFocusShadow } from './aura-focus-shadow.mjs'
@@ -42,6 +43,8 @@ import { OWNER_MANDATE_KEY, OWNER_MANDATE_RECEIPT_SCHEMA, OWNER_MANDATE_RECORD_S
 // ---- MANDATE block end ----
 // NOSTR hook: her signed head announcement (owner publish + the internal latest read). Not a relay.
 import { NOSTR_ANCHOR_ROUTE, NOSTR_ANCHOR_LATEST_PATH, handleNostrAnchorRoute } from './nostr-anchor.mjs'
+import { WITNESS_HEAD_ROUTES, handleWitnessHeadRoute } from './witness.mjs' // WITNESS hook: the witness object's facts read and sign route
+import { witnessKick } from './witness-do.mjs' // WITNESS hook: one kick to the witness object after a promotion commits
 import { ELEVEN_SPEECH_HEAD_ROUTE, handleElevenSpeechHeadRoute } from './eleven-speech.mjs' // VOICE hook
 import { isReaderWindow, readerWindowRefusalBody, readerWindowRefusalResponse } from './reader-window.mjs'
 
@@ -2535,6 +2538,7 @@ export class X61HeadDurableObject {
     this.state = state
     this.env = env
     this.gateOperations = new Map()
+    this.witnessKicks = { sent: 0, faults: 0 } // WITNESS hook: kicks the witness object took, and kick faults swallowed
     const gates = createHeadGateLockoutStores(state.storage)
     this.gateLockout = gates.durable
     this.directPublishGateLockout = gates.direct
@@ -3498,6 +3502,7 @@ export class X61HeadDurableObject {
     return verified
   }
   async fetch(request) {
+    if (new URL(request.url).pathname === NIGHTLY_PAGE_ROUTE) return nightlyPageResponse(request, this.state.storage, 'HEAD')
     let response
     try { return await this.diagnostics.observe(request, async () => (response = await this.handleGuardedRequest(request))) }
     catch (error) {
@@ -3567,6 +3572,7 @@ export class X61HeadDurableObject {
           await this.broadcast({ type: 'ball:commit', fromPeerId: context.fromPeerId ?? 'cloud-head',
             ball: context.committed.head, codeBySha: context.committed.modules, peers: this.peers() })
         } catch (_error) { console.warn('Committed HEAD notification unavailable; clients must refresh HEAD') }
+        this.kickWitness() // WITNESS hook: after the commit is durable; never awaited, never changes this answer
       } else if (publishRoute) {
         const result = await response.clone().json()
         const outcome = Object.freeze({
@@ -3594,6 +3600,18 @@ export class X61HeadDurableObject {
     } catch (error) {
       return Response.json(fail('HEAD_STORAGE_UNAVAILABLE', 503), { status: 503, headers: { 'cache-control': 'no-store' } })
     }
+  }
+  /**
+   * WITNESS hook: tell the witness object once that the selected head moved (every committed publish: a promotion,
+   * a direct publish, a night-grant promotion). Fire and forget: handed to waitUntil, never awaited; a fault is swallowed and
+   * counted in this.witnessKicks. The switch off makes no call (witnessKick answers null).
+   */
+  kickWitness() {
+    const pending = witnessKick(this.env).then(taken => {
+      if (taken === true) this.witnessKicks.sent++
+      else if (taken === false) this.witnessKicks.faults++
+    }, () => { this.witnessKicks.faults++ })
+    try { this.state.waitUntil?.(pending) } catch (_error) { /* the kick still runs; nothing waits on it */ }
   }
   async handleRequest(request, publishContext = {}) {
     const url = new URL(request.url)
@@ -3701,6 +3719,9 @@ export class X61HeadDurableObject {
       // NOSTR hook: the owner's publication of her signed head announcement, and the Worker's internal latest read.
       if (path === NOSTR_ANCHOR_ROUTE || path === NOSTR_ANCHOR_LATEST_PATH) return await handleNostrAnchorRoute(request, { url, bootstrap, storage: this.state.storage, env: this.env,
         owner: repoOwnerContext(request, this.env) !== null, readSelectedHead: tx => selected(tx), authorizeInTransaction: (tx, body) => this.authorizeClass3InTransaction(tx, request, body) })
+      // WITNESS hook: the witness object's two internal routes (witness.mjs): the facts read (selected head, the anchor's
+      // WITNESS hook: receipts-head read, node pubkey) and the sign route (one closed event per seq, its { seq, id } memory).
+      if (path === WITNESS_HEAD_ROUTES.facts || path === WITNESS_HEAD_ROUTES.sign) return await handleWitnessHeadRoute(request, { url, bootstrap, storage: this.state.storage, env: this.env, readSelectedHead: tx => selected(tx) }) // WITNESS hook
       if (estateRoute) {
         const context = repoOwnerContext(request, this.env)
         if (!context) return Response.json(fail('ESTATE_OWNER_REQUIRED', 403), { status: 403 })

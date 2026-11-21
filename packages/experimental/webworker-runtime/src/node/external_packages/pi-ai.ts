@@ -2,9 +2,13 @@
  * Browser replacement for the pi-ai entry points used by `llm-pi-ai`.
  * Moonshot AI and DeepSeek chat completions use browser Fetch directly; all
  * other providers and protocols retain the worker-host refusal.
+ * Anthropic Messages is served too, in a page only, through the same-origin Anthropic edge door,
+ * so her Claude routes can carry a chosen effort (`output_config.effort`).
  */
 import { notImplementedFail } from '../notImplementedFail.ts'
 import { isModelDoor, modelDoorFor } from '../../model-doors.ts'
+import { CLAUDE_EFFORT_ROOM, isClaudeEffort } from '../../claude-efforts.ts'
+import { claudeStepCost } from '../../claude-prices.ts'
 
 const MODULE = '@earendil-works/pi-ai'
 
@@ -434,6 +438,9 @@ export function getSupportedThinkingLevels(model: Model): ThinkingLevel[] {
   return THINKING_LEVELS.filter((level) => {
     const mapped = model.thinkingLevelMap?.[level]
     if (mapped === null) return false
+    // On the Messages wire a Claude level whose output room the model's own output cap cannot carry is not
+    // offered (as the fast voice's fastEffortOffered does), and never run smaller in silence.
+    if (model.api === 'anthropic-messages' && isClaudeEffort(level) && CLAUDE_EFFORT_ROOM[level] > model.maxTokens) return false
     if (level === 'xhigh' || level === 'max') return mapped !== undefined
     return true
   })
@@ -469,7 +476,8 @@ export function isContextOverflow(message: AssistantOutput, contextWindow?: numb
   if (message.stopReason === 'error' && errorMessage !== undefined
     && !/rate limit|too many requests/i.test(errorMessage)
     && OVERFLOW_PATTERNS.some(pattern => pattern.test(errorMessage))) return true
-  const input = message.usage.input + message.usage.cacheRead
+  // The prompt is the uncached rest plus what was read from and written to the cache (prompt-caching.md line 192).
+  const input = message.usage.input + message.usage.cacheRead + message.usage.cacheWrite
   if (contextWindow !== undefined && message.stopReason === 'stop' && input > contextWindow) return true
   return contextWindow !== undefined && message.stopReason === 'length' && message.usage.output === 0
     && input >= contextWindow * 0.99
@@ -987,8 +995,8 @@ const ALLOWED_ENDPOINTS = new Set([
 
 const pageOrigin = (): string | undefined => (globalThis as { location?: { origin?: string } }).location?.origin
 
-function endpointOf(model: Model): string {
-  const endpoint = new URL(`${model.baseUrl.replace(/\/+$/, '')}/chat/completions`).href
+function endpointOf(model: Model, path = '/chat/completions'): string {
+  const endpoint = new URL(`${model.baseUrl.replace(/\/+$/, '')}${path}`).href
   // Aukora X5 P3: any same-origin /door/ path is a door endpoint (keys live server-side).
   const origin = pageOrigin()
   // In the browser body every native provider goes through its same-origin edge door (cap, outbound
@@ -1328,8 +1336,442 @@ export function openAICompletionsApi(): ProviderStreams {
   }
 }
 
-/** Anthropic messages API binding (unavailable). */
-export const anthropicMessagesApi = notImplementedFail(MODULE, 'anthropicMessagesApi')
+// ---- EFFORT-LEVELS block begin: the Anthropic Messages wire, through the edge door only ----
+
+/** A refusal that never leaves the browser: its closed code leads the message. */
+function closedRefusal(code: string, detail: string): Error {
+  return Object.assign(new Error(`${code}: ${detail}`), { code })
+}
+
+/** The thinking signature spellings the chat wire uses for its own reasoning fields: never an Anthropic signature. */
+const CHAT_REASONING_SIGNATURES = new Set(['reasoning', 'reasoning_content', 'reasoning_text'])
+
+/**
+ * A user turn as content blocks, always: a string cannot carry a cache mark, and a message that was marked as
+ * the newest one must keep the same bytes once it is no longer newest, or the cached prefix breaks there.
+ */
+function anthropicUserContent(content: UserMessage['content']): Record<string, unknown>[] {
+  if (typeof content === 'string') return content.length === 0 ? [] : [{ type: 'text', text: content }]
+  if (content.every(block => block.type === 'text')) {
+    const text = content.map(block => block.text).filter(part => part.length > 0).join('\n')
+    return text.length === 0 ? [] : [{ type: 'text', text }]
+  }
+  return content.flatMap((block): Record<string, unknown>[] => block.type === 'text'
+    ? block.text.length === 0 ? [] : [{ type: 'text', text: block.text }]
+    : [{ type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }])
+}
+
+/**
+ * The provider's history-editing check: a replayed thinking block is valid only while the top-level `system`, the
+ * `tools` and every earlier message are byte-identical to when it was made (enforced on every account on Fable 5.2;
+ * earlier thinking blocks are not part of that prefix). On this route the harness may rewrite the head prompt in place
+ * and every section or tool change folds into `system` and `tools`, so the shim remembers, per signature, a digest of
+ * the prefix it was made under, and replays a block only when the digest still matches. A block made before this
+ * page started (unknown prefix) is never replayed. Bounded: the oldest entries go first.
+ */
+const anthropicBlockPrefixes = new Map<string, string>()
+const ANTHROPIC_BLOCK_PREFIXES_KEPT = 1024
+
+function rememberBlockPrefix(signature: string, prefix: string): void {
+  anthropicBlockPrefixes.delete(signature)
+  anthropicBlockPrefixes.set(signature, prefix)
+  while (anthropicBlockPrefixes.size > ANTHROPIC_BLOCK_PREFIXES_KEPT) {
+    const oldest = anthropicBlockPrefixes.keys().next()
+    if (oldest.done === true) break
+    anthropicBlockPrefixes.delete(oldest.value)
+  }
+}
+
+/** Wire messages with every thinking block taken out, and an assistant turn left empty by that dropped. */
+function withoutThinking(messages: readonly unknown[]): unknown[] {
+  return messages.flatMap((message) => {
+    if (!isRecord(message) || message.role !== 'assistant' || !Array.isArray(message.content)) return [message]
+    const content = message.content.filter(block => !(isRecord(block) && block.type === 'thinking'))
+    return content.length === 0 ? [] : [{ ...message, content }]
+  })
+}
+
+/**
+ * A value with every `cache_control` removed. The mark moves to the newest block each step and is not part of
+ * the prefix the provider checks (claude-api shared/prompt-caching.md line 206: strip the markers before comparing).
+ */
+function withoutCacheMarks(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutCacheMarks)
+  if (!isRecord(value)) return value
+  const out: Record<string, unknown> = {}
+  for (const [key, child] of Object.entries(value)) if (key !== 'cache_control') out[key] = withoutCacheMarks(child)
+  return out
+}
+
+/**
+ * A digest of the prefix a block is bound to: `system`, `tools` and the messages before it, thinking excluded and every
+ * cache mark removed, so a mark that moved never drops a block.
+ */
+function blockPrefixDigest(system: unknown, tools: unknown, before: readonly unknown[]): string {
+  const text = JSON.stringify(withoutCacheMarks([system ?? '', tools ?? [], withoutThinking(before)]))
+  let h1 = 0xdeadbeef
+  let h2 = 0x41c6ce57
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index)
+    h1 = Math.imul(h1 ^ code, 2654435761)
+    h2 = Math.imul(h2 ^ code, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return `${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}:${text.length}`
+}
+
+/**
+ * Keep a thinking block only where its remembered prefix still matches; the first block that fails drops itself and
+ * every block before it (blocks may be removed from the front, never from the middle). Turns left empty are dropped.
+ */
+function replayableThinking(system: unknown, tools: unknown, wire: Record<string, unknown>[]): Record<string, unknown>[] {
+  let cut = -1
+  for (let index = 0; index < wire.length; index++) {
+    const message = wire[index]
+    if (message?.role !== 'assistant' || !Array.isArray(message.content)) continue
+    const blocks = message.content.filter(block => isRecord(block) && block.type === 'thinking') as Record<string, unknown>[]
+    if (blocks.length === 0) continue
+    const digest = blockPrefixDigest(system, tools, wire.slice(0, index))
+    if (blocks.some(block => typeof block.signature !== 'string' || anthropicBlockPrefixes.get(block.signature) !== digest)) cut = index
+  }
+  if (cut < 0) return wire
+  return wire.flatMap((message, index) => index > cut ? [message] : withoutThinking([message]) as Record<string, unknown>[])
+}
+
+/**
+ * One assistant turn on the Messages wire, blocks in the order they came: a thinking block goes back unchanged with its
+ * signature (only one this model wrote: a chat-wire reasoning field or another model's block is left out; whether its
+ * prefix still holds is decided by replayableThinking), then text, then tool calls as `tool_use`.
+ */
+function anthropicAssistantMessage(message: AssistantHistoryMessage, model: Model): Record<string, unknown> | undefined {
+  const writer = (message as { model?: unknown }).model
+  const ours = writer === undefined || writer === model.id
+  const content: Record<string, unknown>[] = []
+  for (const block of message.content) {
+    if (block.type === 'thinking') {
+      const signature = block.thinkingSignature
+      if (ours && typeof signature === 'string' && signature.length > 0 && !CHAT_REASONING_SIGNATURES.has(signature)) {
+        content.push({ type: 'thinking', thinking: block.thinking, signature })
+      }
+    } else if (block.type === 'text') {
+      if (block.text.trim().length > 0) content.push({ type: 'text', text: block.text })
+    } else {
+      content.push({ type: 'tool_use', id: block.id, name: block.name, input: block.arguments })
+    }
+  }
+  return content.length === 0 ? undefined : { role: 'assistant', content }
+}
+
+function anthropicToolResult(result: ToolResultMessage): Record<string, unknown> {
+  const text = result.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+  const images = result.content.flatMap(block => block.type === 'image'
+    ? [{ type: 'image', source: { type: 'base64', media_type: block.mimeType, data: block.data } }] : [])
+  const content = images.length === 0
+    ? text.length > 0 ? text : '(no tool output)'
+    : [...text.length === 0 ? [] : [{ type: 'text', text }], ...images]
+  return {
+    type: 'tool_result', tool_use_id: result.toolCallId, content,
+    ...(result as { isError?: unknown }).isError === true ? { is_error: true } : {},
+  }
+}
+
+/**
+ * The output room and the effort of one request. A chosen level must be one of the five (exact spelling) and offered for
+ * this model, or the request is refused here, before anything leaves: never passed through, never replaced.
+ */
+function anthropicEffort(model: Model, options: StreamOptions | undefined): { maxTokens: number; effort?: string } {
+  const level = options?.reasoningEffort
+  if (level === undefined) return { maxTokens: options?.maxTokens ?? model.maxTokens }
+  if (!isClaudeEffort(level)) throw closedRefusal('REASONING_EFFORT_UNKNOWN', `"${level}" is not one of low, medium, high, xhigh, max`)
+  const wire = model.thinkingLevelMap?.[level] ?? level
+  if (!isClaudeEffort(wire)) throw closedRefusal('REASONING_EFFORT_UNKNOWN', `"${wire}" is not one of low, medium, high, xhigh, max`)
+  if (!getSupportedThinkingLevels(model).includes(level)) {
+    throw closedRefusal('REASONING_EFFORT_NOT_OFFERED', `"${level}" is not offered for ${model.id} (its output room is above the model's output cap)`)
+  }
+  // The level's own room from the table; a larger room the conversation already asks for is kept.
+  return { maxTokens: Math.max(options?.maxTokens ?? 0, CLAUDE_EFFORT_ROOM[wire]), effort: wire }
+}
+
+/** The one cache mark this wire sends, the 5-minute default (claude-api shared/prompt-caching.md lines 122-123). */
+const ANTHROPIC_CACHE_MARK = Object.freeze({ type: 'ephemeral' })
+/** Blocks this wire may mark (prompt-caching.md line 128) that the edge door also accepts a mark on. */
+const ANTHROPIC_MARKABLE = new Set(['text', 'tool_use', 'tool_result'])
+
+/**
+ * The second mark, on the last content block of the newest message (prompt-caching.md lines 47-51), so each step
+ * reads the whole earlier conversation from the cache. A tool_result block carries the mark itself (line 128), its
+ * content unchanged. If the newest message ends in a block that may not carry one, the last block that may is marked.
+ */
+function markNewestBlock(wire: Record<string, unknown>[]): Record<string, unknown>[] {
+  const newest = wire.at(-1)
+  if (newest === undefined || !Array.isArray(newest.content)) return wire
+  const content: unknown[] = (newest.content as unknown[]).slice()
+  for (let index = content.length - 1; index >= 0; index--) {
+    const block = content[index]
+    if (isRecord(block) && typeof block.type === 'string' && ANTHROPIC_MARKABLE.has(block.type)) {
+      content[index] = { ...block, cache_control: { ...ANTHROPIC_CACHE_MARK } }
+      return [...wire.slice(0, -1), { ...newest, content }]
+    }
+  }
+  return wire
+}
+
+/**
+ * The Messages request body. It carries the fields the edge's request check accepts on this wire and nothing else: no
+ * `thinking` (thinking is always on for these models) and no sampling field (refused by these models).
+ */
+function buildAnthropicPayload(model: Model, context: PiContext, options: StreamOptions | undefined): Record<string, unknown> {
+  const { maxTokens, effort } = anthropicEffort(model, options)
+  const messages = resolvedMessages(context, completionsCompat(model))
+  const head = messages[0]?.role === 'system' ? messages[0] : undefined
+  const system = head === undefined ? '' : systemText(head, false)
+  const tools = currentTools(messages)
+  const wire: Record<string, unknown>[] = []
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]
+    if (message === undefined || message.role === 'system') continue
+    if (message.role === 'user') {
+      const content = anthropicUserContent(message.content)
+      if (content.length > 0) wire.push({ role: 'user', content })
+    } else if (message.role === 'assistant') {
+      const converted = anthropicAssistantMessage(message, model)
+      if (converted !== undefined) wire.push(converted)
+    } else {
+      // Consecutive tool results answer one assistant turn: one user message carries them all.
+      const results: Record<string, unknown>[] = []
+      let last = index
+      for (; last < messages.length; last++) {
+        const result = messages[last]
+        if (result?.role !== 'toolResult') break
+        results.push(anthropicToolResult(result))
+      }
+      wire.push({ role: 'user', content: results })
+      index = last - 1
+    }
+  }
+  // Tools render first in the cached prefix, so they go sorted by name (prompt-caching.md line 97); `system`
+  // is one text block carrying the first mark, which caches tools and system together (lines 11, 37).
+  const wireTools: Record<string, unknown>[] | undefined = tools.length === 0
+    ? undefined
+    : [...tools].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      .map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters }))
+  const wireSystem = system.length === 0 ? undefined : [{ type: 'text', text: system, cache_control: { ...ANTHROPIC_CACHE_MARK } }]
+  const lastTool = wireTools?.at(-1)
+  if (wireSystem === undefined && wireTools !== undefined && lastTool !== undefined) {
+    // No system text: the first mark goes on the last tool definition instead, so the tools are still cached.
+    wireTools[wireTools.length - 1] = { ...lastTool, cache_control: { ...ANTHROPIC_CACHE_MARK } }
+  }
+  const replayed = markNewestBlock(replayableThinking(wireSystem, wireTools, wire))
+  return {
+    model: model.id,
+    max_tokens: maxTokens,
+    stream: true,
+    ...wireSystem === undefined ? {} : { system: wireSystem },
+    messages: replayed,
+    ...wireTools === undefined ? {} : { tools: wireTools },
+    ...options?.toolChoice === undefined ? {} : { tool_choice: { type: options.toolChoice } },
+    ...effort === undefined ? {} : { output_config: { effort } },
+  }
+}
+
+function applyAnthropicStop(output: AssistantOutput, reason: string): void {
+  output.rawStopReason = reason
+  if (reason === 'end_turn' || reason === 'stop_sequence' || reason === 'pause_turn') output.stopReason = 'stop'
+  else if (reason === 'max_tokens') output.stopReason = 'length'
+  else if (reason === 'tool_use') output.stopReason = 'toolUse'
+  else {
+    output.stopReason = 'error'
+    output.errorMessage = reason === 'refusal' ? 'The provider declined this request (stop_reason: refusal)' : `Provider stop_reason: ${reason}`
+  }
+}
+
+function anthropicUsage(output: AssistantOutput, raw: Record<string, unknown>, model: Model): void {
+  const has = (name: string) => typeof raw[name] === 'number'
+  const usage = output.usage
+  if (has('input_tokens')) usage.input = numberField(raw, 'input_tokens')
+  if (has('cache_read_input_tokens')) usage.cacheRead = numberField(raw, 'cache_read_input_tokens')
+  if (has('cache_creation_input_tokens')) usage.cacheWrite = numberField(raw, 'cache_creation_input_tokens')
+  if (has('output_tokens')) usage.output = numberField(raw, 'output_tokens')
+  usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+  // Priced from the reference table (src/claude-prices.ts); a model outside it keeps a zero cost, never a guess.
+  const cost = claudeStepCost(model.id, usage)
+  if (cost !== null) usage.cost = cost
+}
+
+async function* anthropicStreamEvents(
+  model: Model,
+  context: PiContext,
+  options: StreamOptions | undefined,
+): AsyncGenerator<AssistantEvent> {
+  const output = pendingOutput(model)
+  try {
+    options?.signal?.throwIfAborted()
+    let payload = buildAnthropicPayload(model, normalizeContext(context), options)
+    const replacement = await options?.onPayload?.(payload, model)
+    if (replacement !== undefined) {
+      if (!isRecord(replacement)) throw new Error('Provider payload hook returned a non-object value')
+      payload = replacement
+    }
+    const origin = pageOrigin()
+    // Only through the edge door: the key, the budget and the request check live there.
+    if (origin === undefined) throw new Error('web-preview: Anthropic Messages is served only through the Aukora edge door in a page')
+    const endpoint = endpointOf(model, '/messages')
+    const headers = requestHeaders(model, options)
+    headers.delete('authorization')
+    headers.delete('x-api-key')
+    const response = await (options?.fetch ?? globalThis.fetch)(endpoint, {
+      method: 'POST',
+      headers,
+      credentials: 'same-origin',
+      body: JSON.stringify(payload),
+      ...options?.signal === undefined ? {} : { signal: options.signal },
+    })
+    if (!response.ok) throw providerHttpError(response.status, await response.text())
+    await options?.onResponse?.({ status: response.status, headers: Object.fromEntries(response.headers) }, model)
+    if (response.body === null) throw new Error('Provider returned no response body')
+    yield { type: 'start', partial: output }
+
+    const blocks = new Map<number, AssistantContent>()
+    let stopped = false
+    for await (const data of sseEvents(response.body)) {
+      const raw = parseSseJson(data)
+      await options?.onProviderStreamEvent?.(raw, model)
+      if (!isRecord(raw)) throw new Error('Provider stream event is not an object')
+      const type = raw.type
+      if (type === 'ping') continue
+      if (type === 'error') throw new Error(`Provider stream error: ${JSON.stringify(raw.error)}`)
+      if (type === 'message_start') {
+        const message = isRecord(raw.message) ? raw.message : undefined
+        if (typeof message?.id === 'string') output.responseId ??= message.id
+        if (typeof message?.model === 'string' && message.model.length > 0 && message.model !== model.id) output.responseModel ??= message.model
+        if (isRecord(message?.usage)) anthropicUsage(output, message.usage, model)
+        continue
+      }
+      if (type === 'message_delta') {
+        const delta = isRecord(raw.delta) ? raw.delta : undefined
+        if (typeof delta?.stop_reason === 'string') applyAnthropicStop(output, delta.stop_reason)
+        if (isRecord(raw.usage)) anthropicUsage(output, raw.usage, model)
+        continue
+      }
+      if (type === 'message_stop') { stopped = true; break }
+      const index = raw.index
+      if (typeof index !== 'number') throw new Error(`Provider stream event ${String(type)} has no block index`)
+      if (type === 'content_block_start') {
+        const start = isRecord(raw.content_block) ? raw.content_block : undefined
+        let block: AssistantContent
+        if (start?.type === 'text') block = { type: 'text', text: '' }
+        else if (start?.type === 'thinking') block = { type: 'thinking', thinking: '', thinkingSignature: typeof start.signature === 'string' ? start.signature : '' }
+        else if (start?.type === 'tool_use' && typeof start.id === 'string' && typeof start.name === 'string') {
+          block = { type: 'toolCall', id: start.id, name: start.name, arguments: {}, partialArgs: '' }
+        } else throw new Error(`Provider content block type ${JSON.stringify(start?.type)} is not supported here`)
+        blocks.set(index, block)
+        output.content.push(block)
+        const contentIndex = output.content.length - 1
+        yield { type: block.type === 'text' ? 'text_start' : block.type === 'thinking' ? 'thinking_start' : 'toolcall_start', contentIndex, partial: output }
+        if (block.type === 'text' && typeof start.text === 'string' && start.text.length > 0) {
+          block.text = start.text
+          yield { type: 'text_delta', contentIndex, delta: start.text, partial: output }
+        }
+        if (block.type === 'thinking' && typeof start.thinking === 'string' && start.thinking.length > 0) {
+          block.thinking = start.thinking
+          yield { type: 'thinking_delta', contentIndex, delta: start.thinking, partial: output }
+        }
+        continue
+      }
+      const block = blocks.get(index)
+      if (block === undefined) throw new Error(`Provider stream event ${String(type)} names an unknown block`)
+      const contentIndex = output.content.indexOf(block)
+      if (type === 'content_block_delta') {
+        const delta = isRecord(raw.delta) ? raw.delta : undefined
+        if (delta?.type === 'text_delta' && block.type === 'text' && typeof delta.text === 'string') {
+          block.text += delta.text
+          yield { type: 'text_delta', contentIndex, delta: delta.text, partial: output }
+        } else if (delta?.type === 'thinking_delta' && block.type === 'thinking' && typeof delta.thinking === 'string') {
+          block.thinking += delta.thinking
+          yield { type: 'thinking_delta', contentIndex, delta: delta.thinking, partial: output }
+        } else if (delta?.type === 'signature_delta' && block.type === 'thinking' && typeof delta.signature === 'string') {
+          block.thinkingSignature = (block.thinkingSignature ?? '') + delta.signature
+        } else if (delta?.type === 'input_json_delta' && block.type === 'toolCall' && typeof delta.partial_json === 'string') {
+          block.partialArgs = (block.partialArgs ?? '') + delta.partial_json
+          yield { type: 'toolcall_delta', contentIndex, delta: delta.partial_json, partial: output }
+        } else throw new Error(`Provider delta ${JSON.stringify(delta?.type)} does not fit its ${block.type} block`)
+        continue
+      }
+      if (type === 'content_block_stop') {
+        if (block.type === 'text') yield { type: 'text_end', contentIndex, content: block.text, partial: output }
+        else if (block.type === 'thinking') {
+          // Remember the exact prefix this block was made under (the body that left, after any payload hook).
+          const signature = block.thinkingSignature
+          if (typeof signature === 'string' && signature.length > 0 && Array.isArray(payload.messages)) {
+            rememberBlockPrefix(signature, blockPrefixDigest(payload.system, payload.tools, payload.messages))
+          }
+          yield { type: 'thinking_end', contentIndex, content: block.thinking, partial: output }
+        }
+        else {
+          Object.assign(block, parseToolArguments(block.partialArgs ?? ''))
+          delete block.partialArgs
+          yield { type: 'toolcall_end', contentIndex, toolCall: block, partial: output }
+        }
+        continue
+      }
+      throw new Error(`Provider stream event ${JSON.stringify(type)} is not supported here`)
+    }
+    options?.signal?.throwIfAborted()
+    if (output.stopReason === 'error') throw new Error(output.errorMessage ?? 'Provider returned an error stop reason')
+    if (!stopped || output.stopReason === 'pending') throw new Error('Stream ended without message_stop and a stop_reason')
+    if (output.stopReason !== 'stop' && output.stopReason !== 'length' && output.stopReason !== 'toolUse') {
+      throw new Error(`Provider stream ended with invalid stop reason: ${output.stopReason}`)
+    }
+    yield { type: 'done', reason: output.stopReason, message: output }
+  } catch (error: unknown) {
+    for (const block of output.content) {
+      if (block.type === 'toolCall') delete block.partialArgs
+    }
+    output.stopReason = options?.signal?.aborted === true ? 'aborted' : 'error'
+    output.errorMessage = errorText(error)
+    yield { type: 'error', reason: output.stopReason, error: output }
+  }
+}
+
+/**
+ * Her default, `auto`, is a request with no level, and that request goes
+ * exactly as it went before the effort build (an earlier commit): the chat-compatible wire through the same Anthropic door, as
+ * the bundle then declared her Claude route (`api: openai-completions`, non-reasoning, this compat). Only a named level
+ * takes the Messages wire, so a turn never mixes wires, and a thinking block made on the Messages wire is never sent on
+ * the chat wire (its signature is not a chat reasoning field). A test pins these bytes to that route's.
+ */
+const CLAUDE_CHAT_COMPAT: ModelCompat = Object.freeze({
+  maxTokensField: 'max_tokens', supportsDeveloperRole: false, supportsStore: false, supportsUsageInStreaming: false,
+})
+
+/** Her Claude route as it was before the effort build: the chat wire, no reasoning, its own compat. */
+function claudeChatRoute(model: Model): Model {
+  const { thinkingLevelMap: _levels, compat: _compat, ...route } = model
+  return { ...route, api: 'openai-completions', reasoning: false, compat: { ...CLAUDE_CHAT_COMPAT } }
+}
+
+/**
+ * Browser Fetch implementation of Anthropic Messages, through the same-origin edge door. A request with no
+ * level (her `auto`) goes by the chat wire she ran before; a named level goes by the Messages wire.
+ * @returns the Messages stream and simple-stream bindings.
+ */
+export function anthropicMessagesApi(): ProviderStreams {
+  return {
+    stream(model, context, options) {
+      assertCredentials(model, options)
+      if (options?.reasoningEffort === undefined) return streamEvents(claudeChatRoute(model), context, options)
+      return anthropicStreamEvents(model, context, options)
+    },
+    streamSimple(model, context, options) {
+      assertCredentials(model, options)
+      const reasoningEffort = options?.reasoning === 'off' ? undefined : options?.reasoning
+      if (reasoningEffort === undefined) return streamEvents(claudeChatRoute(model), context, { ...options, reasoningEffort })
+      return anthropicStreamEvents(model, context, { ...options, reasoningEffort })
+    },
+  }
+}
+// ---- EFFORT-LEVELS block end ----
 
 /** OpenAI responses API binding (unavailable). */
 export const openAIResponsesApi = notImplementedFail(MODULE, 'openAIResponsesApi')

@@ -26,7 +26,7 @@
     "lib/index.js",
     "lib/types/**/*.d.ts"
   ],
-  "license": "MIT",
+  "license": "MIT AND AGPL-3.0-or-later",
   "peerDependencies": {
     "@deepseek-ai/cordis": "workspace:~",
     "@deepseek-ai/dsh-agent": "workspace:*",

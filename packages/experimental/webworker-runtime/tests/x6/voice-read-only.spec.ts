@@ -79,6 +79,8 @@ function presetStandIn(name: string, vfs: MemoryVfs, reached: string[]) {
 
 interface BootOptions {
   store?: VoiceMarkStore | null
+  /** The voice level the mount asks for (default: none asked, so `look-only`; the live worker asks for `open`). */
+  level?: 'open' | 'look-only'
   records?: Record<string, ReturnType<typeof voiceRecord>>
   scopedHost?: boolean
   respond?: (method: string, path: string) => Promise<Response | null> | Response | null
@@ -133,7 +135,9 @@ async function boot(options: BootOptions = {}) {
   }
   const loader = new WorkerModuleLoader({ vfs, staticModules: { '@deepseek-ai/dsh-tools': () => dshTools } })
   const store = options.store === undefined ? memoryVoiceMarkStore() : options.store
-  const runtime = await mountX6BallRuntime(host as never, vfs, loader, { voiceMarks: store })
+  const runtime = await mountX6BallRuntime(host as never, vfs, loader, {
+    voiceMarks: store, ...(options.level === undefined ? {} : { level: options.level }),
+  })
   for (let i = 0; i < 10; i += 1) await new Promise(resolve => setTimeout(resolve, 0))
   let n = 0
   /** One model call through the real pipeline, by the agent of `sessionId` (its header names working folder `cwd`). */
@@ -557,6 +561,13 @@ describe('T5: the private folder', () => {
     }
     expect(voiceVerdict({ tool: 'read_image', args: { file_path: `${SESSIONS}/--dsh-home-auma--/s2/shot.png` }, origin: { kind: 'preset' } }))
       .toBe(VOICE_THREAD_LOGS_REFUSAL)
+    // Review: her memory organ's stores hold thread chunks after `index_sessions`; from voice only `recall` (screened).
+    for (const file of ['/dsh/home/auma/memory-store.v2.json', '/dsh/home/auma/memory-store.json', '/dsh/home/auma/notes/../memory-store.v2.json',
+      '/dsh/home/auma/memory-store.v2.json.tmp-1']) {
+      for (const [tool, args] of [['read', { file_path: file }], ['grep', { pattern: 'x', path: file }], ['glob', { pattern: '*', path: file }]] as const) {
+        expect([tool, file, voiceVerdict({ tool, args, origin: { kind: 'preset' } })]).toEqual([tool, file, VOICE_THREAD_LOGS_REFUSAL])
+      }
+    }
     // The session-query tools return thread events with no secret filter: off from voice, like recall.
     for (const tool of ['session_search', 'session_event_search', 'session_trace', 'session_event_read']) {
       expect(Object.hasOwn(VOICE_SWITCH_TABLE, tool)).toBe(false)
@@ -725,6 +736,111 @@ describe('R1: the session-only model route', () => {
     expect(selections[TYPED]).toEqual([])
     expect(saveSelection).not.toHaveBeenCalled()
   })
+
+  it('accepts exactly auto and the five Claude levels for her three Claude models, refusing any other before the adapter', async () => {
+    const selections: unknown[] = []
+    const resolved: unknown[] = []
+    const host = await boot()
+    host.context.provide('typert', { lookups: { get: (key: string) => key === 'agent'
+      ? { resolve: (id: string) => Promise.resolve(id === TYPED
+        ? { id, model: { select: (selection: unknown) => { selections.push(selection) } } }
+        : undefined) }
+      : undefined } })
+    host.context.provide('llm', { resolveCallConfig: (config: Record<string, unknown>) => { resolved.push(config); return Promise.resolve(config) } })
+    const select = (body: unknown) => host.control('POST', '/__x6__/session-model', body)
+    for (const model of ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5']) {
+      // `auto`, her default (the chat wire she ran before), is the sixth id.
+      for (const reasoningEffort of ['auto', 'low', 'medium', 'high', 'xhigh', 'max']) {
+        expect((await select({ sessionId: TYPED, provider: 'anthropic-door', model, reasoningEffort }))?.status).toBe(200)
+      }
+      for (const reasoningEffort of ['off', 'minimal', 'extreme', 'xhigh2', 'default', 'auto2']) {
+        expect(await select({ sessionId: TYPED, provider: 'anthropic-door', model, reasoningEffort }))
+          .toEqual({ status: 400, body: { ok: false, code: 'SESSION_EFFORT_UNKNOWN' } })
+      }
+      // A capitalized spelling never reaches the list: the route's shape check refuses it first, as before.
+      expect(await select({ sessionId: TYPED, provider: 'anthropic-door', model, reasoningEffort: 'Auto' }))
+        .toEqual({ status: 400, body: { ok: false, code: 'SESSION_MODEL_INVALID' } })
+      expect((await select({ sessionId: TYPED, provider: 'anthropic-door', model }))?.status).toBe(200)
+    }
+    expect(selections).toHaveLength(21)
+    expect(resolved).toHaveLength(21)
+    // Another provider's levels are its adapter's to judge, as before.
+    expect((await select({ sessionId: TYPED, provider: 'deepseek', model: 'deepseek-flash', reasoningEffort: 'minimal' }))?.status).toBe(200)
+  })
+
+  it('her voice thread never opts itself in to a named Claude level; a typed thread may', async () => {
+    const selections: Record<string, unknown[]> = { [VOICE]: [], [TYPED]: [] }
+    const agentFor = (id: string) => ({ id, model: { select: (selection: unknown) => { selections[id]?.push(selection) } } })
+    const resolved: unknown[] = []
+    const host = await boot()
+    host.context.provide('typert', { lookups: { get: (key: string) => key === 'agent'
+      ? { resolve: (id: string) => Promise.resolve(Object.hasOwn(selections, id) ? agentFor(id) : undefined) } : undefined } })
+    host.context.provide('llm', { resolveCallConfig: (config: Record<string, unknown>) => { resolved.push(config); return Promise.resolve(config) } })
+    await host.mark(VOICE)
+    const select = (body: unknown) => host.control('POST', '/__x6__/session-model', body)
+    for (const model of ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5']) {
+      // The page's spoken-turn ask (VOICE_EFFORT `low`) and every other named level: refused before the adapter, so
+      // the voice thread stays on the chat wire it ran at an earlier commit.
+      for (const reasoningEffort of ['low', 'medium', 'high', 'xhigh', 'max']) {
+        expect(await select({ sessionId: VOICE, provider: 'anthropic-door', model, reasoningEffort }))
+          .toEqual({ status: 400, body: { ok: false, code: 'VOICE_CLAUDE_LEVEL_OPT_IN' } })
+      }
+      // `auto` and no level are the old wire: allowed there.
+      expect((await select({ sessionId: VOICE, provider: 'anthropic-door', model, reasoningEffort: 'auto' }))?.status).toBe(200)
+      expect((await select({ sessionId: VOICE, provider: 'anthropic-door', model }))?.status).toBe(200)
+      // The same body on a typed thread is a plain opt-in.
+      expect((await select({ sessionId: TYPED, provider: 'anthropic-door', model, reasoningEffort: 'low' }))?.status).toBe(200)
+    }
+    expect(selections[VOICE]).toHaveLength(6)
+    expect(selections[VOICE]?.some((s) => {
+      const effort = (s as { reasoningEffort?: unknown }).reasoningEffort
+      return effort !== undefined && effort !== 'auto'
+    })).toBe(false)
+    expect(selections[TYPED]).toHaveLength(3)
+    expect(resolved).toHaveLength(9)
+    // Other providers' voice efforts are unchanged.
+    expect((await select({ sessionId: VOICE, provider: 'deepseek', model: 'deepseek-flash', reasoningEffort: 'low' }))?.status).toBe(200)
+  })
+})
+
+// After two reviews: no rule keeps a voice thread on the old uncached chat wire. A first
+// attempt pinned a marked voice thread to `auto`; it could not see a thread that was not live yet, could change wire
+// in the middle of a turn, and it forced a voice thread on a Claude model to re-send its whole history uncached, the
+// very cost this work removes. It was taken out. What is left, and tested here, is what the route did before.
+describe('her voice home and the Claude default at voice level `open` (what the live worker asks for)', () => {
+  const claude = { provider: 'anthropic-door', model: 'claude-fable-5-2' }
+  const wire = async (store: VoiceMarkStore) => {
+    const selections: unknown[] = []
+    const host = await boot({ level: 'open', store })
+    host.context.provide('typert', { lookups: { get: (key: string) => key === 'agent'
+      ? { resolve: (id: string) => Promise.resolve(id === VOICE
+        ? { id, model: { current: () => claude, select: (selection: unknown) => { selections.push(selection) } } }
+        : undefined) }
+      : undefined } })
+    host.context.provide('llm', { resolveCallConfig: (config: Record<string, unknown>) => Promise.resolve(config) })
+    const select = (body: unknown) => host.control('POST', '/__x6__/session-model', body)
+    return { host, selections, select }
+  }
+
+  it('a voice home with no saved mark is an ordinary thread: marking selects nothing, `low` is taken, no level stays none', async () => {
+    const { host, selections, select } = await wire(memoryVoiceMarkStore())
+    expect(await host.mark(VOICE)).toMatchObject({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open' })
+    expect(selections).toEqual([])
+    expect((await select({ sessionId: VOICE, ...claude, reasoningEffort: 'low' }))?.status).toBe(200)
+    expect((await select({ sessionId: VOICE, ...claude }))?.status).toBe(200)
+    // No level is stored as no level: the route default (`medium`, the cached Messages wire), never a forced `auto`.
+    expect(selections).toEqual([{ ...claude, reasoningEffort: 'low' }, claude])
+  })
+
+  it('a voice home an older body marked: marking selects nothing, a named level is refused, no level stays none', async () => {
+    const { host, selections, select } = await wire(memoryVoiceMarkStore([VOICE]))
+    expect(await host.mark(VOICE)).toMatchObject({ ok: true, code: 'VOICE_OPEN' })
+    expect(selections).toEqual([])
+    expect(await select({ sessionId: VOICE, ...claude, reasoningEffort: 'low' }))
+      .toEqual({ status: 400, body: { ok: false, code: 'VOICE_CLAUDE_LEVEL_OPT_IN' } })
+    expect((await select({ sessionId: VOICE, ...claude }))?.status).toBe(200)
+    expect(selections).toEqual([claude])
+  })
 })
 
 describe('regressions: each test failed before its fix', () => {
@@ -851,10 +967,12 @@ describe('T7: every registered tool is listed or recorded as refused', () => {
         "subagent",
         "tree_patch",
         "tree_undo",
+        "voice_scratch",
         "write",
         "x6_browser_estate",
         "x6_capability_index",
         "x6_cell",
+        "x6_checkpoint_verify",
         "x6_cloudflare",
         "x6_consult",
         "x6_exec",
@@ -862,6 +980,7 @@ describe('T7: every registered tool is listed or recorded as refused', () => {
         "x6_github",
         "x6_host_facts",
         "x6_linear",
+        "x6_memory",
         "x6_nostr",
         "x6_repo",
         "x6_self_check",
@@ -871,6 +990,7 @@ describe('T7: every registered tool is listed or recorded as refused', () => {
         "x6_threads",
         "x6_tools",
         "x6_trusted_docs",
+        "x6_voice_memory",
         "x6_voice_status",
         "x6_web_eyes",
         "x6_wish",

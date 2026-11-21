@@ -4,7 +4,7 @@
  * lane's handoff) and passes after it. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { BACKCHANNEL, BRIDGE_LIMITS, JOURNAL_RETRY_MS, LOST_PLACE, PROVIDER_HOLD_MS, ADMISSION_KEY, cutClause } from '../voice-bridge-do.mjs'
+import { BACKCHANNEL, BRIDGE_LIMITS, EARLY_CUE, JOURNAL_RETRY_MS, LOST_PLACE, PROVIDER_HOLD_MS, ADMISSION_KEY, cutClause } from '../voice-bridge-do.mjs'
 import { PROVIDER_JSON_MAX_BYTES } from '../voice-bridge.mjs'
 import { BRIDGE_INDEX_KEY, BRIDGE_INDEX_LIMITS, BRIDGE_TURN_ID_RE, handleInternalTurnJournalRoute } from '../turn-journal.mjs'
 import { BRIDGE_TURN_ID_RE as DO_TURN_ID_RE } from '../voice-bridge-do.mjs'
@@ -316,7 +316,7 @@ test('MUST 7: a provider answer with no length that streams 327,680 bytes is can
 })
 
 // ── MUST 8: the backchannel counts from the transcript's arrival ──────────────────────────────────────────────────
-test('MUST 8: a journal answer delayed 4.9 s still gets the backchannel 13.5 s after the transcript ARRIVED', async () => {
+test('MUST 8: a journal answer delayed 4.9 s still gets the backchannel 13.5 s after the transcript ARRIVED (the early cue, past due, goes with the turn)', async () => {
   let gate = null, release = () => {}
   const fx = fixture({ journalGate: body => (body.action === undefined && gate ? gate : undefined) })
   const { provider } = await fx.connect()
@@ -330,9 +330,9 @@ test('MUST 8: a journal answer delayed 4.9 s still gets the backchannel 13.5 s a
   await fx.settle()
   fx.clock.advance(arrived + 13499 - fx.clock.now())
   await fx.settle()
-  assert.deepEqual(chunks(provider, 1), [])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE])
   fx.clock.advance(1)
-  assert.deepEqual(spoken(provider, 1), [BACKCHANNEL])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, BACKCHANNEL])
   // A journal that answers after the moment has passed: the backchannel goes with the turn, at once.
   const late = fixture({ journalGate: body => (body.action === undefined && gate ? gate : undefined) })
   const live = await late.connect()
@@ -361,8 +361,9 @@ test('MUST 9: a credential-like transcript is not stored in the journal row (has
 })
 
 // ── SHOULD 1: admission reserves what is left, down to 60 s ───────────────────────────────────────────────────────
+// 2026-11-18: the numbers below sit under the 5,356,800 s ceiling (the day has none of its own).
 test('SHOULD 1: admission reserves min(1,200 s, what is left of the day and month); under 60 s left it refuses', async () => {
-  for (const [used, saved, expect] of [[21540, 60, 60], [21540, 1200, 60], [21000, 1200, 600], [21000, 300, 300], [0, 1200, 1200]]) {
+  for (const [used, saved, expect] of [[5356740, 60, 60], [5356740, 1200, 60], [5356200, 1200, 600], [5356200, 300, 300], [0, 1200, 1200]]) {
     const fx = fixture({ duration: saved })
     await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: used, month: '2026-11', monthSeconds: used, slots: {} })
     const response = await fx.ownerDoor()
@@ -371,15 +372,15 @@ test('SHOULD 1: admission reserves min(1,200 s, what is left of the day and mont
     assert.deepEqual([record.daySeconds, Object.values(record.slots)[0].seconds], [used + expect, expect])
   }
   const short = fixture()
-  await short.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 21541, month: '2026-11', monthSeconds: 21541, slots: {} })
+  await short.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5356741, month: '2026-11', monthSeconds: 5356741, slots: {} })
   assert.deepEqual(await (await short.ownerDoor()).json(), { ok: false, code: 'VOICE_QUOTA' })
   assert.equal(short.calls.provider.length, 0)
   const month = fixture()
-  await month.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 0, month: '2026-11', monthSeconds: 179950, slots: {} })
+  await month.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 0, month: '2026-11', monthSeconds: 5356750, slots: {} })
   assert.deepEqual(await (await month.ownerDoor()).json(), { ok: false, code: 'VOICE_QUOTA' })
   // The bridge itself ends the conversation at the reserved number.
   const fx = fixture()
-  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 21000, month: '2026-11', monthSeconds: 21000, slots: {} })
+  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5356200, month: '2026-11', monthSeconds: 5356200, slots: {} })
   const { tab, provider, answer } = await fx.connect()
   assert.equal(answer.maxDurationSeconds, 600)
   fx.clock.advance(599999)

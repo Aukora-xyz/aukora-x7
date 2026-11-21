@@ -43,6 +43,13 @@ describe('browser estate (pure)', () => {
     expect(estateRedaction('/dsh/home/auma/private')).toBe('private')
     expect(estateRedaction('/dsh/home/auma/privateer.md')).toBeNull()
     expect(estateRedaction('/dsh/home/auma/keys/device-keypair.json')).toBe('sensitive-name')
+    // .env files, .npmrc, SSH keys without an extension and *.token files are key-like names too.
+    for (const name of ['.env', '.env.local', '.npmrc', 'id_rsa', 'id_ed25519', 'id_ecdsa', 'linear.token']) {
+      expect([name, estateRedaction(`/dsh/home/auma/work/${name}`)]).toEqual([name, 'sensitive-name'])
+    }
+    for (const name of ['environment.md', 'id_rsa.pub', 'tokens-of-thanks.md', 'notes.env.md']) {
+      expect([name, estateRedaction(`/dsh/home/auma/work/${name}`)]).toEqual([name, null])
+    }
     expect(decodeSessionWorkspace('--dsh-home-auma--')).toMatchObject({ form: 'auma-root', workspace: '/dsh/home/auma' })
     expect(decodeSessionWorkspace('--dsh-home-auma-one--')).toMatchObject({ form: 'legacy-auma-one' })
     expect(decodeSessionWorkspace('--dsh-home-auma-workspaces-garden--')).toMatchObject({ form: 'auma-subworkspace', workspace: '/dsh/home/auma/workspaces/garden' })

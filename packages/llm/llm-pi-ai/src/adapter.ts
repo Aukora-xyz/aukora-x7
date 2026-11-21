@@ -58,6 +58,7 @@ import type {
 } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
+import { AUTO_EFFORT } from './config.ts'
 import type { ResolvedPiAiProviderProfile } from './config.ts'
 import { requestImageTarget, toPiContext } from './context.ts'
 import { conversationUpdates, createModels, getSupportedThinkingLevels } from './models.ts'
@@ -171,9 +172,11 @@ function profileOptions(
  */
 function describableReasoningLevel(
   model: Model<Api>,
-  effort: ReasoningEffortIdType | ModelThinkingLevel | undefined,
-): ModelThinkingLevel | undefined {
+  effort: ReasoningEffortIdType | ModelThinkingLevel | typeof AUTO_EFFORT | undefined,
+  auto: boolean,
+): ModelThinkingLevel | typeof AUTO_EFFORT | undefined {
   if (effort === undefined) return undefined
+  if (effort === AUTO_EFFORT) return auto ? AUTO_EFFORT : undefined
   return getSupportedThinkingLevels(model).some(level => level === effort)
     ? effort as ModelThinkingLevel
     : undefined
@@ -182,7 +185,7 @@ function describableReasoningLevel(
 /** Validate an explicit Harness/profile effort without invoking pi-ai's clamp. */
 function resolveReasoningLevel(
   model: Model<Api>,
-  effort: ReasoningEffortIdType | ModelThinkingLevel | undefined,
+  effort: ReasoningEffortIdType | ModelThinkingLevel | typeof AUTO_EFFORT | undefined,
 ): ModelThinkingLevel | undefined {
   if (effort === undefined) return undefined
   const supported = getSupportedThinkingLevels(model)
@@ -211,19 +214,31 @@ function resolveReasoningLevel(
  */
 function reasoningInfo(
   model: Model<Api>,
-  defaultLevel: ModelThinkingLevel | undefined,
+  defaultLevel: ModelThinkingLevel | typeof AUTO_EFFORT | undefined,
+  autoEffort: string | undefined,
 ): Pick<LlmResolvedModelInfo, 'reasoning'> | Record<string, never> {
   if (!model.reasoning) return {}
   const levels = getSupportedThinkingLevels(model)
   return {
     reasoning: {
-      efforts: levels.map(level => ({
-        id: ReasoningEffortId(level),
-        name: `${level.charAt(0).toUpperCase()}${level.slice(1)}`,
-      })),
+      efforts: [
+        // `auto` (no effort sent, the provider's own default) leads where the route offers it.
+        ...autoEffort === undefined ? [] : [{ id: ReasoningEffortId(AUTO_EFFORT), name: 'Auto', description: autoEffort }],
+        ...levels.map(level => ({ id: ReasoningEffortId(level), name: effortName(level) })),
+      ],
       ...defaultLevel === undefined ? {} : { defaultEffort: ReasoningEffortId(defaultLevel) },
     },
   }
+}
+
+/** A level's display name: capitalized, with `xhigh` spelled as people read it. */
+function effortName(level: ModelThinkingLevel): string {
+  return level === 'xhigh' ? 'X-High' : `${level.charAt(0).toUpperCase()}${level.slice(1)}`
+}
+
+/** Whether this route offers `auto` on this model: the route sets `autoEffort` and the model reasons. */
+function autoEffortOf(profile: ResolvedPiAiProviderProfile, model: Model<Api>): string | undefined {
+  return model.reasoning ? profile.autoEffort : undefined
 }
 
 /** Native header TypeErrors can echo credentials; other plugin errors own their public message. */
@@ -367,7 +382,8 @@ export class PiAiAdapter extends LlmAdapter {
   private modelInfo(snapshot: PiAiSnapshot, provider: string, model: string): LlmResolvedModelInfo {
     const profile = this.profileOf(snapshot, provider)
     const resolvedModel = this.modelOf(snapshot, provider, model)
-    const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning)
+    const autoEffort = autoEffortOf(profile, resolvedModel)
+    const defaultLevel = describableReasoningLevel(resolvedModel, profile.reasoning, autoEffort !== undefined)
     // Only a cap the deployment configured is a request default; the
     // catalog's `maxTokens` sizes the model and stops there.
     const configuredMaxTokens = profile.configuredMaxTokens.get(model)
@@ -378,7 +394,7 @@ export class PiAiAdapter extends LlmAdapter {
       inputModalities: [...resolvedModel.input],
       context: { contextWindow: resolvedModel.contextWindow },
       ...configuredMaxTokens === undefined ? {} : { defaultMaxTokens: configuredMaxTokens },
-      ...reasoningInfo(resolvedModel, defaultLevel),
+      ...reasoningInfo(resolvedModel, defaultLevel, autoEffort),
       ...conversationUpdates(resolvedModel),
     }
   }
@@ -419,10 +435,12 @@ export class PiAiAdapter extends LlmAdapter {
     const request = needsPlaceholder
       ? { ...options, tools: [ANTHROPIC_TOOL_UPDATE_PLACEHOLDER, ...tools] }
       : options
-    const reasoning = resolveReasoningLevel(
-      model,
-      options.reasoningEffort ?? profile.reasoning,
-    )
+    const requested = options.reasoningEffort ?? profile.reasoning
+    // `auto` names no effort: the same request as naming none, offered only where the route sets `autoEffort`;
+    // elsewhere it is an unsupported effort like any other.
+    const reasoning = requested === AUTO_EFFORT && autoEffortOf(profile, model) !== undefined
+      ? undefined
+      : resolveReasoningLevel(model, requested)
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
 
     const consumer = new AbortController()

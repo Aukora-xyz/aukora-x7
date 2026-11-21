@@ -158,7 +158,7 @@ test('Mouth-Brain Voice Director: enforces grounded speakable clauses, idle back
   // State slot strictly bounded to <= 1200 UTF-8 bytes (~300 tokens).
   const hugeSlot = compileVoiceStateSlot({
     epoch: 167,
-    ballId: '7c4938450b882917000000000000000000000000000000000000000000000067',
+    ballId: '688d831c4e8e159b000000000000000000000000000000000000000000000067',
     topic: 'A'.repeat(2000),
     activeWish: 'B'.repeat(2000),
     openThreads: Array.from({ length: 10 }, (_, i) => `Thread ${String(i)} ${'C'.repeat(400)}`),

@@ -241,6 +241,93 @@ describe('ModelSelect reasoning effort', () => {
     })
   })
 
+  it('offers her Claude model five levels, shows the one in use, and submits the chosen one', async () => {
+    const claude = (current: ModelSelection) => state({
+      current,
+      groups: [{ id: 'anthropic-door', name: 'Anthropic', models: [{
+        id: 'claude-fable-5-2',
+        name: 'Fable 5.2',
+        reasoning: {
+          efforts: ['low', 'medium', 'high', 'xhigh', 'max'].map(id => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })),
+          defaultEffort: 'medium',
+        },
+      }] }],
+    })
+    const directory = createSnapshotStore<ModelDirectoryState>(claude({ provider: 'anthropic-door', model: 'claude-fable-5-2' }))
+    const select = vi.fn(async (selection: ModelSelection) => {
+      directory.set(claude(selection))
+      return { ok: true as const, value: undefined }
+    })
+    render(<ModelSelect renderSlot={renderLabel}
+      locked={false}
+      available
+      directory={directory}
+      load={vi.fn()} resolveText={resolveText}
+      select={select}
+      t={t}
+    />)
+    const trigger = screen.getByRole('button', { name: '选择模型，当前 Fable 5.2，推理等级 Medium' })
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: /推理等级/ }))
+    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent))
+      .toEqual(['Low', 'Medium', 'High', 'Xhigh', 'Max'])
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Xhigh/ }))
+    await waitFor(() => {
+      expect(select).toHaveBeenCalledWith({ provider: 'anthropic-door', model: 'claude-fable-5-2', reasoningEffort: 'xhigh' })
+      expect(trigger.getAttribute('aria-label')).toBe('选择模型，当前 Fable 5.2，推理等级 Xhigh')
+    })
+  })
+
+  it('auto: offers six rows, Auto first and shown as current on a fresh conversation, and returns to Auto', async () => {
+    const claude = (current: ModelSelection) => state({
+      current,
+      groups: [{ id: 'anthropic-door', name: 'Anthropic', models: [{
+        id: 'claude-fable-5-2',
+        name: 'Fable 5.2',
+        // As the browser adapter lists her Claude model: `auto` first and the default.
+        reasoning: {
+          efforts: [
+            { id: 'auto', name: 'Auto', description: 'the provider\'s own default, as before 2026-11-17' },
+            { id: 'low', name: 'Low' }, { id: 'medium', name: 'Medium' }, { id: 'high', name: 'High' },
+            { id: 'xhigh', name: 'X-High' }, { id: 'max', name: 'Max' },
+          ],
+          defaultEffort: 'auto',
+        },
+      }] }],
+    })
+    const directory = createSnapshotStore<ModelDirectoryState>(claude({ provider: 'anthropic-door', model: 'claude-fable-5-2' }))
+    const select = vi.fn(async (selection: ModelSelection) => {
+      directory.set(claude(selection))
+      return { ok: true as const, value: undefined }
+    })
+    render(<ModelSelect renderSlot={renderLabel}
+      locked={false}
+      available
+      directory={directory}
+      load={vi.fn()} resolveText={resolveText}
+      select={select}
+      t={t}
+    />)
+    const trigger = screen.getByRole('button', { name: '选择模型，当前 Fable 5.2，推理等级 Auto' })
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: /推理等级/ }))
+    const rows = screen.getAllByRole('menuitemradio')
+    expect(rows.map(item => item.textContent)).toEqual(['Auto', 'Low', 'Medium', 'High', 'X-High', 'Max'])
+    expect(rows.map(item => item.getAttribute('aria-checked'))).toEqual(['true', 'false', 'false', 'false', 'false', 'false'])
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /^High$/ }))
+    await waitFor(() => {
+      expect(select).toHaveBeenLastCalledWith({ provider: 'anthropic-door', model: 'claude-fable-5-2', reasoningEffort: 'high' })
+      expect(trigger.getAttribute('aria-label')).toBe('选择模型，当前 Fable 5.2，推理等级 High')
+    })
+    fireEvent.click(trigger)
+    fireEvent.click(screen.getByRole('menuitem', { name: /推理等级/ }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /^Auto$/ }))
+    await waitFor(() => {
+      expect(select).toHaveBeenLastCalledWith({ provider: 'anthropic-door', model: 'claude-fable-5-2', reasoningEffort: 'auto' })
+      expect(trigger.getAttribute('aria-label')).toBe('选择模型，当前 Fable 5.2，推理等级 Auto')
+    })
+  })
+
   it('offers provider default only when the adapter does not configure a model default', () => {
     const directory = createSnapshotStore(state({
       groups: [{

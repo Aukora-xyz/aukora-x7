@@ -3,7 +3,7 @@
  * slow-reply backchannel, unbound init, a second hello, bad frames on both sockets and the clause rules. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ADMISSION_KEY, BACKCHANNEL, LOST_PLACE, nextClause, parseTabFrame } from '../voice-bridge-do.mjs'
+import { ADMISSION_KEY, BACKCHANNEL, EARLY_CUE, EARLY_CUE_MS, HISTORY_KEY, LOST_PLACE, SOFT_CLAUSE_MIN_CHARS, cutClause, nextClause, parseTabFrame } from '../voice-bridge-do.mjs'
 import { handleInternalTurnJournalRoute } from '../turn-journal.mjs'
 import { AT, agentFrames, fixture, memoryStorage, transcript } from './voice-bridge-fakes.mjs'
 
@@ -137,24 +137,24 @@ test('the tab gone: a JOURNALED turn gets the one honest sentence and its row is
   assert.equal((await again.rows())[0].cancelReason, 'turn_abandon')
 })
 
-test('a slow reply: the one allowed backchannel goes out exactly once, 1.5 s before the provider timeout', async () => {
+test('a slow reply: the timeout cue goes out exactly once, 1.5 s before the provider timeout (after the one early cue)', async () => {
   const fx = fixture()
   const { conv, tab, provider } = await fx.connect()
   provider.json(transcript(1, 'think hard'))
   await fx.settle()
   fx.clock.advance(13499)
   await fx.settle()
-  assert.equal(chunks(provider, 1).length, 0)
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE])
   fx.clock.advance(1)
   await fx.settle()
   fx.clock.advance(60000)
   await fx.settle()
-  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [BACKCHANNEL])
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE, BACKCHANNEL])
   assert.equal(BACKCHANNEL, 'one sec... ')
   tab.json({ t: 'delta', turn: `eleven:${conv}:1`, seq: 0, text: 'Here it is. ' })
   tab.json({ t: 'done', turn: `eleven:${conv}:1` })
   await fx.settle()
-  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [BACKCHANNEL, 'Here it is. ', ''])
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE, BACKCHANNEL, 'Here it is. ', ''])
   // A reply that starts in time gets no backchannel at all.
   provider.json(transcript(2, 'quick one'))
   await fx.settle()
@@ -172,7 +172,146 @@ test('a slow reply: the one allowed backchannel goes out exactly once, 1.5 s bef
   await lost.settle()
   live.tab.close(1001)
   await lost.settle()
-  assert.deepEqual(chunks(live.provider, 1).map(frame => [frame.content, frame.is_final]), [[BACKCHANNEL, false], [LOST_PLACE, false], ['', true]])
+  assert.deepEqual(chunks(live.provider, 1).map(frame => [frame.content, frame.is_final]), [[EARLY_CUE, false], [BACKCHANNEL, false], [LOST_PLACE, false], ['', true]])
+})
+
+test('the early cue: once, 2.5 s after the transcript arrived, from the allowed list; never when her words came first, never after an interruption', async () => {
+  assert.equal(EARLY_CUE_MS, 2500)
+  assert.equal(EARLY_CUE, 'mm-hm... ')
+  const fx = fixture()
+  const { conv, tab, provider } = await fx.connect()
+  provider.json(transcript(1, 'what now'))
+  await fx.settle()
+  fx.clock.advance(EARLY_CUE_MS - 1)
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1), [])
+  fx.clock.advance(1)
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE])
+  fx.clock.advance(5000)
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE])
+  tab.json({ t: 'delta', turn: `eleven:${conv}:1`, seq: 0, text: 'Here. ' })
+  tab.json({ t: 'done', turn: `eleven:${conv}:1` })
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), [EARLY_CUE, 'Here. ', ''])
+  // Her words first: no cue at all, ever.
+  provider.json(transcript(2, 'quick'))
+  await fx.settle()
+  fx.clock.advance(1000)
+  tab.json({ t: 'delta', turn: `eleven:${conv}:2`, seq: 0, text: 'Yes. ' })
+  await fx.settle()
+  fx.clock.advance(30_000)
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 2).map(frame => frame.content), ['Yes. '])
+  // Interrupted before 2.5 s: the cut turn never gets its cue; the new turn gets its own, once.
+  provider.json(transcript(3, 'tell me'))
+  await fx.settle()
+  fx.clock.advance(1000)
+  // Real words interrupt.
+  provider.json(transcript(4, 'no, the other thing'))
+  await fx.settle()
+  fx.clock.advance(EARLY_CUE_MS)
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 3).map(frame => frame.content), [])
+  assert.deepEqual(chunks(provider, 4).map(frame => frame.content), [EARLY_CUE])
+  tab.json({ t: 'done', turn: `eleven:${conv}:4` })
+  await fx.settle()
+  assert.deepEqual(fx.empty().timers, 1) // the call's own deadline only: no cue timer is left behind
+})
+
+test('earlier speech release: a comma releases the first phrase before the sentence ends; one stream, same order', async () => {
+  assert.equal(SOFT_CLAUSE_MIN_CHARS, 32)
+  const fx = fixture()
+  const { conv, tab, provider } = await fx.connect()
+  provider.json(transcript(1, 'can you'))
+  await fx.settle()
+  const turn = `eleven:${conv}:1`
+  tab.json({ t: 'delta', turn, seq: 0, text: 'Sure, I can do' })
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1), []) // under SOFT_CLAUSE_MIN_CHARS pending: it waits
+  tab.json({ t: 'delta', turn, seq: 1, text: ' that for you right now' })
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1).map(frame => frame.content), ['Sure, '])
+  tab.json({ t: 'delta', turn, seq: 2, text: '. Then more.' })
+  tab.json({ t: 'done', turn })
+  await fx.settle()
+  assert.deepEqual(chunks(provider, 1).map(frame => [frame.content, frame.is_final]),
+    [['Sure, ', false], ['I can do that for you right now. ', false], ['Then more.', false], ['', true]])
+  // The cut itself: semicolon, colon and a spaced dash too; the last plain-prose boundary wins; never at done.
+  assert.deepEqual(cutClause('Right; and then one more thing: the rest', false, true), { clause: 'Right; and then one more thing: ', rest: 'the rest', cut: 'soft' })
+  assert.deepEqual(cutClause('Well — that is the long and short of it', false, true), { clause: 'Well — ', rest: 'that is the long and short of it', cut: 'soft' })
+  assert.deepEqual(cutClause('Okay - here is the long and the short of it', false, true).clause, 'Okay - ')
+  assert.equal(cutClause('Sure, I can do that for you right now', true, true).cut, 'final')
+  assert.equal(cutClause('Sure, I can do that for you right now.', false, true), null) // a whole sentence in hand: no early cut
+  assert.equal(cutClause('Sure, I can do that for you right now', false), null) // without `soft` (discard, block tail): unchanged
+  // Never inside or after a guarded shape: inline code, quotes, brackets, parentheses, `=`, paths, `--`.
+  for (const text of ['Use `a, b` to start the long running job now', 'He said "one, two" and then it went on and on',
+    'The list [a, b] holds what we need for the next step', 'At f (x.js:1:2), then the rest of the long frame here',
+    'Set mode=fast, then go and run the whole thing again', 'The path a/b, then the next one and the one after',
+    '----- BEGIN, and the rest of the block goes right here']) assert.equal(cutClause(text, false, true), null, text)
+})
+
+test('earlier speech release keeps the guards: a comma inside inline code, a fenced block or JSON never releases', async () => {
+  const fx = fixture()
+  const { conv, tab, provider } = await fx.connect()
+  const say = async (eventId, parts) => {
+    // The same words again under a new id now carry the live turn; each turn here says its own words.
+    provider.json(transcript(eventId, `go ${String(eventId)}`))
+    await fx.settle()
+    const turn = `eleven:${conv}:${eventId}`
+    for (const [seq, text] of parts.entries()) tab.json({ t: 'delta', turn, seq, text })
+    await fx.settle()
+    return chunks(provider, eventId).map(frame => frame.content)
+  }
+  // Inline code that spans deltas: the comma inside it is not a boundary, and the phrase holding it waits whole.
+  assert.deepEqual(await say(1, ['Run `make all, then', ' deploy now` and wait for the long build to finish']), [])
+  // A fenced block: nothing of it (nor the phrase before it) is released at its commas.
+  assert.deepEqual(await say(2, ['Here it is, the whole thing, in one go: ```\nconst a = 1, b = 2, c = 3, d = 4, e = 5\n']), [])
+  // JSON: refused whole, its commas never release anything.
+  assert.deepEqual(await say(3, ['The answer {"alpha": 1, "beta": 2, "gamma": 3, "delta": 4']), [])
+  assert.deepEqual(await say(4, ['[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15']), [])
+  // A secret-shaped phrase cut early is refused and the rest of its sentence goes with it, as before.
+  assert.deepEqual(await say(5, ['Your key is sk-' + 'A'.repeat(24) + ', keep it safe and never share it. Done. ']), ['Done. '])
+})
+
+test('the status carries the timings of each turn (whole ms from arrival, this clock only) and the cue said; nulls when not observed', async () => {
+  const fx = fixture()
+  const { conv, tab, provider } = await fx.connect()
+  provider.json(transcript(1, 'slow one'))
+  await fx.settle()
+  fx.clock.advance(3000)
+  tab.json({ t: 'delta', turn: `eleven:${conv}:1`, seq: 0, text: '' })
+  tab.json({ t: 'delta', turn: `eleven:${conv}:1`, seq: 1, text: 'Got it' })
+  await fx.settle()
+  fx.clock.advance(400)
+  tab.json({ t: 'delta', turn: `eleven:${conv}:1`, seq: 2, text: '. ' })
+  tab.json({ t: 'done', turn: `eleven:${conv}:1` })
+  await fx.settle()
+  // Interrupted before anything: handed, but no text, no speech, no cue.
+  provider.json(transcript(2, 'next'))
+  await fx.settle()
+  provider.json(transcript(3, 'again'))
+  await fx.settle()
+  fx.clock.advance(14_000)
+  await fx.settle()
+  const turns = (await fx.bridgeStorage.get(HISTORY_KEY)).turns
+  const [first, second] = turns
+  // The outcome is one of
+  // answered | cancelled | failed | handed | refused, with a closed reason, marks, counts and tool calls (names only).
+  assert.deepEqual(first, { outcome: 'answered', reason: null, journalMs: 0, endMs: 3400, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 1, toolRounds: [],
+    firstWordsSeconds: 4, longestQuietSeconds: 3, journaledMs: 0, handedMs: 0, firstTextMs: 3000,
+    firstSpeechMs: 3400, modelFirstMs: null, cue: 'early', path: 'governed', atMs: AT + 3400 })
+  assert.deepEqual(second, { outcome: 'cancelled', reason: 'barge_in', journalMs: 0, endMs: 0, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 0, toolRounds: [],
+    firstWordsSeconds: null, longestQuietSeconds: 0, journaledMs: 0, handedMs: 0, firstTextMs: null,
+    firstSpeechMs: null, modelFirstMs: null, cue: 'none', path: 'governed', atMs: AT + 3400 })
+  tab.json({ t: 'done', turn: `eleven:${conv}:3` })
+  await fx.settle()
+  assert.equal((await fx.bridgeStorage.get(HISTORY_KEY)).turns[2].cue, 'timeout')
+  // Through the owner's status read (voice-bridge.mjs readTurns): the same closed fields, words and ids never.
+  const read = await fx.bridge.status(fx.clock.now())
+  assert.equal(JSON.stringify(read).includes('slow one'), false)
+  assert.equal(JSON.stringify(read).includes(conv), false)
 })
 
 test('init: an unknown conversation closes at once; a minted one with no hello is held at most 10 s, then closed', async () => {
@@ -231,7 +370,7 @@ test('a second hello for the same conversation closes the older tab; turns go to
   assert.equal(wrong.closedCode, 1008)
 })
 
-test('bad frames close the socket: oversized, malformed, extra keys, out of order, binary (tab); oversized, unknown, before init (provider)', async () => {
+test('bad frames close the socket: oversized, malformed, extra keys, out of order, binary (tab); oversized, unreadable, before init (provider)', async () => {
   const fx = fixture()
   const { conv } = await fx.connect()
   const bad = ['x'.repeat(8193), '{', '[]', JSON.stringify({ t: 'hello', conv, extra: 1 }), JSON.stringify({ t: 'delta', turn: `eleven:${conv}:1`, seq: 0, text: 'x' }),
@@ -256,12 +395,19 @@ test('bad frames close the socket: oversized, malformed, extra keys, out of orde
     await run.settle()
     assert.equal(live.tab.closedCode, 1008, JSON.stringify(frame))
   }
-  for (const frame of ['x'.repeat(262145), JSON.stringify({ type: 'agent_response', content: 'x' }), JSON.stringify({ type: 'user_transcript', event_id: -1, user_transcript: [] }), 'nope']) {
+  // CHANGED 2026-11-18: a frame of a type the adapter does not know (here `agent_response`) no longer closes the socket:
+  // it is counted and ignored (voice-bridge-brain-gauges.test.mjs). A transcript whose history is not a list still closes it.
+  for (const frame of ['x'.repeat(262145), JSON.stringify({ type: 'user_transcript', event_id: 1, user_transcript: 'x' }),
+    JSON.stringify({ type: 'user_transcript', event_id: -1, user_transcript: [] }), 'nope']) {
     const provider = (await fx.openProvider()).webSocket
     provider.send(frame)
     await fx.settle()
     assert.equal(provider.closedCode, 1008, frame.slice(0, 60))
   }
+  const unknown = (await fx.openProvider()).webSocket
+  unknown.json({ type: 'agent_response', content: 'x' })
+  await fx.settle()
+  assert.equal(unknown.closedCode, null)
   const early = (await fx.openProvider()).webSocket
   early.json(transcript(1, 'before init'))
   await fx.settle()

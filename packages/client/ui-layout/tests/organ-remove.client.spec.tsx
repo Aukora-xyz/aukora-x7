@@ -54,9 +54,9 @@ const organ = (name: string) => {
   const code = `export const organ = ${JSON.stringify(name)};`
   return { code, sha: sha(code), entry: { id: name, specifier: `ball:${sha(code)}`, disabled: false, config: {}, previousSpecifiers: [] as string[] } }
 }
-const a = organ('ordinary-a'), k = organ('auma-kernel')
+const a = organ('ordinary-a'), k = organ('ordinary-k')
 const published = { version: 'x6.1-ball/v1', ballId: 'aa'.repeat(32), parentBallId: null, epoch: 177,
-  entries: { 'ordinary-a': a.entry, 'auma-kernel': k.entry },
+  entries: { 'ordinary-a': a.entry, 'ordinary-k': k.entry },
   modules: { [a.sha]: { sha256: a.sha, specifier: `ball:${a.sha}` }, [k.sha]: { sha256: k.sha, specifier: `ball:${k.sha}` } } }
 const removalOf = (id: string) => {
   const ball = structuredClone(published)
@@ -76,7 +76,7 @@ describe('organ removal, the shared vectors (server/organ-remove-rule.vectors.js
 
 describe('organ removal, page side', () => {
   it('computes exactly the body HEAD records, and binds the hash HEAD binds, on ORGAN_REMOVE_PATH (never the add\'s)', async () => {
-    const ball = removalOf('auma-kernel')
+    const ball = removalOf('ordinary-k')
     const body = organRemoveBodyOf({ published, staged: ball }) as OrganRemoveBody
     const server = policy.organRemovePromotionBody(ball, policy.organRemoval(published, ball))
     expect(canonicalJson(body)).toBe(canonicalJson(server))
@@ -88,7 +88,7 @@ describe('organ removal, page side', () => {
   })
 
   it('the approval asks the passkey for exactly that binding, as the add card does', async () => {
-    const body = organRemoveBodyOf({ published, staged: removalOf('auma-kernel') }) as OrganRemoveBody
+    const body = organRemoveBodyOf({ published, staged: removalOf('ordinary-k') }) as OrganRemoveBody
     const asked: unknown[] = []
     const call = vi.fn(async (_route: string, _signal: AbortSignal, request: unknown) => { asked.push(request); return { kind: 'absent' } })
     const outcome = await approveOrganRemove(body, ORIGIN, { signal: new AbortController().signal, call: call as never,
@@ -100,7 +100,8 @@ describe('organ removal, page side', () => {
   const edge = (claimed: unknown, ball: unknown) => vi.fn(async (input: RequestInfo | URL) => {
     const url = input instanceof Request ? input.url : input.toString()
     if (url.endsWith('/_head/promotion-status')) {
-      return new Response(JSON.stringify({ ok: true, staged: { ballId: 'bb'.repeat(32), epoch: 178, parentBallId: published.ballId, changedEntries: ['auma-kernel'],
+      return new Response(JSON.stringify({ ok: true, staged: { ballId: 'bb'.repeat(32), epoch: 178, parentBallId: published.ballId,
+        changedEntries: ['ordinary-k'],
         t2Reasons: ['ORGAN_ADDED_OR_REMOVED'], governanceClass: 1, binding: null, organSet: null, organRemove: claimed,
         envelope: { schema: 'aukora.staged-head-promotion.v1', stagedAt: 1, body: { ball, codeBySha: {} } } } }))
     }
@@ -109,14 +110,14 @@ describe('organ removal, page side', () => {
   })
 
   it('the card says which organ goes and its module, offers one Touch ID and Decline, when HEAD and the page agree', async () => {
-    const ball = removalOf('auma-kernel')
+    const ball = removalOf('ordinary-k')
     const body = organRemoveBodyOf({ published, staged: ball }) as OrganRemoveBody
     vi.stubGlobal('fetch', edge(body, ball))
     expect((await readOrganChange(new AbortController().signal)).remove.kind).toBe('offer')
     const { container } = render(<OrganSetCell active round={0} ownerBound />)
     await waitFor(() => { expect(container.querySelector('[data-sovereignty-organ-remove-approve]')).not.toBeNull() })
     expect(container.textContent).toContain('Remove an organ')
-    expect(container.textContent).toContain('removes the ordinary organ auma-kernel')
+    expect(container.textContent).toContain('removes the ordinary organ ordinary-k')
     expect(container.textContent).toContain(k.sha.slice(0, 12))
     expect(container.textContent).toContain('ONE TOUCH ID')
     expect(container.querySelector('[data-sovereignty-decline]')?.getAttribute('data-sovereignty-decline')).toBe(ball.ballId)
@@ -129,7 +130,7 @@ describe('organ removal, page side', () => {
     ['another module', (body: OrganRemoveBody) => ({ ...body, organ: { ...body.organ, sha256: 'ee'.repeat(32) } })],
     ['an extra field', (body: OrganRemoveBody) => ({ ...body, note: 'x' })],
   ])('a removal HEAD claims with %s is shown with the reason, never offered', async (_label, change) => {
-    const ball = removalOf('auma-kernel')
+    const ball = removalOf('ordinary-k')
     const body = organRemoveBodyOf({ published, staged: ball }) as OrganRemoveBody
     vi.stubGlobal('fetch', edge(change(body), ball))
     const { container } = render(<OrganSetCell active round={0} ownerBound />)
@@ -156,13 +157,13 @@ const ballOf = (parentBallId: string | null, epoch: number, codes: Record<string
   const contents = { version: 'x6.1-ball/v1', parentBallId, epoch, authorPeerId: 'auma-writer', entries, modules }
   return { ...contents, ballId: sha(transition.canonicalJson(contents)) }
 }
-const V80 = { 'auma-body-map': codeOf('auma-body-map', 80), 'auma-kernel': codeOf('auma-kernel', 1) }
+const V80 = { 'auma-body-map': codeOf('auma-body-map', 80), 'ordinary-k': codeOf('ordinary-k', 1) }
 const E80 = ballOf(null, 80, V80)
-const V81K = { ...V80, 'auma-kernel': codeOf('auma-kernel', 2) }
+const V81K = { ...V80, 'ordinary-k': codeOf('ordinary-k', 2) }
 const E81K = ballOf(E80.ballId, 81, V81K)
 const heldOrdinary = async (governanceClass: number, tier: string) => {
-  const fields = { ballId: E81K.ballId, epoch: 81, parentBallId: E80.ballId, changedEntries: ['auma-kernel'], t2Reasons: [] as string[] }
-  const code = V81K['auma-kernel']
+  const fields = { ballId: E81K.ballId, epoch: 81, parentBallId: E80.ballId, changedEntries: ['ordinary-k'], t2Reasons: [] as string[] }
+  const code = V81K['ordinary-k']
   return { schema: 'aukora.staged-head-promotion.v1', ...fields, authorPeerId: 'auma-writer', tier, governanceClass, binding: null, organSet: null,
     candidateDigest: await candidateDigestOf(fields), compactModuleShas: [sha(code)], stagedAt: Date.UTC(2026, 10, 14, 12),
     state: 'awaiting_owner', stagedForOwner: true,

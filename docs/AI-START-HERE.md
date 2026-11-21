@@ -1,27 +1,25 @@
 # AI start here
 
-English | [中文](AI-START-HERE.zh.md)
-
 You came from `README.md`, which showed what Auma can do and how far each part is proven. This page adds what an AI needs before it summarises, recommends or changes anything: the rule and what enforces it, where trust stops, the labels (section 5), and one check you run yourself (section 11). Every path below is in this tree.
 
-Words used below: Auma is the personal AI in this tree; an organ is one replaceable module of her; a ball is the manifest that lists every organ by SHA-256; its epoch is its version number; HEAD is the edge store that selects the ball that runs; the edge is the separate program, a Cloudflare Worker with three Durable Objects, that permits (section 2 has more).
+Words used below: Auma is the personal AI in this tree; an organ is one replaceable module of her; a ball is the manifest that lists every organ by SHA-256; its epoch is its version number; HEAD is the edge store that selects the ball that runs; the edge is the separate program, a Cloudflare Worker with four Durable Objects, that permits (section 2 has more).
 
 ## 1. The one rule
 
-The intelligence that proposes an action is never the authority that permits it. Auma, the personal AI in this tree, may write, compile, test and stage changes to herself. A separate authority, outside her, decides whether a sensitive change takes effect, and that authority is the owner's passkey, checked at a Cloudflare edge. Her doors to Cloudflare and Linear run at level `open`, where only a dangerous core of their writes waits for the passkey (`CLOUDFLARE_DOOR_LEVEL` and `LINEAR_DOOR_LEVEL` in `deploy/cloudflare/wrangler.toml`).
+The intelligence that proposes an action is never the authority that permits it. Auma, the personal AI in this tree, may write, compile, test and stage changes to herself. A separate authority, outside her, decides whether a sensitive change takes effect, and that authority is the owner's passkey approval, which a Cloudflare edge checks and binds to the exact bytes of the change. Her doors to Cloudflare and Linear run at level `open`, where only a dangerous core of their writes waits for the passkey (`CLOUDFLARE_DOOR_LEVEL` and `LINEAR_DOOR_LEVEL` in `deploy/cloudflare/wrangler.toml`, which holds the shipped edge settings; her repository door's default, `REPO_DOOR_LEVEL`, is in `deploy/ci/frozen-paths.mjs`).
 
 What enforces it (IMPLEMENTED):
 
 - **Exact-byte approval, spent once.** The edge binds an approval to one request (origin, method, path, SHA-256 of the body) or to one promotion (ball, epoch, organ, candidate hash). The approval lives 5 minutes. For a head move it is spent inside the same storage transaction that moves the head; other approved requests spend it at the edge just before the effect runs. `deploy/cloudflare/src/aumlok.mjs` (`aumlokClass3Binding`, `consumeApprovalInTransaction`), `deploy/cloudflare/src/owner-grant-policy.mjs` (`headPromotionBinding`), `deploy/cloudflare/src/head-do.mjs`. Tests: `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs`, `head-hardening.test.mjs`.
-- **Owner-only ids.** 15 names that only the passkey may change: ten organs and five Wasm cells, plus any entry that declares itself governance. `T2_ONLY_ORGANS` in `server/ball-transition.mjs`. Test: `deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`.
+- **Owner-only ids.** 16 names that only the passkey may change: ten organs of the genesis, five Wasm cells and one organ (`auma-kernel`) this tree does not ship, plus any entry that declares itself governance. `T2_ONLY_ORGANS` in `server/ball-transition.mjs`. Test: `deploy/cloudflare/src/__tests__/convergence-policy.test.mjs`.
 - **One rule for a failed proof.** Only a checked, wrong proof moves a lockout, so an outsider cannot lock the owner out with junk. `deploy/cloudflare/src/proof-failure-rule.mjs`; its test parses the owner-identity source files and fails if a verifier is called or a budget is written anywhere else in them: `deploy/cloudflare/src/__tests__/proof-failure-rule.test.mjs`.
 
-Delegated permission means the owner hands over a bounded slice of authority, never the authority itself. Four forms exist (IMPLEMENTED): an owner sign-in session of 8 hours at most, which is not an approval; a night grant, one passkey tap allowing ordinary organs to be added or replaced for at most 12 hours, 12 uses and 8 organs per use (`deploy/cloudflare/src/night-grant.mjs`, test `night-grant.test.mjs`); an approved set of up to eight ordinary organs (`organ-set-rule.mjs`, test `organ-set.test.mjs`); and the owner's Away mandate, one passkey tap on exact terms that lets her do a closed list of reversible things with no tab open, a bounded number of times a day, for at most 30 days (`deploy/cloudflare/src/owner-mandate.mjs`, test `owner-mandate.test.mjs`). The mandate can never express a merge, a deploy, keys, deletes or a head promotion, and a wake spends it only while `WAKE_ACTS_ENABLED` is "1", which the shipped `deploy/cloudflare/wrangler.toml` sets. None covers an owner-only id.
+Delegated permission means the owner hands over a bounded slice of authority, never the authority itself. Four forms exist (IMPLEMENTED): an owner sign-in session of 8 hours at most, which is not an approval; a night grant, one passkey tap allowing ordinary organs to be added or replaced for at most 12 hours, 12 uses and 8 organs per use (`deploy/cloudflare/src/night-grant.mjs`, test `night-grant.test.mjs`); an approved set of up to eight ordinary organs (`organ-set-rule.mjs`, test `organ-set.test.mjs`); and the owner's Away mandate, one passkey tap on exact terms that lets her do a closed list of reversible things with no tab open, a bounded number of times a day, for at most 30 days (`deploy/cloudflare/src/owner-mandate.mjs`, test `owner-mandate.test.mjs`). The mandate can never express a merge, a deploy, keys, deletes or a head promotion, and a wake spends it only while `WAKE_ACTS_ENABLED` is "1", which the shipped edge settings in `deploy/cloudflare/wrangler.toml` set. None covers an owner-only id.
 
 Where the trust model is incomplete (each is how the code works in this tree; none is fixed):
 
 - The authenticator signs a random challenge, not the bytes. The edge stores the bytes; the owner sees them only through the page (`packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts`). A compromised page could ask for terms the owner did not read.
-- An owner session alone, with no passkey tap, can swap the code of one existing unprotected organ (`classifyTransition` in `server/ball-transition.mjs`; test `signed-head-actions.test.mjs`). 14 of the 26 genesis organs are unprotected, `seed-cycle` among them.
+- An owner session alone, with no passkey tap, can swap the code of one existing unprotected organ (`classifyTransition` in `server/ball-transition.mjs`; test `signed-head-actions.test.mjs`). 14 of the 26 genesis organs are unprotected, `seed-cycle` among them: ten are protected by name, and `seed-continuity` and `seed-nostr-anchor` because they declare governance.
 - The owner-only list is Worker source. Changing it is a code deploy, and no passkey gates a deploy. Who holds the deploy credential is UNVERIFIED.
 - The edge's decisions are JavaScript. Nothing under `deploy/` calls the judge or identity Wasm cells. "Every decision in Wasm" is DIRECTION.
 
@@ -40,7 +38,7 @@ Where the trust model is incomplete (each is how the code works in this tree; no
 
 Identity is not the model. Auma's identity is her head, her home, her receipt chain and the node key that AUMLOK releases to the owner. The intelligence is whichever hosted model answers through a same-origin door, `/door/<provider>/`: eight doors for seven providers (`packages/experimental/webworker-runtime/src/model-doors.ts`). Change the model and the organism, its rules and its owner stay the same. No model call is recorded from this tree.
 
-The real runtime: the agent runs in a browser WebWorker on the inherited DeepSeek Harness runtime (`packages/experimental/webworker-runtime/`), with organs loaded by `ball-loader.ts`. The edge is one Cloudflare Worker (`deploy/cloudflare/src/worker.mjs`) with three Durable Objects (HEAD, MIRROR and the voice bridge) and an R2 bucket (`deploy/cloudflare/wrangler.toml`). A local Node host emulates the edge on one machine (`server/local-host.mjs`). Node 24.9 or newer and pnpm 11.28.5; the recorded install (of an earlier tree) linked 1,458 packages offline (RECORDED RUN), and the authority tests need `@simplewebauthn/server`, `@noble/curves`, `@noble/post-quantum`, `@scure/base` and `typescript`. The app screens follow **Spatial**, the one workspace layout (`packages/client/ui-layout/src/client/spatial/`).
+The real runtime: the agent runs in a browser WebWorker on the inherited DeepSeek Harness runtime (`packages/experimental/webworker-runtime/`), with organs loaded by `ball-loader.ts`. The edge is one Cloudflare Worker (`deploy/cloudflare/src/worker.mjs`) with four Durable Objects (HEAD, MIRROR, the voice bridge and the outside witness) and an R2 bucket (`deploy/cloudflare/wrangler.toml`). A local Node host emulates the edge on one machine (`server/local-host.mjs`). Node 24.9 or newer and pnpm 11.28.5; the recorded install (of an earlier tree) linked 1,458 packages offline (RECORDED RUN), and the authority tests need `@simplewebauthn/server`, `@noble/curves`, `@noble/post-quantum`, `@scure/base` and `typescript`. The app screens follow **Spatial**, the one workspace layout (`packages/client/ui-layout/src/client/spatial/`).
 
 ## 3. The trust architecture, and the limit of each part
 
@@ -49,7 +47,7 @@ The real runtime: the agent runs in a browser WebWorker on the inherited DeepSee
 | AUMLOK | The identity door: passkey enrolment, sign-in, devices, the seven words (the owner's recovery phrase, which seals the node's root key), invites, exact-byte approval | `deploy/cloudflare/src/aumlok.mjs`, `passkey-devices.mjs` | No real authenticator is recorded; tests use hand-built passkey data. After ten failures the code answers `AUMLOK_GUARDIAN_QUORUM_REQUIRED`; no code that performs guardian recovery was found. |
 | Passkeys | WebAuthn, user verification required | `webauthn-screen.mjs`, `proof-failure-rule.mjs` | Signs a random challenge, not the bytes (section 1). |
 | Exact-byte approvals | Bound to one request, 5 minutes, spent once | `aumlok.mjs`, `head-do.mjs` | Whole-store restore can re-enable a spent one (below). |
-| Owner-only ids | 15 protected names | `server/ball-transition.mjs` | List is code; a deploy changes it. |
+| Owner-only ids | 16 protected names | `server/ball-transition.mjs` | List is code; a deploy changes it. |
 | The edge | Worker, HEAD, MIRROR | `worker.mjs`, `head-do.mjs`, `mirror-do.mjs` | HEAD does not read Pearl: in production no qualification verifier is passed in (`head-do.mjs`), and the local host answered `PEARL_QUALIFICATION_UNVERIFIABLE` in the RECORDED RUN (of an earlier tree). No run on the real Cloudflare runtime is recorded from this tree. |
 | Wasm cells | 30 modules pinned by size and SHA-256, zero imports, fuel, 5-second worker | `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`, `apps/web/public/cells/` | 24 of 30 ship without source; six are hand-written WAT with their source beside them. Auma calls them through `x6_cell`. The Worker runs three of the WAT cells (`kyber-cpu`, `cord-echo`, `menger-hive`) as instruments and calls none of the judge or identity cells; the local host runs `aura-focus` in shadow beside the JavaScript result, with no authority. |
 | Persistence | IndexedDB in the browser, ordered updates to MIRROR | `idb-persist.ts`, `mirror-do.mjs` | MIRROR keeps current state, not file history (`MEMORY_HISTORY_NOT_IMPLEMENTED`). |
@@ -57,11 +55,11 @@ The real runtime: the agent runs in a browser WebWorker on the inherited DeepSee
 
 ## 4. Reading order, with a reading budget in lines
 
-**About 750 lines.** The path, in order: `README.md` (149), This page (161), `docs/DIRECTION.md` (178) and `docs/WHAT-IS-BUILT.md` (266), then the argument in full (below; its lines are not in this sum). After it you know what she can do, how far each part is proven, where it is going and what is deliberately not done.
+**About 770 lines.** The path, in order: `README.md` (149), This page (178), `docs/DIRECTION.md` (176) and `docs/WHAT-IS-BUILT.md` (264), then the argument in full (below; its lines are not in this sum). After it you know what she can do, how far each part is proven, where it is going and what is deliberately not done.
 
-**About 1,730 lines.** Add the record of an earlier tree, `docs/RUN-RECORD.md` (56), `docs/KNOWN-RED-TESTS.md` (71), `docs/ARCHITECTURE-MAP.md` (133), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
+**About 1,750 lines.** Add the record of an earlier tree, `docs/RUN-RECORD.md` (56), `docs/KNOWN-RED-TESTS.md` (73), `docs/ARCHITECTURE-MAP.md` (131), `docs/GLOSSARY.md` (23), `server/ball-transition.mjs` (125), `deploy/cloudflare/src/proof-failure-rule.mjs` (250), `deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs` (232) and `deploy/cloudflare/src/__tests__/convergence-approval-fencing.test.mjs` (88).
 
-**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (4,495), `cloud-brokers.mjs` (3,604), `owner-mandate.mjs` (211), `owner-grant-policy.mjs` (366), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (173), `deploy/ci/frozen-paths.mjs` (537), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (525), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (1,263), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,125), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (9,924) by symbol, not whole.
+**The whole day.** Add `deploy/cloudflare/src/aumlok.mjs` (1,806), `head-do.mjs` (4,516), `cloud-brokers.mjs` (3,861), `owner-mandate.mjs` (211), `owner-grant-policy.mjs` (366), `night-grant.mjs` (127), `deploy/cloudflare/README.md` (183), `deploy/ci/frozen-paths.mjs` (555), `mirror/home/auma/seed/organs/seed-cycle.js` (148), `seed-pearl.js` (525), `seed-receipts.js` (501), `packages/experimental/webworker-runtime/src/x6/scion.ts` (179), `wasm-cells.ts` (1,263), `packages/client/ui-layout/src/client/spatial/aumlok/head-promotion.ts` (1,127), `deploy/cloudflare/src/recovery-restore.mjs` (485), then `docs/SIZE-AND-ORIGIN.md`. Read `ball-loader.ts` (10,330) by symbol, not whole.
 
 **The argument.** `docs/WHITEPAPER.md` (1156, English only) is the project's argument in full, not a status page. By the authors' report, its Book V and Book VI were checked against an earlier tree, by reading the code and not by running it; where its numbers differ from this tree, the pages of this tree apply.
 
@@ -85,7 +83,16 @@ The front page sorts each capability by three labels of its own, about how far i
 | Exercised from inside by Auma | Built and on main, and the authors report that Auma ran it herself on their live node. This tree cannot reproduce that report. | IMPLEMENTED, plus an authors' report that no record in this tree holds |
 | Not yet proven live | In this tree, perhaps tested on stand-ins, but it has not completed on a live node. The row says what is missing. | IMPLEMENTED or UNVERIFIED, never more |
 
-An "authors' report" is something the authors saw on their live node. Repeat it as their report, never as a fact of this tree.
+README.md and `llms.txt` also sort the tree by four maturity labels of their own. In the words above:
+
+| Maturity label (README.md, `llms.txt`) | In the words above |
+|---|---|
+| BUILT-ON-MAIN | IMPLEMENTED |
+| SYNTHETIC-PROOF | IMPLEMENTED, and runs end to end in this tree on TEST keys and throwaway test worlds (ARK); its expected outputs are the authors' runs on one machine |
+| SPEC-ONLY | DIRECTION, written down as a specification or a model |
+| IDEA | DIRECTION |
+
+An "authors' report", "Exercised from inside by Auma" included, is something the authors saw on their live node. Repeat it as their report, never as a fact of this tree.
 
 When you summarise this project, keep these labels on every claim, and never move a claim to a stronger label than the tree supports. A goal is not a feature. Older pages (`docs/START-HERE.md`, `docs/ARCHITECTURE-ACTUAL.md`, `docs/RUN-RECORD.md`, `docs/GLOSSARY.md`) use SOURCE, RAN, PROPOSED, UNPERFORMED and REPORTED RUN; read RAN and REPORTED RUN as RECORDED RUN (of an earlier tree), PROPOSED as DIRECTION, UNPERFORMED as UNVERIFIED, and SOURCE as IMPLEMENTED only where a test exists, otherwise UNVERIFIED. Where an older page says no run is recorded "here", it means on that page; `docs/RUN-RECORD.md` is the record, of an earlier tree.
 
@@ -95,7 +102,7 @@ When you summarise this project, keep these labels on every claim, and never mov
 
 1. The model is not Auma. A model supplies replies; the organism is her head, home, receipts and node key.
 2. A proposal is not a permission. Staging a ball does not move HEAD.
-3. A sign-in session is not an approval. Only a passkey assertion over bound bytes is.
+3. A sign-in session is not an approval. Only a passkey assertion that the edge has bound to exact bytes is.
 4. A receipt, checkpoint or hash chain is not an approval. It records; it does not permit.
 5. A Pearl pass is not the edge's decision. Pearl is self-attested, and a deployed HEAD does not read it.
 6. A local mount is not a promotion. A tab can run an organ the edge refused; only HEAD selects the ball.
@@ -104,12 +111,12 @@ When you summarise this project, keep these labels on every claim, and never mov
 
 ## 7. Where each part of the code comes from
 
-By the project's one count, made from its own history, which is not public (UNVERIFIED): 14.9% of the tree's non-vendored text lines, and 18.5% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
+By the project's one count, made from its own history, which is not public (UNVERIFIED): 16.3% of the tree's non-vendored text lines, and 20.3% of its code lines, are Aukora's own. The rest is inherited. Details and method: `docs/SIZE-AND-ORIGIN.md`.
 
 - **Aukora's layer:** `deploy/` (the edge and deploy gates), `server/` (local host, ball rules), `mirror/` (genesis head and organs), `packages/experimental/webworker-runtime/src/x6/` (loader, scion, cells), `packages/client/ui-layout/src/client/spatial/` (the app), and parts of `apps/web/public/`.
 - **Inherited DeepSeek Harness:** most of `packages/`, plus `python/`, `native/`, `benchmarks/`, `snapshots/`, `.agents/` and most of `.github/workflows/`. MIT notice in `LICENSES/MIT-DeepSeek-Harness.txt`. Aukora is not affiliated with DeepSeek.
 - **Cordis:** the plugin framework every organ runs on, vendored in `vendor/cordis`.
-- **Binaries without source:** 24 of the 30 Wasm cells in `apps/web/public/cells/` (six hand-written `.wat` sources are here, `aura-focus.wat` among them), `pentora36.wasm` (no licence granted yet), and the Dakini Code bundle (a prebuilt stock app, three files in `apps/web/public/assets/stock-apps/dakini-code/assets/`). A `LICENSE.binaries` beside each says so.
+- **Binaries without source:** 24 of the 30 Wasm cells in `apps/web/public/cells/` (six hand-written `.wat` sources are here, `aura-focus.wat` among them), `pentora36.wasm` (no licence granted yet), and the Dakini Code bundle (a prebuilt stock app, three files in `apps/web/public/assets/stock-apps/dakini-code/assets/`). Their notices (`LICENSE.binaries`) are in `apps/web/public/cells/`, `apps/web/public/seed-library/pentora/` and `apps/web/public/assets/stock-apps/dakini-code/`.
 
 ## 8. How to judge a proposed change
 
@@ -130,7 +137,7 @@ Never weaken, skip or delete a test to get green. A red test is recorded in `doc
 
 Repeat this, or something no stronger:
 
-> Aukora is a prototype of a personally owned AI, Auma, that can stage changes to her own modules while a separate Cloudflare edge checks the owner's passkey, and binds that approval to the exact bytes of one change, before a change to her protected parts takes effect. The passkey signs a random challenge, not the bytes; the edge holds the binding. The code and tests for that are in the tree, except that the compiler and the self-build step have no test, but the only run evidence is one recorded run (of an earlier tree) by its authors on one machine: 5,502 test cases, 5,399 passed and 90 failed, 89 of them already on docs/KNOWN-RED-TESTS.md, with no browser, no deployment, no model call and no passkey ceremony. No end-to-end owner-approved self-change is recorded from this tree, a cloud deployment into a fresh account is UNVERIFIED, and nothing is INDEPENDENTLY VERIFIED. By the authors' own report, four of her storage changes were merged through the merge card, each approved with the owner's passkey; the wake steps that ran with no tab open on their live node produced no evidence; and her acts with no tab open are switched on (`WAKE_ACTS_ENABLED = "1"` in the tree) with no act known to have completed. Her repository door ships at level `open`: she may propose a change to any path, her judges included, and only the owner's passkey on the exact merge lets it take effect. The tree is a fresh genesis, epoch 1, with none of Auma's own world. 24 of the 30 Wasm cells and the Dakini Code bundle ship without source, pentora36.wasm has no licence granted yet, and restoring a whole stored snapshot can re-enable a spent approval, which a test in the tree reproduces. Most of packages/ is the inherited DeepSeek Harness runtime and the plugin framework is Cordis in vendor/, so by one unverified count Aukora's own layer is the smaller share of the text (the figure is in `docs/SIZE-AND-ORIGIN.md`).
+> Aukora is a prototype of a personally owned AI, Auma, that can stage changes to her own modules while a separate Cloudflare edge checks the owner's passkey, and binds that approval to the exact bytes of one change, before a change to her protected parts takes effect. The passkey signs a random challenge, not the bytes; the edge holds the binding. The code and tests for that are in the tree, except that the compiler and the self-build step have no test, but the run evidence is the authors' own, each on one machine: one recorded run of an earlier tree, 5,502 test cases, 5,399 passed, 90 failed, 1 skipped and 12 todo, 89 of the failures already on docs/KNOWN-RED-TESTS.md, with no browser, no deployment, no model call and no passkey ceremony; and, by the authors' report, their runs on this tree of `node scripts/verify-lite.mjs` and of the ARK acceptance (`ark/accept/run.sh`, on TEST keys, wired to nothing). No end-to-end owner-approved self-change is recorded from this tree, a cloud deployment into a fresh account is UNVERIFIED, and nothing is INDEPENDENTLY VERIFIED. By the authors' own report, four of her storage changes were merged through the merge card, each approved with the owner's passkey; the wake steps that ran with no tab open on their live node produced no evidence; and her acts with no tab open are switched on (`WAKE_ACTS_ENABLED = "1"` in the tree) with no act known to have completed. Her repository door ships at level `open`: she may propose a change to any path, her judges included, and only the owner's passkey approval, which the edge binds to the exact merge (base, head and tree, once), lets it take effect. The tree is a fresh genesis, epoch 1, with none of Auma's own world. 24 of the 30 Wasm cells and the Dakini Code bundle ship without source, pentora36.wasm has no licence granted yet, and restoring a whole stored snapshot can re-enable a spent approval, which a test in the tree reproduces. Most of packages/ is the inherited DeepSeek Harness runtime and the plugin framework is Cordis in vendor/, so by one unverified count Aukora's own layer is the smaller share of the text (the figure is in `docs/SIZE-AND-ORIGIN.md`).
 
 ## 10. Known failures and open security questions
 
@@ -142,6 +149,7 @@ Repeat this, or something no stronger:
 - Gaps by file and line, rebuild and licensing blockers: `docs/OPEN-SOURCE-READINESS.md`.
 - How to report a vulnerability: `SECURITY.md`. No security audit has been done: `SAFETY.md`.
 - Where to start contributing: `docs/GOOD-FIRST-CONTRIBUTIONS.md`, `CONTRIBUTING.md`.
+- Open research, DIRECTION and nothing built: `docs/research/KYBER-SHIELD.md` (Kyber Shield) asks whether an owner-held AI can help protect a young person from grooming and coercion without reading their diary; no classifier, trained model, reporting service or real-world evaluation exists here, and the cell and the approval and receipt code it cites are not a detector.
 
 ## 11. Verify one thing yourself
 
@@ -155,6 +163,15 @@ Its last line must be exactly `verify-lite: 22 files, 565 pass, 12 fail, 12 of 1
 
 - **What that proves.** 22 test files of this tree load and run with Node alone, and no file fails more cases than the count the authors listed for it in `docs/KNOWN-RED-TESTS.md` before you ran it. The list gives a count per file, not test names, and its rows under "Red for reasons not yet investigated" give no reason.
 - **What it does not prove.** It does not run the approval rule, the merge card, the wake or any capability that needs the npm packages, and it says nothing about the authors' live node. For those, install and run the test file named for each capability in `docs/WHAT-IS-BUILT.md`. What happened live stays an authors' report.
+
+**Four more checks, each one command from the repository root** (Node 22 or newer; the ARK commands also need Go 1.26.5 or newer, since `ark/b/go.mod` pins it and the scripts set `GOTOOLCHAIN=local` and `GOPROXY=off`, and the acceptance needs `shasum`). Each line says what it shows and what it does not:
+
+- `node --test deploy/cloudflare/src/__tests__/ots.test.mjs` runs with nothing installed: the OpenTimestamps proof format her witness uses, on the reference client's own example proofs (10 cases). It does not show that a witness record was stamped live.
+- `node --test deploy/cloudflare/src/__tests__/sealed-shards.test.mjs deploy/cloudflare/src/__tests__/sealed-shards-v2.test.mjs` runs with nothing installed: a file locked and cut into pieces comes back from any k of them, and fewer refuse (26 cases), in a module of the edge source that is wired to nothing. It does not show a real restore: none from pieces has been done.
+- `cd ark && ./accept/run.sh` must print a last line that begins `accept: 20 PASS, 0 FAIL` (a note of the run's paths follows on that line): exact-bytes approval, receipts signed by the receiver that acts, refusal of replays and of anything not approved, and a restore that does not bring back authority, on TEST keys in throwaway worlds. It does not show a passkey or anything wired into the node.
+- `./ark/b/run-vectors.sh` must end `vectors matched: 26 of 26`: a second, separately written reader reaches the verdicts the vectors expect. They are not independent readers: readers 1 and 2 come from models of one family; reader 2's author also read a hand-off note and part of a private design review (`ark/INDEPENDENCE.md`); reader 3 was not audited; reader 1's author wrote the contract and the vectors, and both were revised after the readers' questions (`ark/ABOUT.md`).
+
+What not to infer: a test that passes here proves the code in this tree under its test doubles, never that the authors' private node behaves so. The authors report filing patent applications relating to parts of this work; this tree contains no patent application or claims (its licence texts do contain patent terms); the sentence grants no licence and describes no coverage.
 
 ## Next: where it is going
 

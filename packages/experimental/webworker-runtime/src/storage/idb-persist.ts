@@ -62,9 +62,17 @@ export const SESSION_JOURNAL_POLICY = Object.freeze({
   minBytes: 2 * 1024 * 1024, localIntervalMs: 5_000, cloudIntervalMs: 60_000, retryMs: 120_000, maxRetryMs: 1_800_000,
 })
 const SESSION_JOURNAL = /^\/dsh\/home\/(?:sessions\/[^/]+\/[^/]+\/session\.v\d+\.jsonl|[^/]+\/session\/messages\.jsonl)$/
-/** A session journal big enough to travel in its own lane instead of inside every save. */
+/**
+ * Review (landing, the one memory): her memory files, the timeline's and her voice memory's chain and words (storage/memory-
+ * timeline.ts, storage/voice-memory.ts), take the same lane AT ANY SIZE. They grow on every turn and every spoken
+ * exchange: inside the ordinary saves each turn re-sent both whole as base64 (encoded and hashed on her worker), and a
+ * slow or refused upload of them held her seed behind them. In the lane they go at most once per interval, alone, after
+ * every other save, and a 408 or 413 steps them out instead of holding the queue.
+ */
+const MEMORY_RECORD = /^\/dsh\/home\/auma\/(?:timeline|voice)\/(?:chain|words)\.v1\.jsonl$/
+/** A session journal big enough, or one of her memory files, to travel in its own lane instead of inside every save. */
 export const deferredJournal = (path: string, fileBytes: number | null): boolean =>
-  fileBytes !== null && fileBytes > SESSION_JOURNAL_POLICY.minBytes && SESSION_JOURNAL.test(path)
+  fileBytes !== null && ((fileBytes > SESSION_JOURNAL_POLICY.minBytes && SESSION_JOURNAL.test(path)) || MEMORY_RECORD.test(path))
 /** Whether one outbox entry carries a session journal past the lane threshold (its decoded size, from the base64). */
 const carriesJournal = ([path, wire]: readonly [string, WireEntry]): boolean => wire.kind === 'file'
   && deferredJournal(path, Math.floor((wire.b64.length * 3) / 4) - (wire.b64.endsWith('==') ? 2 : wire.b64.endsWith('=') ? 1 : 0))
@@ -294,6 +302,12 @@ export function planCloudResync(
 export const APPEND_ONLY_JOURNALS: ReadonlySet<string> = new Set([
   '/dsh/home/auma/seed/receipts.v3.jsonl',
   '/dsh/home/auma/seed/checkpoints.v1.jsonl',
+  // Her voice memory's chain, append-only at the mirror too (mirror-do.mjs protectedHistory).
+  // Its words file is NOT: it must stay deletable without touching the chain.
+  '/dsh/home/auma/voice/chain.v1.jsonl',
+  // Her timeline's chain (storage/memory-timeline.ts), append-only the same way. Its words file is NOT, as the
+  // voice words are not. The mirror's twin (mirror-do.mjs protectedHistory) is the edge's to add.
+  '/dsh/home/auma/timeline/chain.v1.jsonl',
 ])
 export const JOURNAL_BACKUP_ROOT = '/dsh/home/auma/seed/.conflict-backup'
 const sameBytes = (left: Uint8Array, right: Uint8Array): boolean =>
@@ -1197,7 +1211,7 @@ export function planChromeWins(
   // authorizes a deletion (it records that local rows are unknown, not that she deleted them); a directory tombstone
   // whose children the cloud still holds refuses; immutable or append-only history refuses; and a backup key that
   // already holds a different file refuses rather than overwrite it. Anything else still refuses, by name.
-  const unexplained = deletes.filter(path => {
+  const unexplained = deletes.filter((path) => {
     if (after.get(path)?.kind !== 'gone') return true
     const theirs = cloud.get(path)
     if (theirs?.kind !== 'file' || cloudImmutable(path) || CLOUD_APPEND_ONLY.has(path)) return true

@@ -612,24 +612,35 @@
 # Aukora (Round 36): the composer pill's models beyond the official DeepSeek route (still the default), on the
 # dormant pi-ai adapter. In the browser each route goes through its same-origin edge door (/door/anthropic or
 # /door/openrouter + /v1/chat/completions), where the edge sets the real key; ANTHROPIC_API_KEY and OPENROUTER_API_KEY
-# hold only the door placeholder. The edge's provider budget accepts plain chat requests only (string content, one
-# max_tokens, no stream_options, no reasoning fields), so every model is text-only and non-reasoning here, and the
-# routes ask for no streamed usage. Each label names the model that runs (ids from the providers' own catalogs,
-# 2026-11-10); Anthropic is reached through its OpenAI-compatible endpoint, the only wire the browser harness speaks.
+# hold only the door placeholder. The edge's provider budget accepts plain chat requests only on the chat wire (string
+# content, one max_tokens, no stream_options, no reasoning fields), so every OpenRouter model is text-only and
+# non-reasoning here, and those routes ask for no streamed usage. Each label names the model that runs (ids from the providers' own catalogs,
+# 2026-11-10). The three Claude routes
+# speak Anthropic Messages (/door/anthropic/v1/messages; the browser's pi-ai, webworker-runtime
+# src/node/external_packages/pi-ai.ts) so a chosen effort travels as `output_config.effort`, exactly as her fast voice
+# sends it (deploy/cloudflare/src/voice-fast.mjs), and the edge's request check accepts exactly the five levels there.
+# Each offers low, medium, high, xhigh and max. `auto`, listed first, is the
+# default when a conversation chooses none: it names no level, so her request goes exactly as before the effort build
+# (the chat-compatible wire, /door/anthropic/v1/chat/completions, the same bytes); only a named level takes the Messages
+# wire. `autoEffort` is the description she and the pill read for it. The default is `medium`, the
+# Messages wire with prompt-cache marks and usage; a conversation with no stored effort runs it. `auto` stays first and
+# keeps its meaning exactly (the older chat-compatible wire: no caching, no usage), now described by what it costs.
 # A bundle row, not a launch overlay, so her home patch and the Models page can still change or replace it.
 - id: llm-pi-ai
   config:
     providers:
       anthropic-door:
         displayName: Anthropic
-        api: openai-completions
+        api: anthropic-messages
         baseURL: https://api.anthropic.com/v1
         apiKeyEnv: ANTHROPIC_API_KEY
-        compat: { maxTokensField: max_tokens, supportsDeveloperRole: false, supportsStore: false, supportsUsageInStreaming: false }
+        reasoning: medium
+        autoEffort: 'the older connection: no caching, no usage shown, much costlier on long conversations'
+        compat: { supportsTemperature: false }
         models:
-          - { id: claude-opus-5-5, name: Opus 5.5, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: false }
-          - { id: claude-fable-5-2, name: Fable 5.2, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: false }
-          - { id: claude-sonnet-5-5, name: Sonnet 5.5, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: false }
+          - { id: claude-opus-5-5, name: Opus 5.5, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: { low: low, medium: medium, high: high, xhigh: xhigh, max: max } }
+          - { id: claude-fable-5-2, name: Fable 5.2, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: { low: low, medium: medium, high: high, xhigh: xhigh, max: max } }
+          - { id: claude-sonnet-5-5, name: Sonnet 5.5, contextWindow: 1000000, maxTokens: 128000, input: [text], reasoningEfforts: { low: low, medium: medium, high: high, xhigh: xhigh, max: max } }
       openrouter-door:
         displayName: OpenRouter
         api: openai-completions

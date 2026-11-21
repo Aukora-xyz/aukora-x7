@@ -229,7 +229,8 @@ const canonical = async (value: unknown): Promise<string> => {
   return text
 }
 const ACCOUNT = '0123456789abcdef0123456789abcdef', LIVE_ZONE = 'f'.repeat(32), OTHER_ZONE = 'e'.repeat(32)
-const HEAD_NS = '5ead0000000000000000000000000a01', MIRROR_NS = '5ead0000000000000000000000000a02', VOICE_NS = '5ead0000000000000000000000000a04', KV_LIVE = '6b76' + '0'.repeat(26) + 'b1'
+const HEAD_NS = '5ead0000000000000000000000000a01', MIRROR_NS = '5ead0000000000000000000000000a02', VOICE_NS = '5ead0000000000000000000000000a04'
+const WITNESS_NS = '5ead0000000000000000000000000a05', KV_LIVE = '6b76' + '0'.repeat(26) + 'b1'
 const CF = 'https://api.cloudflare.com/client/v4'
 const EDGE_ENV = { CLOUDFLARE_API_TOKEN: 'synthetic-global-key-fixture-0000', CLOUDFLARE_EMAIL: 'owner@example.org', CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
   CLOUDFLARE_DOOR_LEVEL: 'open', SOURCE_REVISION: 'a'.repeat(40) }
@@ -239,12 +240,13 @@ const SETTINGS = { success: true, errors: [], messages: [], result: { tail_consu
   { type: 'durable_object_namespace', name: 'HEAD', class_name: 'X61HeadDurableObject' },
   { type: 'durable_object_namespace', name: 'MIRROR', class_name: 'MirrorDO' },
   { type: 'durable_object_namespace', name: 'VOICE_BRIDGE', class_name: 'VoiceBridgeDO' },
+  { type: 'durable_object_namespace', name: 'WITNESS', class_name: 'WitnessDO' },
   { type: 'r2_bucket', name: 'ARCHIVE_BUCKET', bucket_name: 'your-node-archive' }, { type: 'kv_namespace', name: 'NOTES', namespace_id: KV_LIVE }] } }
 const NAMESPACES = { success: true, errors: [], messages: [],
-  result_info: { page: 1, per_page: 1000, count: 3, total_count: 3, total_pages: 1 },
+  result_info: { page: 1, per_page: 1000, count: 4, total_count: 4, total_pages: 1 },
   // The managed voice's bridge is the live Worker's third Durable Object class (wrangler.toml).
   result: [{ id: HEAD_NS, script: 'your-node', class: 'X61HeadDurableObject' }, { id: MIRROR_NS, script: 'your-node', class: 'MirrorDO' },
-    { id: VOICE_NS, script: 'your-node', class: 'VoiceBridgeDO' }] }
+    { id: VOICE_NS, script: 'your-node', class: 'VoiceBridgeDO' }, { id: WITNESS_NS, script: 'your-node', class: 'WitnessDO' }] }
 const ZONE_NAMES: Record<string, string> = { [LIVE_ZONE]: 'example.invalid', [OTHER_ZONE]: 'example.org' }
 const ROUTE_ERROR = { success: false, errors: [{ code: 7003, message: 'Could not route' }], messages: [], result: null }
 interface Sent { url: string; method: string; body: unknown }

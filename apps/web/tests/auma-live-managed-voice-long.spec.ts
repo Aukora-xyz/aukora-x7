@@ -11,8 +11,21 @@ import { describe, expect, it } from 'vitest'
 type Frame = Record<string, unknown> & { t: string }
 type Outcome = { ok: true } | { ok: false; code: string }
 type Turn = { turnId: string; transcript: string; signal: AbortSignal; say: (text: string) => void; carry?: () => void }
-type Controller = { start: () => Promise<string>; stop: () => void; readonly state: string; readonly openTurns: number }
-type SdkConfig = Record<string, (value?: unknown) => void>
+type SdkStatus = {
+  errors: number
+  lastErrorSeconds: number | null
+  kind: string | null
+  disconnectReason: string | null
+  disconnectCode: number | null
+}
+type Controller = {
+  start: () => Promise<string>
+  stop: () => void
+  readonly state: string
+  readonly openTurns: number
+  readonly status: { sdk: SdkStatus }
+}
+type SdkConfig = Record<string, (value?: unknown, context?: unknown) => void>
 
 const scripts = new URL('../scripts/stock-apps/managed-voice/', import.meta.url)
 const { createManagedConversation } = await import(new URL('controller.mjs', scripts).href) as {
@@ -27,6 +40,10 @@ const policy = await import(new URL('policy.mjs', scripts).href) as {
   FAIL_CODES: Record<string, string>
   LINES: Record<string, string>
   CALL_END_REASONS: readonly string[]
+  SDK_ERROR_KINDS: readonly string[]
+  SDK_WATCH_MS: number
+  OPEN_DROP_MS: number
+  classifySdkError: (message: unknown, context?: unknown) => string
 }
 const edge = await import(new URL('../../../deploy/cloudflare/src/voice-bridge-do.mjs', import.meta.url).href) as {
   FAIL_LINES: Record<string, string>
@@ -214,7 +231,7 @@ class FakeSocket {
 }
 
 /** The page controller with her governed turn at `level`, one manual clock, a fake SDK session and tab door. */
-function page(level: string, seconds = 1200) {
+function page(level: string, seconds = 1200, beforeConnect?: (given: SdkConfig) => void) {
   const c = clock()
   const r = runner(level, c)
   const sockets: FakeSocket[] = []
@@ -223,10 +240,12 @@ function page(level: string, seconds = 1200) {
   const session = { endSession: async () => {}, setMicMuted: () => {}, getInputVolume: () => 0, getOutputVolume: () => 0, sendUserMessage: () => {}, sendUserActivity: () => {}, getId: () => 'conv_long' }
   const controller = createManagedConversation({
     timers: c.timers,
+    now: () => c.now,
     request: async () => new Response(JSON.stringify({ token: 'p'.repeat(64), maxDurationSeconds: seconds }), { status: 200 }),
     startSession: async (given: SdkConfig) => {
       config = given
       given.onConversationCreated?.(session)
+      beforeConnect?.(given)
       given.onConnect?.()
       return session
     },
@@ -241,7 +260,7 @@ function page(level: string, seconds = 1200) {
     socket.deliver({ t: 'ready', conv: 'conv_long', maxDurationSeconds: 1200 })
     return socket
   }
-  return { c, r, controller, connect, notices, sdk: () => config }
+  return { c, r, controller, connect, notices, sdk: () => config, sockets }
 }
 
 describe('the lookup case through the page controller', () => {
@@ -325,9 +344,12 @@ describe('the provider gives up mid-turn', () => {
     socket.deliver({ t: 'turn', turn: 'eleven:conv_long:5', transcript: 'keep going' })
     await settle()
     const [turn] = p.r.her.turns
+    // A healthy call: the end comes past the open-drop window (2026-11-18), and is silent as before.
+    await p.c.advance(policy.OPEN_DROP_MS)
     p.sdk().onDisconnect?.({ reason: 'agent' })
     await settle()
     expect(p.controller.state).toBe('idle')
+    expect(p.notices).toEqual([])
     expect(turn?.signal.aborted).toBe(false)
     p.controller.stop()
     expect(turn?.signal.aborted).toBe(true)
@@ -411,7 +433,10 @@ describe('review fixes (2026-11-14)', () => {
     expect(timed.notices).toEqual([policy.LINES.resting])
     const hung = page('open')
     const d = await hung.connect()
+    await hung.c.advance(policy.OPEN_DROP_MS)
+    hung.sdk().onModeChange?.({ mode: 'speaking' })
     hung.sdk().onDisconnect?.({ reason: 'agent' })
+    expect(hung.notices).toEqual([])
     expect(d.frames('bye')).toEqual([{ t: 'bye', why: 'disconnected' }])
     const broke = page('open')
     const e = await broke.connect()
@@ -419,8 +444,11 @@ describe('review fixes (2026-11-14)', () => {
     expect(e.frames('bye')).toEqual([{ t: 'bye', why: 'error' }])
     const erred = page('open')
     const f = await erred.connect()
+    // the voice tools part 2: an SDK error alone no longer ends the call; with no sign of life for SDK_WATCH_MS it does.
     erred.sdk().onError?.('socket failed')
-    expect(f.frames('bye')).toEqual([{ t: 'bye', why: 'error' }])
+    expect(f.frames('bye')).toEqual([])
+    await erred.c.advance(policy.SDK_WATCH_MS)
+    expect(f.frames('bye')).toEqual([{ t: 'bye', why: 'error', sdk: 'socket' }])
   })
 
   it('a turn carried past its call is cut when he asks something new in the next call; the new turn runs and is answered', async () => {
@@ -429,8 +457,10 @@ describe('review fixes (2026-11-14)', () => {
     first.deliver({ t: 'turn', turn: 'eleven:conv_long:11', transcript: 'research this for an hour' })
     await settle()
     const [carried] = p.r.her.turns
+    await p.c.advance(policy.OPEN_DROP_MS)
     p.sdk().onDisconnect?.({ reason: 'agent' })
     await settle()
+    expect(p.notices).toEqual([])
     expect(carried?.signal.aborted).toBe(false)
     // The owner calls again and asks something else.
     const second = await p.connect()
@@ -447,5 +477,179 @@ describe('review fixes (2026-11-14)', () => {
     expect(second.frames('done')).toEqual([{ t: 'done', turn: 'eleven:conv_long:12' }])
     // Nothing of the cut carried turn goes up either door.
     expect([...first.sent, ...second.sent].some(frame => frame.turn === 'eleven:conv_long:11' && frame.t !== 'bye')).toBe(false)
+  })
+})
+
+describe('a provider error alone no longer hangs up her call (the voice tools part 2, 2026-11-16)', () => {
+  const SECRET = 'PROVIDER-WORDS-7f3a'
+  const allText = (p: ReturnType<typeof page>) => JSON.stringify([p.sockets.map(socket => socket.sent), p.controller.status, p.notices])
+
+  it('the closed kinds and the fixed table: the SDK words pick a kind, never travel', () => {
+    expect(policy.SDK_ERROR_KINDS).toEqual(['socket', 'server', 'audio', 'permission', 'other'])
+    expect(policy.SDK_WATCH_MS).toBe(20_000)
+    expect(policy.classifySdkError('Server error: turn cancelled', { errorType: 'internal' })).toBe('server')
+    expect(policy.classifySdkError('WebSocket closed unexpectedly')).toBe('socket')
+    expect(policy.classifySdkError('Failed to start the audio worklet')).toBe('audio')
+    expect(policy.classifySdkError('Permission denied by the user')).toBe('permission')
+    expect(policy.classifySdkError('x', { type: 'connection' })).toBe('socket')
+    expect(policy.classifySdkError('something odd')).toBe('other')
+    expect(policy.classifySdkError(undefined)).toBe('other')
+    expect(policy.classifySdkError({ toString: () => 'socket' })).toBe('other')
+  })
+
+  it('an onError on a live call does not end it; the next turn is answered; the reason is kept in closed fields', async () => {
+    const p = page('open')
+    const socket = await p.connect()
+    await p.c.advance(7_000)
+    p.sdk().onError?.(`Server error: ${SECRET}`, { errorType: 'internal', debugMessage: SECRET })
+    await p.c.advance(5_000)
+    expect(p.controller.state).not.toBe('idle')
+    expect(socket.frames('bye')).toEqual([])
+    expect(p.notices).toEqual([])
+    socket.deliver({ t: 'turn', turn: 'eleven:conv_long:21', transcript: 'are you still there' })
+    await settle()
+    const [turn] = p.r.her.turns
+    turn?.write('Still here.')
+    turn?.finish()
+    await settle()
+    expect(socket.frames('done')).toEqual([{ t: 'done', turn: 'eleven:conv_long:21' }])
+    expect(p.controller.status.sdk).toEqual({ errors: 1, lastErrorSeconds: 7, kind: 'server', disconnectReason: null, disconnectCode: null })
+    // The turn frame was a sign of life: the watchdog is clear, the call is still up long after the window.
+    await p.c.advance(60_000)
+    expect(p.controller.state).not.toBe('idle')
+    expect(socket.frames('bye')).toEqual([])
+    expect(allText(p)).not.toContain(SECRET)
+  })
+
+  it('an onError followed by 20 s of nothing ends the call as before, with why error and the closed sdk kind', async () => {
+    const p = page('open')
+    const socket = await p.connect()
+    p.sdk().onError?.(`${SECRET} websocket dropped`, { debugMessage: SECRET })
+    await p.c.advance(policy.SDK_WATCH_MS - 1)
+    expect(socket.frames('bye')).toEqual([])
+    // A second error inside the window does not push the deadline back.
+    p.sdk().onError?.(`Server error: ${SECRET}`)
+    await p.c.advance(1)
+    expect(socket.frames('bye')).toEqual([{ t: 'bye', why: 'error', sdk: 'server' }])
+    expect(p.controller.state).toBe('idle')
+    // CHANGED 2026-11-18: the call carried the override ('' opens silent) and the provider never showed life, so it is
+    // a call dropped as it opened (auma-live-managed-voice.spec.ts covers the usual line after life).
+    expect(p.notices).toEqual([policy.LINES.droppedOpening])
+    // The last error came 19.999 s after the press: whole seconds, rounded down.
+    expect(p.controller.status.sdk).toMatchObject({ errors: 2, kind: 'server', lastErrorSeconds: 19 })
+    expect(allText(p)).not.toContain(SECRET)
+  })
+
+  it('a sign of life within the window clears the watchdog: her audio, a provider message or ping, a fresh transcript at the edge', async () => {
+    const lives: Array<(p: ReturnType<typeof page>, socket: FakeSocket) => void> = [
+      (p) => { p.sdk().onModeChange?.({ mode: 'speaking' }) },
+      (p) => { p.sdk().onMessage?.({ role: 'user', message: 'hello?', event_id: 3 }) },
+      (p) => { p.sdk().onPing?.({ event_id: 4, ping_ms: 80 }) },
+      (_p, socket) => { socket.deliver({ t: 'turn', turn: 'eleven:conv_long:31', transcript: 'hi' }) },
+      (_p, socket) => { socket.deliver({ t: 'cancel', turn: 'eleven:conv_long:32', reason: 'superseded' }) },
+    ]
+    for (const [index, life] of lives.entries()) {
+      const p = page('open')
+      const socket = await p.connect()
+      p.sdk().onError?.('audio glitch')
+      await p.c.advance(10_000)
+      life(p, socket)
+      // Past where the watchdog would have ended it (20 s after the error).
+      await p.c.advance(12_000)
+      expect(socket.frames('bye'), String(index)).toEqual([])
+      expect(p.controller.state, String(index)).not.toBe('idle')
+      // A later error arms it again, and with no life after it the call ends.
+      p.sdk().onError?.('audio glitch')
+      await p.c.advance(policy.SDK_WATCH_MS)
+      expect(socket.frames('bye'), String(index)).toEqual([{ t: 'bye', why: 'error', sdk: 'audio' }])
+    }
+  }, 30_000)
+
+  it('review 2026-11-16: the provider\'s pings keep a quiet call up after an error, through his interruption and a long silence', async () => {
+    const p = page('open')
+    const socket = await p.connect()
+    p.sdk().onInterruption?.()
+    p.sdk().onError?.('Server error: turn cancelled')
+    // He thinks quietly for a minute; the provider pings every few seconds.
+    for (let at = 0; at < 60_000; at += 5_000) { await p.c.advance(5_000); p.sdk().onPing?.({ event_id: at, ping_ms: 90 }) }
+    expect(socket.frames('bye')).toEqual([])
+    expect(p.controller.state).not.toBe('idle')
+    expect(p.notices).toEqual([])
+  })
+
+  it('review 2026-11-16: an error before the connect completes is cleared by the connect itself', async () => {
+    const p = page('open', 1200, (given) => { given.onError?.('Server error: warming up') })
+    const socket = await p.connect()
+    await p.c.advance(policy.SDK_WATCH_MS * 3)
+    expect(socket.frames('bye')).toEqual([])
+    expect(p.controller.state).not.toBe('idle')
+    expect(p.controller.status.sdk).toMatchObject({ errors: 1, kind: 'server' })
+  })
+
+  it('review 2026-11-16: what does not prove the provider alive leaves the watchdog armed', async () => {
+    const notLife: Array<(p: ReturnType<typeof page>, socket: FakeSocket) => void> = [
+      // Her audio stopping flips the mode to listening: the symptom, not life.
+      (p) => { p.sdk().onModeChange?.({ mode: 'listening' }) },
+      // The edge's own fast voice, timers and call end, and a malformed frame.
+      (_p, socket) => { socket.deliver({ t: 'spoken', turn: 'eleven:conv_long:40', heard: 'hi', said: 'Hello.' }) },
+      (_p, socket) => { socket.deliver({ t: 'tool_cancel', turn: 'eleven:conv_long:41' }) },
+      (_p, socket) => { socket.deliver({ t: 'cancel', turn: 'eleven:conv_long:42', reason: 'provider-closed' }) },
+      (_p, socket) => { socket.deliver({ t: 'tool', turn: 'nope', call: 7 }) },
+    ]
+    for (const [index, sign] of notLife.entries()) {
+      const p = page('open')
+      const socket = await p.connect()
+      p.sdk().onModeChange?.({ mode: 'speaking' })
+      p.sdk().onError?.('Server error')
+      await p.c.advance(800)
+      sign(p, socket)
+      await p.c.advance(policy.SDK_WATCH_MS)
+      expect(socket.frames('bye'), String(index)).toEqual([{ t: 'bye', why: 'error', sdk: 'server' }])
+      expect(p.controller.state, String(index)).toBe('idle')
+    }
+  }, 30_000)
+
+  it('a real onDisconnect with reason error still ends it at once; its closed reason and close code are kept', async () => {
+    const p = page('open')
+    const socket = await p.connect()
+    p.sdk().onDisconnect?.({ reason: 'error', message: SECRET, context: { type: 'close', reason: SECRET, code: 1011 }, closeCode: 1006, closeReason: SECRET })
+    expect(socket.frames('bye')).toEqual([{ t: 'bye', why: 'error' }])
+    expect(p.controller.state).toBe('idle')
+    // CHANGED 2026-11-18: no provider life before this end on a call that carried the override: dropped as it opened.
+    expect(p.notices).toEqual([policy.LINES.droppedOpening])
+    expect(p.controller.status.sdk).toEqual({ errors: 0, lastErrorSeconds: null, kind: null, disconnectReason: 'error', disconnectCode: 1006 })
+    expect(allText(p)).not.toContain(SECRET)
+    // After an error inside the window, the disconnect ends it at once and the bye carries the kind.
+    const q = page('open')
+    const second = await q.connect()
+    q.sdk().onError?.('WebSocket error')
+    q.sdk().onDisconnect?.({ reason: 'agent', context: { type: 'close', code: 4000 } })
+    expect(second.frames('bye')).toEqual([{ t: 'bye', why: 'disconnected', sdk: 'socket' }])
+    expect(q.controller.status.sdk).toMatchObject({ disconnectReason: 'agent', disconnectCode: 4000 })
+    // A reason outside the closed list, or a code that is not a whole number, is not kept.
+    const r = page('open')
+    await r.connect()
+    r.sdk().onDisconnect?.({ reason: SECRET, closeCode: 'x' })
+    expect(r.controller.status.sdk).toMatchObject({ disconnectReason: null, disconnectCode: null })
+  })
+
+  it('a new press starts the counts again; the override-refused retry is checked first and still retries', async () => {
+    const p = page('open')
+    const a = await p.connect()
+    p.sdk().onError?.('socket closed')
+    p.controller.stop()
+    expect(a.frames('bye')).toEqual([{ t: 'bye', why: 'stop', sdk: 'socket' }])
+    await p.connect()
+    expect(p.controller.status.sdk).toEqual({ errors: 0, lastErrorSeconds: null, kind: null, disconnectReason: null, disconnectCode: null })
+    // The override refusal (before the tab door is ready) is not counted and not watched: the press retries without it.
+    const q = page('open')
+    expect(await q.controller.start()).toBe('started')
+    const first = q.sdk()
+    first.onError?.('first_message override is not allowed for this agent')
+    await settle()
+    expect(q.sockets).toHaveLength(2)
+    expect(q.controller.status.sdk.errors).toBe(0)
+    await q.c.advance(policy.SDK_WATCH_MS * 2)
+    expect(q.notices).toEqual([policy.LINES.connect])
   })
 })

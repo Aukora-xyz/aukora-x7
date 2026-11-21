@@ -40,6 +40,7 @@ type Controller = {
   readonly state: string
   readonly connected: boolean
   readonly openTurns: number
+  readonly status: { sdk: Record<string, unknown>; openPlain: boolean }
 }
 type Timer = { fn: () => void; ms: number }
 
@@ -62,6 +63,8 @@ const policy = await import(new URL('policy.mjs', scripts).href) as {
   MANAGED_VOICE: Record<string, number>
   SILENT_OPENING: string
   FAIL_CODES: Record<string, string>
+  SDK_WATCH_MS: number
+  OPEN_DROP_MS: number
 }
 const live = await import(new URL('../public/app/genesis-live.js', import.meta.url).href) as {
   createGenesisLive: (deps: Record<string, unknown>) => {
@@ -75,6 +78,7 @@ const live = await import(new URL('../public/app/genesis-live.js', import.meta.u
   AUMA_LIVE_VOICE_MEDIUM: string
   VOICE_UNCONFIRMED_SAY: string
   AUMA_LIVE_ALIEN_VOICE_DIRECTIVE: string
+  VOICE_CHANNEL_GUIDANCE: string
   ROSTER_HEAD: string
 }
 const { makeDirectiveFilter } = await import(new URL('../public/app/field-directives.js', import.meta.url).href) as {
@@ -142,8 +146,11 @@ function fixture(options: {
     setInterval: (fn: () => void, ms: number) => { const id = ++nextTimer; intervals.set(id, { fn, ms }); return id },
     clearInterval: (id: number) => { intervals.delete(id) },
   }
+  /** The controller's clock (ms): moved only by `pass`, so "within OPEN_DROP_MS of the connect" is the test's choice. */
+  const clock = { at: 1_000 }
   const controller = createManagedConversation({
     timers,
+    now: () => clock.at,
     ...(options.muted === undefined ? {} : { muted: options.muted }),
     ...(options.arrival ? { arrival: options.arrival } : {}),
     request: async (path: string, init: RequestInit) => {
@@ -178,8 +185,10 @@ function fixture(options: {
     return socket
   }
   const meterTick = () => { for (const timer of intervals.values()) timer.fn() }
+  /** The clock moves on (no timer fires). */
+  const pass = (ms: number) => { clock.at += ms }
   return {
-    controller, states, transcripts, notices, levels, corrections, requests, sockets, runs, muteCalls, typed, volumes,
+    controller, pass, states, transcripts, notices, levels, corrections, requests, sockets, runs, muteCalls, typed, volumes,
     timeouts, intervals, opts, connect, meterTick, configs,
     get ended() { return ended }, get calls() { return calls }, get activity() { return activity },
   }
@@ -485,7 +494,10 @@ describe('the tab door', () => {
     expect(f.controller.openTurns).toBe(1)
   })
 
-  it('two rapid interruptions cut the turn that was running once, and a turn after them runs and can be cut again', async () => {
+  // CHANGED: the old rule ("two rapid
+  // interruptions cut the turn that was running once") is gone. Only the edge decides an interruption: his talking over
+  // her never cuts handed work on the page. Page turns end only by the edge's `cancel`, by Stop, and by the call ending.
+  it('his talking over her (the provider\'s interruption) never cuts a page turn; the edge\'s cancel and Stop still do', async () => {
     const f = fixture({ runTurn: turn => new Promise<TurnOutcome>((resolve) => {
       f.runs.push(turn)
       turn.signal.addEventListener('abort', () => { resolve({ ok: false, code: 'VOICE_TURN_CANCELLED' }) })
@@ -496,16 +508,25 @@ describe('the tab door', () => {
     f.opts().onInterruption()
     f.opts().onInterruption()
     await settle()
-    expect(f.runs[0]?.signal.aborted).toBe(true)
-    expect(socket.frames('fail')).toEqual([{ t: 'fail', turn: 'eleven:conv_test_1:9', code: 'VOICE_TURN_CANCELLED' }])
+    // The liveness mark and the change to listening stay; the turn runs on.
+    expect(f.runs[0]?.signal.aborted).toBe(false)
     expect(f.controller.state).toBe('listening')
+    expect(f.controller.openTurns).toBe(1)
+    expect(socket.frames('fail')).toEqual([])
+    // The edge decides: its cancel cuts the turn, and the page says nothing more for it.
+    socket.deliver({ t: 'cancel', turn: 'eleven:conv_test_1:9', reason: 'superseded' })
+    await settle()
+    expect(f.runs[0]?.signal.aborted).toBe(true)
+    expect(socket.frames('fail')).toEqual([])
     socket.deliver({ t: 'turn', turn: 'eleven:conv_test_1:10', transcript: 'actually, just the end' })
     await settle()
-    expect(f.runs).toHaveLength(2)
-    expect(f.runs[1]?.signal.aborted).toBe(false)
     f.opts().onInterruption()
     await settle()
-    expect(socket.frames('fail').map(frame => frame.turn)).toEqual(['eleven:conv_test_1:9', 'eleven:conv_test_1:10'])
+    expect(f.runs[1]?.signal.aborted).toBe(false)
+    // Stop still cuts it at once.
+    f.controller.stop()
+    await settle()
+    expect(f.runs[1]?.signal.aborted).toBe(true)
     expect(socket.frames('done')).toEqual([])
   })
 
@@ -704,13 +725,22 @@ describe('the first message, when the provider refuses the override', () => {
     const g = fixture({ startSession: async () => { throw new Error('ICE failed') } })
     expect(await g.controller.start()).toBe('refused')
     expect(g.configs).toHaveLength(1)
-    // Once the tab door is ready the call is up: an error then ends it, as any error does.
+    // Once the tab door is ready the call is up: an error then is not blamed on the override and nothing is retried.
+    // the voice tools part 2: it no longer ends the call by itself; with no sign of life for the watch window it does.
     const h = fixture()
     await h.connect()
     h.opts().onError(REFUSED)
     expect(h.configs).toHaveLength(1)
+    expect(h.controller.state).toBe('listening')
+    expect(h.notices).toEqual([])
+    const watch = [...h.timeouts.values()].find(timer => timer.ms === policy.SDK_WATCH_MS)
+    expect(watch).toBeDefined()
+    watch?.fn()
+    expect(h.configs).toHaveLength(1)
     expect(h.controller.state).toBe('idle')
-    expect(h.notices).toEqual([policy.LINES.disconnected])
+    // CHANGED 2026-11-18: this call carried the override ('' opens silent) and the provider never showed life, so it
+    // dropped as it opened (see 'a call dropped as it opened' below; with life first, the line is still `disconnected`).
+    expect(h.notices).toEqual([policy.LINES.droppedOpening])
     // A disconnect whose close reason names the override is read the same way.
     const k = fixture()
     expect(await k.controller.start()).toBe('started')
@@ -718,6 +748,297 @@ describe('the first message, when the provider refuses the override', () => {
     await settle()
     expect(k.configs).toHaveLength(2)
     expect(k.configs[1]).not.toHaveProperty('overrides')
+  })
+})
+
+describe('a call dropped as it opened (2026-11-18): the next press opens without the override', () => {
+  const REFUSED = 'Override for field \'first_message\' is not allowed by config.'
+  /** Every sign of provider life the SDK gives after it connects (onConnect itself is not one). */
+  const lives: Array<[string, (config: SessionConfig) => void]> = [
+    ['her audio', (config) => { config.onModeChange({ mode: 'speaking' }) }],
+    ['a message', (config) => { config.onMessage({ role: 'user', message: 'hi', event_id: 9 }) }],
+    ['a ping', (config) => { (config.onPing as (event: unknown) => void)({ event_id: 1, ping_ms: 80 }) }],
+    ['an interruption', (config) => { config.onInterruption() }],
+    ['a correction', (config) => { config.onAgentResponseCorrection({ original_agent_response: 'a b', corrected_agent_response: 'a' }) }],
+  ]
+
+  it('an override call the provider ends before any life (reason agent, or error) shows the new line and sets openPlain', async () => {
+    for (const [reason, why] of [['agent', 'disconnected'], ['error', 'error']] as const) {
+      const f = fixture()
+      expect(await f.controller.start()).toBe('started')
+      expect(f.configs[0]?.overrides).toEqual({ agent: { firstMessage: policy.SILENT_OPENING } })
+      expect(f.controller.status.openPlain).toBe(false)
+      const socket = f.sockets[0] as FakeSocket
+      socket.open()
+      // Before or after the tab door is ready, it is the same: no provider life followed the connect.
+      if (reason === 'error') socket.deliver({ t: 'ready', conv: CONV, maxDurationSeconds: 1200 })
+      f.opts().onDisconnect({ reason })
+      expect(f.controller.state, reason).toBe('idle')
+      expect(f.notices, reason).toEqual([policy.LINES.droppedOpening])
+      expect(f.controller.status.openPlain, reason).toBe(true)
+      // The edge is told why as before, and nothing new: the bye's shape is unchanged.
+      expect(socket.frames('bye'), reason).toEqual([{ t: 'bye', why }])
+      expect(f.configs, reason).toHaveLength(1)
+    }
+    expect(policy.LINES.droppedOpening).toBe('Voice dropped as it opened. Tap the orb to try once more, or keep typing.')
+  })
+
+  it('the next press sends no override and runs no arrival turn; it stays so for every press until the page reloads', async () => {
+    let arrivals = 0
+    const f = fixture({ arrival: async () => { arrivals += 1; return 'The owner, here.' } })
+    expect(await f.controller.start()).toBe('started')
+    expect(arrivals).toBe(1)
+    expect(f.configs[0]?.overrides).toEqual({ agent: { firstMessage: 'The owner, here.' } })
+    f.opts().onDisconnect({ reason: 'agent' })
+    expect(f.controller.status.openPlain).toBe(true)
+    expect(await f.controller.start()).toBe('started')
+    expect(arrivals).toBe(1)
+    expect(f.configs[1]).not.toHaveProperty('overrides')
+    expect(f.configs[1]?.conversationToken).toBe(PASS)
+    expect([...f.timeouts.values()].some(timer => timer.ms === policy.MANAGED_VOICE.arrivalMs)).toBe(false)
+    // Her first words were shown once, for the first call only; the plain call has no line of hers.
+    expect(f.transcripts).toEqual([['auma', 'The owner, here.']])
+    expect(f.requests).toHaveLength(2)
+    // A healthy plain call that ends later does not set it back.
+    f.pass(policy.OPEN_DROP_MS)
+    f.opts().onModeChange({ mode: 'speaking' })
+    f.opts().onDisconnect({ reason: 'agent' })
+    expect(f.controller.status.openPlain).toBe(true)
+    expect(await f.controller.start()).toBe('started')
+    expect(arrivals).toBe(1)
+    expect(f.configs[2]).not.toHaveProperty('overrides')
+    // A fresh page (a reload makes a new controller) asks for her first words again.
+    const g = fixture({ arrival: async () => 'Again.' })
+    expect(await g.controller.start()).toBe('started')
+    expect(g.configs[0]?.overrides).toEqual({ agent: { firstMessage: 'Again.' } })
+  })
+
+  it('a healthy override call that shows life and later disconnects is exactly as before and does not set openPlain', async () => {
+    for (const [name, life] of lives) {
+      const f = fixture()
+      const socket = await f.connect()
+      // Past the open-drop window: a healthy call (CHANGED 2026-11-18 with OPEN_DROP_MS).
+      f.pass(policy.OPEN_DROP_MS)
+      life(f.opts())
+      f.opts().onDisconnect({ reason: 'agent' })
+      expect(f.controller.state, name).toBe('idle')
+      // A provider hang-up after life is silent, as before.
+      expect(f.notices, name).toEqual([])
+      expect(socket.frames('bye'), name).toEqual([{ t: 'bye', why: 'disconnected' }])
+      expect(f.controller.status.openPlain, name).toBe(false)
+      const g = fixture()
+      await g.connect()
+      g.pass(policy.OPEN_DROP_MS)
+      life(g.opts())
+      g.opts().onDisconnect({ reason: 'error' })
+      expect(g.notices, name).toEqual([policy.LINES.disconnected])
+      expect(g.controller.status.openPlain, name).toBe(false)
+      // The SDK watch after life: the usual line, not the new one.
+      const h = fixture()
+      await h.connect()
+      life(h.opts())
+      h.pass(policy.SDK_WATCH_MS)
+      h.opts().onError('socket glitch')
+      const watch = [...h.timeouts.values()].find(timer => timer.ms === policy.SDK_WATCH_MS)
+      expect(watch, name).toBeDefined()
+      watch?.fn()
+      expect(h.notices, name).toEqual([policy.LINES.disconnected])
+      expect(h.controller.status.openPlain, name).toBe(false)
+    }
+  })
+
+  it('the SDK watch firing on an override call before any life is a dropped opening', async () => {
+    const f = fixture()
+    await f.connect()
+    f.opts().onError('socket closed')
+    const watch = [...f.timeouts.values()].find(timer => timer.ms === policy.SDK_WATCH_MS)
+    watch?.fn()
+    expect(f.notices).toEqual([policy.LINES.droppedOpening])
+    expect(f.controller.status.openPlain).toBe(true)
+    expect(f.sockets[0]?.frames('bye')).toEqual([{ t: 'bye', why: 'error', sdk: 'socket' }])
+  })
+
+  it('a plain call that drops before life shows LINES.disconnected for a non-error reason too; after life it stays silent', async () => {
+    const f = fixture()
+    expect(await f.controller.start()).toBe('started')
+    f.opts().onDisconnect({ reason: 'agent' })
+    expect(await f.controller.start()).toBe('started')
+    expect(f.configs[1]).not.toHaveProperty('overrides')
+    const plain = f.sockets[1] as FakeSocket
+    plain.open()
+    f.opts().onDisconnect({ reason: 'agent' })
+    expect(f.notices).toEqual([policy.LINES.droppedOpening, policy.LINES.disconnected])
+    expect(plain.frames('bye')).toEqual([{ t: 'bye', why: 'disconnected' }])
+    expect(f.controller.state).toBe('idle')
+    // Reason error before life: the usual line, as before.
+    expect(await f.controller.start()).toBe('started')
+    f.opts().onDisconnect({ reason: 'error' })
+    expect(f.notices.at(-1)).toBe(policy.LINES.disconnected)
+    // After life, a plain call's non-error end is silent, as before.
+    expect(await f.controller.start()).toBe('started')
+    f.pass(policy.OPEN_DROP_MS)
+    ;(f.opts().onPing as (event: unknown) => void)({ event_id: 2, ping_ms: 50 })
+    f.opts().onDisconnect({ reason: 'user' })
+    expect(f.notices).toHaveLength(3)
+    expect(f.controller.state).toBe('idle')
+    // The retry's plain attempt is a plain call too: dropping before life says the usual line.
+    let tries = 0
+    const g = fixture({ startSession: async (config, session) => {
+      tries += 1
+      if (tries === 1) throw new Error(REFUSED)
+      config.onConversationCreated(session)
+      config.onConnect()
+      return session
+    } })
+    expect(await g.controller.start()).toBe('started')
+    g.opts().onDisconnect({ reason: 'agent' })
+    expect(g.notices).toEqual([policy.LINES.disconnected])
+    expect(g.controller.status.openPlain).toBe(false)
+  })
+
+  it('the override-refused retry is checked first, still works, and does not set openPlain when it succeeds', async () => {
+    let tries = 0
+    const f = fixture({ startSession: async (config, session) => {
+      tries += 1
+      if (tries === 1) throw new Error(REFUSED)
+      config.onConversationCreated(session)
+      config.onConnect()
+      return session
+    } })
+    expect(await f.controller.start()).toBe('started')
+    expect(f.configs).toHaveLength(2)
+    expect(f.configs[1]).not.toHaveProperty('overrides')
+    expect(f.notices).toEqual([])
+    expect(f.controller.status.openPlain).toBe(false)
+    // A disconnect whose words name the override (before ready, before life): the retry, not the new line.
+    const k = fixture()
+    expect(await k.controller.start()).toBe('started')
+    k.opts().onDisconnect({ reason: 'error', message: 'closed', context: { type: 'close', reason: REFUSED } })
+    await settle()
+    expect(k.configs).toHaveLength(2)
+    expect(k.configs[1]).not.toHaveProperty('overrides')
+    expect(k.notices).toEqual([])
+    expect(k.controller.status.openPlain).toBe(false)
+    expect(k.controller.state).toBe('listening')
+    // An onError that names it, the same.
+    const e = fixture()
+    expect(await e.controller.start()).toBe('started')
+    e.opts().onError(REFUSED)
+    await settle()
+    expect(e.configs).toHaveLength(2)
+    expect(e.notices).toEqual([])
+    expect(e.controller.status.openPlain).toBe(false)
+  })
+
+  it('a startSession rejection (not NotAllowedError) on an override call sets openPlain and shows the new line', async () => {
+    let tries = 0
+    const f = fixture({ startSession: async (config, session) => {
+      tries += 1
+      if (tries === 1) throw new Error('ICE failed')
+      config.onConversationCreated(session)
+      config.onConnect()
+      return session
+    } })
+    expect(await f.controller.start()).toBe('refused')
+    expect(f.configs).toHaveLength(1)
+    expect(f.notices).toEqual([policy.LINES.droppedOpening])
+    expect(f.controller.status.openPlain).toBe(true)
+    expect(f.controller.state).toBe('idle')
+    expect(await f.controller.start()).toBe('started')
+    expect(f.configs[1]).not.toHaveProperty('overrides')
+    // Without the override a rejection says the usual line, as before.
+    const g = fixture({ startSession: async () => { throw new Error('ICE failed') } })
+    expect(await g.controller.start()).toBe('refused')
+    expect(await g.controller.start()).toBe('refused')
+    expect(g.configs.map(config => Object.hasOwn(config, 'overrides'))).toEqual([true, false])
+    expect(g.notices).toEqual([policy.LINES.droppedOpening, policy.LINES.connect])
+  })
+
+  it('NotAllowedError still shows the microphone line and does not set openPlain', async () => {
+    const f = fixture({ startSession: async () => { throw Object.assign(new Error('override refused'), { name: 'NotAllowedError' }) } })
+    expect(await f.controller.start()).toBe('refused')
+    expect(f.notices).toEqual([policy.LINES.micDenied])
+    expect(f.controller.status.openPlain).toBe(false)
+    expect(await f.controller.start()).toBe('refused')
+    expect(f.configs.every(config => Object.hasOwn(config, 'overrides'))).toBe(true)
+  })
+
+  it('OPEN_DROP_MS: with the override, life then an end inside the window is still a dropped opening', async () => {
+    expect(policy.OPEN_DROP_MS).toBe(8000)
+    type Life = [string, (config: SessionConfig) => void]
+    const early: Life[] = [lives[2] as Life, lives[0] as Life]
+    for (const [name, life] of early) {
+      const f = fixture()
+      await f.connect()
+      f.pass(policy.OPEN_DROP_MS - 1)
+      life(f.opts())
+      f.opts().onDisconnect({ reason: 'agent' })
+      expect(f.notices, name).toEqual([policy.LINES.droppedOpening])
+      expect(f.controller.status.openPlain, name).toBe(true)
+    }
+  })
+
+  it('OPEN_DROP_MS: without the override, life then a non-error end inside the window says LINES.disconnected; just past it, silence', async () => {
+    const plain = async (ms: number) => {
+      const f = fixture()
+      expect(await f.controller.start()).toBe('started')
+      f.opts().onDisconnect({ reason: 'agent' })
+      expect(await f.controller.start()).toBe('started')
+      expect(f.configs[1]).not.toHaveProperty('overrides')
+      f.pass(ms)
+      ;(f.opts().onPing as (event: unknown) => void)({ event_id: 5, ping_ms: 40 })
+      f.opts().onDisconnect({ reason: 'agent' })
+      expect(f.controller.state).toBe('idle')
+      return f.notices.slice(1)
+    }
+    expect(await plain(policy.OPEN_DROP_MS - 1)).toEqual([policy.LINES.disconnected])
+    expect(await plain(policy.OPEN_DROP_MS)).toEqual([])
+    // With the override, just past the window with life: today's silence, and openPlain stays off.
+    const f = fixture()
+    await f.connect()
+    f.pass(policy.OPEN_DROP_MS)
+    f.opts().onModeChange({ mode: 'speaking' })
+    f.opts().onDisconnect({ reason: 'agent' })
+    expect(f.notices).toEqual([])
+    expect(f.controller.status.openPlain).toBe(false)
+  })
+
+  it('the edge\'s own turn and spoken frames prove the provider reached it: life for this attempt', async () => {
+    for (const frame of [
+      { t: 'turn', turn: 'eleven:conv_test_1:70', transcript: 'hello' },
+      { t: 'spoken', turn: 'eleven:conv_test_1:71', heard: 'hi', said: 'Hello.' },
+    ]) {
+      const f = fixture()
+      const socket = await f.connect()
+      f.pass(policy.OPEN_DROP_MS)
+      socket.deliver(frame)
+      await settle()
+      f.opts().onDisconnect({ reason: 'agent' })
+      expect(f.notices, frame.t).toEqual([])
+      expect(f.controller.status.openPlain, frame.t).toBe(false)
+    }
+  })
+
+  it('the owner\'s own Stop inside the window sets nothing, and the dead session\'s later end is ignored', async () => {
+    const f = fixture()
+    const socket = await f.connect()
+    const first = f.opts()
+    f.controller.stop()
+    first.onDisconnect({ reason: 'user' })
+    first.onDisconnect({ reason: 'error' })
+    expect(f.notices).toEqual([])
+    expect(f.controller.status.openPlain).toBe(false)
+    expect(socket.frames('bye')).toEqual([{ t: 'bye', why: 'stop' }])
+    expect(await f.controller.start()).toBe('started')
+    expect(f.configs[1]?.overrides).toEqual({ agent: { firstMessage: policy.SILENT_OPENING } })
+  })
+
+  it('status: openPlain is a closed boolean beside the sdk fields; a copy the page cannot change', async () => {
+    const f = fixture()
+    expect(Object.keys(f.controller.status).sort()).toEqual(['openPlain', 'sdk'])
+    const status = f.controller.status as { openPlain: boolean }
+    status.openPlain = true
+    expect(f.controller.status.openPlain).toBe(false)
   })
 })
 
@@ -819,7 +1140,9 @@ describe('her governed turn, for a turn the edge hands over (real genesis-live.j
     expect(prompts[0]?.content[0]?.text).toBe(live.VOICE_PROVENANCE)
     expect(prompts[0]?.content[1]?.text.startsWith(live.ROSTER_HEAD)).toBe(true)
     expect(prompts[0]?.content[2]?.text).toBe(live.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE)
-    expect(prompts[0]?.content[3]?.text).toBe('are you there')
+    expect(prompts[0]?.content[3]?.text).toBe(live.VOICE_CHANNEL_GUIDANCE)
+    expect(prompts[0]?.content[4]?.text).toBe('are you there')
+    expect(prompts[0]?.content).toHaveLength(5)
     // The look-only mark came before the prompt; the edge's journal was NOT called again.
     const order = w.log.map(call => `${call.kind}:${call.name}`)
     expect(order.indexOf('x6:voice-mark')).toBeLessThan(order.indexOf('rpc:session/prompt'))
@@ -1132,14 +1455,23 @@ describe('the seam in aumalive.js (read as text)', () => {
     expect(click).toContain('else void openVoice();')
   })
 
-  it('Stop, hiding the page, unloading and closing the app end the managed call', () => {
-    expect(slice('  function closeChannel() {', '\n  }\n')).toMatch(/^ {2}function closeChannel\(\) \{\n {4}stopManagedVoice\(\);\n/)
-    expect(slice('  const onVis = () => {', '  };')).toContain('if (document.hidden) { dropHer(); stopManagedVoice(); }')
+  // CHANGED: hiding the page and
+  // selecting another app no longer end the call (the old rule: "Stop, hiding the page, unloading and closing the app end
+  // the managed call"). Stop, unload (pagehide, beforeunload) and closing the app still do.
+  it('Stop, unloading and closing the app end the managed call; hiding the page and selecting another app do not', () => {
+    expect(slice('  function closeChannel() {', '\n  }\n')).toMatch(/^ {2}function closeChannel\(\) \{\n {4}if \(!keepingCall\) stopManagedVoice\(\);\n/)
+    const onVis = slice('  const onVis = () => {', '  };')
+    expect(onVis).toContain('if (document.hidden) dropHer();')
+    expect(onVis).not.toContain('stopManagedVoice')
     expect(page).toContain('window.addEventListener(\'pagehide\', stopManagedVoice);')
     expect(page).toContain('window.removeEventListener(\'pagehide\', stopManagedVoice);')
-    // Unload and closing the app already run closeChannel, which now stops the call first.
+    // Unload and closing the app run closeChannel, which stops the call first.
     expect(page).toContain('const unload = () => { closeChannel();')
-    expect(slice('    if (message.type === \'surface-active\') {', '      if (surfaceActive) announceCanvasReady();')).toContain('closeChannel();')
+    const surface = slice('    if (message.type === \'surface-active\') {', '      return;')
+    expect(surface).toContain('closeOldChannelOnly();')
+    expect(surface).not.toMatch(/closeChannel\(\)|stopManagedVoice/)
+    // The orb (Stop) still ends a live managed call.
+    expect(slice('  orb.addEventListener(\'click\', () => {', '  });')).toContain('else if (managedState !== \'idle\') stopManagedVoice();')
   })
 
   it('mute reaches the call\'s own capture and opens nothing; typing in a live call goes to the call; levels go to the field', () => {

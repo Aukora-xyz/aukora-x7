@@ -1,7 +1,5 @@
 # Community
 
-English | [中文](COMMUNITY.zh.md)
-
 ## Who this is for
 
 Aukora is for people who want an AI they own, not one they rent, and who want that AI to be able to change its own software without ever gaining the right to override them. The AI in this repository is called Auma. She is built from small replaceable modules, called organs, that she can write, compile, test and stage. A separate program, today a Cloudflare Worker called the edge, checks the owner's passkey before sensitive changes take effect.
@@ -57,7 +55,7 @@ Every area below has real code in the tree and a real gap. Each line names where
 
 - Older pages use other maturity words than the five above ([START-HERE.md](START-HERE.md), [ARCHITECTURE-ACTUAL.md](ARCHITECTURE-ACTUAL.md), [RUN-RECORD.md](RUN-RECORD.md), a record of an earlier tree, [GLOSSARY.md](GLOSSARY.md)). Bringing them to one set is useful work.
 - The issue and pull request templates in `.github/` are inherited and in Chinese.
-- Most pages under `docs/` have a Chinese twin, checked by `scripts/verify-translation-pairing.ts`. The new front pages have twins too; where a twin differs from its English page, the English page applies. Reading a Chinese page against its English page and reporting where they differ is useful work.
+- Most pages under `docs/` have a Chinese twin, checked by `scripts/verify-translation-pairing.ts`. The project's own front pages have none: by the owner's ruling of 2026-11-21 they are written in English only. Reading an inherited Chinese page against its English page and reporting where they differ is useful work.
 
 ### Research
 

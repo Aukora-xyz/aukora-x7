@@ -209,6 +209,12 @@ export async function summarizeWithLlm(
     toolHistory: agent.session.toolHistory(),
     ...input.tools === undefined ? {} : { tools: [...input.tools] },
     maxTokens: config.maxTokens,
+    // A summary written by the conversation's own route runs at the conversation's effort, since an
+    // effort change invalidates the provider's messages cache (prompt-caching.md, invalidation hierarchy). A configured
+    // summary model keeps its route's default.
+    ...configured === undefined && target === latest && latest.reasoningEffort !== undefined
+      ? { reasoningEffort: latest.reasoningEffort }
+      : {},
     sessionId: agent.session.id,
     purpose: 'compaction',
     ...signal === undefined ? {} : { signal },

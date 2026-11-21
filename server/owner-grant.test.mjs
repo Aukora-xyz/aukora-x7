@@ -2062,7 +2062,7 @@ test('governance issuance requires one explicit candidate-bound promotion', () =
     'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
     'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
     'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys',
-    'auma-scion', 'seed-boot',
+    'auma-scion', 'seed-boot', 'auma-kernel',
   ])
   for (const organ of OWNER_GOVERNANCE_ORGANS) {
     for (const scope of [

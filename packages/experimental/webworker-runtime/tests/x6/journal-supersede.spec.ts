@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sha256HexSync } from '../../src/module-system/module-loader.ts'
 import { MemoryVfs } from '../../src/storage/memory.ts'
 import {
-  APPEND_ONLY_JOURNALS, attachIdbPersistence, classifyCloudFence, cloudAdmission, cloudOutboxExcluded, cloudPathAllowed,
+  APPEND_ONLY_JOURNALS, attachIdbPersistence, classifyCloudFence, CLOUD_APPEND_ONLY, cloudAdmission, cloudOutboxExcluded, cloudPathAllowed,
   FRESH_SIGN_IN_MESSAGE,
   conflictBackupExcluded,
   criticalCloudPath, deferredJournal, deliveryDeadlineMs, deliveryNeverApplied, deliveryRefusal, extendsJournal, JOURNAL_BACKUP_ROOT,
@@ -26,7 +26,27 @@ function queuedBatch(seq: number, entries: Array<[string, WireEntry]>): MirrorBa
 
 describe('append-only journals: a longer mirror copy is not held back by older unsent saves', () => {
   it('covers the receipt chain and its checkpoints', () => {
-    expect([...APPEND_ONLY_JOURNALS]).toEqual([RECEIPTS, `${SEED}/checkpoints.v1.jsonl`])
+    expect([...APPEND_ONLY_JOURNALS]).toEqual([RECEIPTS, `${SEED}/checkpoints.v1.jsonl`, '/dsh/home/auma/voice/chain.v1.jsonl',
+      '/dsh/home/auma/timeline/chain.v1.jsonl'])
+  })
+
+  it('her timeline\'s chain file is append-only, as the voice chain is; its words file is not', () => {
+    const CHAIN = '/dsh/home/auma/timeline/chain.v1.jsonl'
+    const WORDS = '/dsh/home/auma/timeline/words.v1.jsonl'
+    expect(APPEND_ONLY_JOURNALS.has(CHAIN)).toBe(true)
+    expect(CLOUD_APPEND_ONLY.has(CHAIN)).toBe(true)
+    expect(APPEND_ONLY_JOURNALS.has(WORDS)).toBe(false)
+    expect(CLOUD_APPEND_ONLY.has(WORDS)).toBe(false)
+    expect(planJournalSupersede(CHAIN, encode(lines(5)), encode(lines(3)), [[CHAIN, file(lines(2))]], [])).toBe('supersede')
+    expect(planJournalSupersede(WORDS, encode(lines(5)), encode(lines(3)), [], [])).toBe('not-applicable')
+  })
+
+  it('her voice memory\'s chain file is append-only here as at the mirror (mirror-do.mjs protectedHistory); its words file is not', () => {
+    const CHAIN = '/dsh/home/auma/voice/chain.v1.jsonl'
+    expect(APPEND_ONLY_JOURNALS.has(CHAIN)).toBe(true)
+    expect(APPEND_ONLY_JOURNALS.has('/dsh/home/auma/voice/words.v1.jsonl')).toBe(false)
+    expect(planJournalSupersede(CHAIN, encode(lines(5)), encode(lines(3)), [[CHAIN, file(lines(2))]], [])).toBe('supersede')
+    expect(planJournalSupersede('/dsh/home/auma/voice/words.v1.jsonl', encode(lines(5)), encode(lines(3)), [], [])).toBe('not-applicable')
   })
 
   it('extends only on whole-line byte prefixes of a strictly longer copy', () => {
@@ -747,6 +767,55 @@ describe('Round 20: her session journal travels in its own lane, never in front 
     expect(await waitingJournal()).toBeUndefined()
   })
 
+  it('review (landing): her memory files (timeline and voice, chain and words) take the lane at any size: a turn never re-sends them inside her saves', async () => {
+    const vfs = await boot()
+    const WORDS = '/dsh/home/auma/timeline/words.v1.jsonl'
+    const CHAIN = '/dsh/home/auma/timeline/chain.v1.jsonl'
+    vfs.mkdirSync('/dsh/home/auma/timeline', { recursive: true })
+    vfs.mkdirSync(SEED, { recursive: true })
+    vfs.writeFileSync(`${SEED}/organ.js`, 'v1\n')
+    vfs.writeFileSync(WORDS, '{"seq":1}\n')
+    vfs.writeFileSync(CHAIN, '{"seq":1}\n')
+    await persistence.flush()
+    await persistence.sync()
+    await until(() => cloud.text(WORDS) !== null && cloud.text(CHAIN) !== null)
+    // Each goes alone, after her seed save; the seed save carries neither.
+    const seedPost = cloud.posted.findIndex(paths => paths.includes(`${SEED}/organ.js`))
+    expect(cloud.posted[seedPost]).not.toContain(WORDS)
+    expect(cloud.posted[seedPost]).not.toContain(CHAIN)
+    expect(cloud.posted.filter(paths => paths.includes(WORDS))).toEqual([[WORDS]])
+    expect(cloud.posted.filter(paths => paths.includes(CHAIN))).toEqual([[CHAIN]])
+    // The next turn appends a line: within the interval it waits, and the save beside it goes at once without it.
+    await save(vfs, WORDS, '{"seq":1}\n{"seq":2}\n')
+    await save(vfs, '/dsh/home/auma/other.md', 'other\n')
+    await persistence.sync()
+    expect(cloud.text('/dsh/home/auma/other.md')).toBe('other\n')
+    expect(cloud.text(WORDS)).toBe('{"seq":1}\n')
+    expect(persistence.mirror.deferredJournals).toEqual([WORDS])
+    await persistence.upload()
+    expect(cloud.text(WORDS)).toBe('{"seq":1}\n{"seq":2}\n')
+  })
+
+  it('review (landing): a 408 on her timeline words file steps it out of the queue; her seed save behind it still goes', async () => {
+    const vfs = await boot()
+    const WORDS = '/dsh/home/auma/timeline/words.v1.jsonl'
+    vfs.mkdirSync('/dsh/home/auma/timeline', { recursive: true })
+    vfs.mkdirSync(SEED, { recursive: true })
+    let seedSaved = false
+    cloud.answer = async (paths) => {
+      if (!paths.includes(WORDS)) return null
+      if (!seedSaved) { seedSaved = true; await save(vfs, `${SEED}/organ.js`, 'v1\n') }
+      return { status: 408, code: 'REQUEST_BODY_TIMEOUT' }
+    }
+    await save(vfs, WORDS, '{"seq":1}\n')
+    await persistence.sync().catch(() => {})
+    await until(() => cloud.text(`${SEED}/organ.js`) !== null)
+    expect(cloud.text(WORDS)).toBeNull()
+    expect(persistence.mirror.conflict).toBeNull()
+    expect(persistence.mirror.reconciliationRequired).toBe(false)
+    expect(await queuedCount()).toBe(0)
+  })
+
   it('a journal saved again within the interval waits; an explicit upload sends it at once', async () => {
     const vfs = await boot()
     journalDir(vfs)
@@ -1237,6 +1306,20 @@ describe('the pure rules behind the lockout fixes', () => {
     expect(plan.batches.flat().map(([path]) => path)).toEqual(['/dsh/home/auma/a.md'])
     expect(plan.deferred).toEqual([JOURNAL])
     expect(planCloudResync(new Map([[JOURNAL, journal]]), new Set(), new Map([[JOURNAL, journal]])).deferred).toEqual([])
+  })
+
+  it('review (landing): her four memory files take the journal lane at any size; nothing else beside them does', () => {
+    for (const path of ['/dsh/home/auma/timeline/chain.v1.jsonl', '/dsh/home/auma/timeline/words.v1.jsonl',
+      '/dsh/home/auma/voice/chain.v1.jsonl', '/dsh/home/auma/voice/words.v1.jsonl']) {
+      const sizes = [0, 10, 20 * 1024 * 1024].map(bytes => deferredJournal(path, bytes))
+      expect([path, sizes]).toEqual([path, [true, true, true]])
+      expect(deferredJournal(path, null)).toBe(false)
+    }
+    for (const path of ['/dsh/home/auma/timeline/notes.md', '/dsh/home/auma/timeline/chain.v2.jsonl', '/dsh/home/auma/voice/scratch.md',
+      '/dsh/workspace/auma/timeline/words.v1.jsonl', '/dsh/home/auma/timeline/words.v1.jsonl.bak']) expect([path, deferredJournal(path, 10)]).toEqual([path, false])
+    const words: Entry = { kind: 'file', bytes: encode('{"seq":1}\n'), mode: 0o644, mtimeMs: 1 }
+    const plan = planCloudResync(new Map<string, Entry>([['/dsh/home/auma/timeline/words.v1.jsonl', words]]), new Set(), new Map())
+    expect([plan.batches.flat().length, plan.deferred]).toEqual([0, ['/dsh/home/auma/timeline/words.v1.jsonl']])
   })
 })
 

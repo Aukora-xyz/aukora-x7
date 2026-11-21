@@ -17,7 +17,7 @@ const EXPECTED_GOVERNANCE = [
   'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
   'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
   'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys',
-  'auma-scion', 'seed-boot',
+  'auma-scion', 'seed-boot', 'auma-kernel',
 ]
 function manifests(id = 'seed-calc') {
   const entry = { id, specifier: `ball:${OLD_MODULE}`, disabled: false, config: {}, previousSpecifiers: [] }
@@ -59,6 +59,22 @@ test('grant and transition governance use one fixed protected set, including com
     assert.throws(() => normalize(grant({ scope: { organs: [organ] } })), { code: 'OWNER_GRANT_GOVERNANCE_BINDING_REQUIRED' })
     assert.doesNotThrow(() => normalize(grant({ scope: { organs: [organ], candidateSha256: NEW_MODULE } })))
   }
+})
+
+test('QA-0: her kernel is a fixed protected id: a bytes-only change is T2 and class 3, owner session or not', () => {
+  // On main before 2026-11-16 this exact input was T1 (no passkey): the kernel was replaced that way at epoch 80.
+  const { previous, candidate } = manifests('auma-kernel')
+  for (const options of [sessionOptions(['auma-kernel']), { canonicalManifestMatches: true }, {}]) {
+    const tier = classifyTransition(previous, candidate, options)
+    assert.equal(tier.tier, 'T2')
+    assert.equal(tier.isEdgeT1OrganUpdate, false)
+    assert.ok(tier.t2Reasons.includes('T2_PROTECTED_ORGAN'))
+  }
+  // With a canonical manifest and a live owner session naming it, being the kernel is the ONLY reason.
+  assert.deepEqual(classifyTransition(previous, candidate, sessionOptions(['auma-kernel'])).t2Reasons, ['T2_PROTECTED_ORGAN'])
+  assert.deepEqual(classifyHeadTransition(previous, candidate), { class: 3, entryIds: ['auma-kernel'] })
+  // The negative control of the preregistration: naming the kernel in an owner session's scope grants nothing.
+  assert.equal(classifyTransition(previous, candidate, sessionOptions(['auma-kernel'])).requiresPasskey, true)
 })
 
 test('governance declarations remain T2 when removed or malformed on either manifest', () => {

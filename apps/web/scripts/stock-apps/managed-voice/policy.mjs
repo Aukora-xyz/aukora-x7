@@ -19,8 +19,14 @@ export const MANAGED_VOICE = Object.freeze({
   edgeRequestMs: 12_000,
   /** How often the two volumes are read for the field and the Pentora. */
   meterMs: 50,
-  /** Every frame on the tab door, either way. */
+  /** Every frame on the tab door, either way (but `aware`, below). */
   frameBytes: 8192,
+  /** the voice tools V6: the `aware` frame this page sends may be this large (voice-bridge-do.mjs AWARE_FRAME_MAX_BYTES). */
+  awareBytes: 32768,
+  /** The edge's `memory` frame may be this large (DESIGN.md: at most 8 items and 48,000 bytes a frame). */
+  memoryFrameBytes: 48_000,
+  /** At most this many items in one `memory` frame. */
+  memoryItems: 8,
   /** At most this many code points of her text per `delta` frame (always under `frameBytes` once encoded). */
   deltaCodePoints: 1024,
   /** At most this many of her turns open at once; a further one is refused, never queued in the page. */
@@ -81,6 +87,9 @@ export const LINES = Object.freeze({
   connect: 'Voice could not connect. Tap the orb to try again, or keep typing.',
   resting: 'My voice is resting. We can keep talking in text.',
   disconnected: 'Voice disconnected. Tap the orb to reconnect, or keep typing.',
+  /** A call that carried her first words ended before the provider showed any life (it may refuse the first-message
+   *  override without saying so): until the page reloads, the next press opens without them (controller.mjs openPlain). */
+  droppedOpening: 'Voice dropped as it opened. Tap the orb to try once more, or keep typing.',
   micDenied: 'Allow microphone access, then tap the orb again.',
   link: 'My voice lost its link to me. Tap the orb to reconnect, or keep typing.',
   ended: 'Voice ended. Tap the orb to talk again, or keep typing.',
@@ -124,3 +133,62 @@ export const TURN_LINES = Object.freeze({
  * transcript); at any other level it is cut, as before.
  */
 export const CALL_END_REASONS = Object.freeze(['deadline', 'provider-closed', 'unclaimed', 'journal-unavailable'])
+
+/**
+ * HER FAST VOICE'S AWARENESS. Once the tab door is ready
+ * the page sends `aware` (genesis-live.js voiceAwareness) at once, after each of her turns, and every AWARE_EVERY_MS
+ * while the call is open. The bridge sends `spoken` for each exchange its fast voice had (his words, her words).
+ */
+export const AWARE_EVERY_MS = 10_000
+/** A push still gathering after this long no longer holds the next one back (its late answer is dropped). */
+export const AWARE_STUCK_MS = 5_000
+/** The longest `heard` and `said` a `spoken` frame carries (voice-fast.mjs SPOKEN_LIMITS). */
+export const SPOKEN_CHARS = Object.freeze({ heard: 1000, said: 1200 })
+
+/**
+ * HER FAST VOICE'S TOOLS. The bridge sends `tool` (turn,
+ * call, name, arguments as the model wrote them); this page runs it with her own tools through her worker's look-only
+ * check (genesis-live.js voiceTool) and answers `tool_result`. One call may take at most `toolMs` here; its text is cut
+ * to `toolResultBytes` (UTF-8) with a plain note, and again so its whole frame fits the tab door. `tool_cancel` stops
+ * every call of that turn (nothing is answered for them).
+ */
+export const FAST_TOOLS = Object.freeze({ toolMs: 8000, toolResultBytes: 6144, argsBytes: 4096, nameChars: 64, openCalls: 8, noteBytes: 96 })
+/** Said when his words were queued in the conversation he named (that conversation answers later, in its own thread). */
+export const HANDED_NAMED_LINE = 'Done: it is queued in that conversation, after whatever it is doing now.'
+/** A call id the bridge names (voice-bridge-do.mjs TOOL_CALL_ID_RE). */
+export const TOOL_CALL_RE = /^call_[1-9][0-9]{0,2}$/
+
+/**
+ * A PROVIDER ERROR ALONE NO LONGER ENDS HER CALL (the voice tools part 2, 2026-11-16). The SDK's `onError` reports errors that
+ * do not end the call (one turn's server error around a cancelled reply, a tool call); its own `onDisconnect` is the end.
+ * After an `onError` the call ends only if neither the provider nor the bridge shows life for SDK_WATCH_MS. What the SDK
+ * said is never kept or sent: it is read once, here, into one closed kind (the edge's voice-bridge.mjs VOICE_SDK_KINDS).
+ */
+export const SDK_WATCH_MS = 20_000
+/** A call the provider ends within this long of the SDK connecting was dropped as it opened, whatever it sent in that
+ *  moment (a ping or a first audio packet can come just before the drop). */
+export const OPEN_DROP_MS = 8000
+export const SDK_ERROR_KINDS = Object.freeze(['socket', 'server', 'audio', 'permission', 'other'])
+/** The SDK's own closed disconnect reasons (its DisconnectionDetails), the only ones kept. */
+export const SDK_DISCONNECT_REASONS = Object.freeze(['user', 'agent', 'error'])
+/** The fixed table, first match wins: a provider "Server error" is `server` whatever else it says. */
+const SDK_ERROR_TABLE = Object.freeze([
+  ['server', /\bserver\b|\binternal\b|rate[ _-]?limit|quota/i],
+  ['permission', /permission|not[ _-]?allowed|denied/i],
+  ['audio', /audio|microphone|worklet|media|device/i],
+  ['socket', /socket|webrtc|connection|network|livekit|\bice\b|peer|closed|disconnect/i],
+])
+/** The closed kind of one SDK error, from its message and the string fields of its context (nothing else is read). */
+export function classifySdkError(message, context) {
+  const parts = [typeof message === 'string' ? message : '']
+  if (context && typeof context === 'object') {
+    for (const name of ['errorType', 'type', 'name', 'message', 'reason']) {
+      let value
+      try { value = context[name] } catch { value = undefined }
+      if (typeof value === 'string') parts.push(value)
+    }
+  }
+  const text = parts.join(' ').slice(0, 2000)
+  for (const [kind, pattern] of SDK_ERROR_TABLE) if (pattern.test(text)) return kind
+  return 'other'
+}

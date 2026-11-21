@@ -317,6 +317,12 @@ const THREAD_INDEX_READERS = new Set([
   // proposal's suites run, so this list is only met after the merge: card 1's live spec made main's hosted baseline red.
   'packages/experimental/webworker-runtime/tests/x6/thread-writer-live.spec.ts',
   'packages/experimental/webworker-runtime/tests/x6/thread-writer-honest.spec.ts',
+  // KYBER card 1 (2026-11-16): her look-only checkpoint verifier reads the index and the manifest to learn what her edge
+  // holds for one thread; it writes nothing and takes no lease. Its tool file and the spec that pins its parameter dialect
+  // name the route. This list is only met after a merge (a proposal's own run skips the edge suites at door level open):
+  // card 1 merged with this test red on main, as card 1 of the sender did.
+  'packages/experimental/webworker-runtime/src/x6/checkpoint-verify-tool.ts',
+  'packages/experimental/webworker-runtime/tests/x6/checkpoint-verify-tool-dialect.spec.ts',
 ])
 
 test('thread sync: no caller under apps/ or packages/ reads her thread index except thread sync\'s own files', () => {

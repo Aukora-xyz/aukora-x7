@@ -305,6 +305,23 @@ describe('Wave 4 caller-owned branch drafts', () => {
     expect(calls.at(-1)?.body).toMatchObject({ expectedHeadSha: BASE, changes: [{ path, content: content.replace('"old"', '"new"') }] })
   })
 
+  it('a draft read pages by UTF-8 bytes on whole characters, and the pages join to the file', async () => {
+    const { repo } = await mounted()
+    const content = 'a' + 'é😀'.repeat(3000) + '\nend\n'
+    await repo.execute({ action: 'write', branch: A, path: 'server/fix.mjs', content })
+    let offset = 0, joined = ''
+    for (;;) {
+      const page = await repo.execute({ action: 'read', branch: A, path: 'server/fix.mjs', offset, length: 1001 }) as Record<string, unknown>
+      expect(page).toMatchObject({ source: 'caller-draft', offset, totalBytes: new TextEncoder().encode(content).byteLength, unit: 'bytes' })
+      expect(new TextEncoder().encode(String(page.content)).byteLength).toBe(page.length)
+      joined += String(page.content)
+      if (page.nextOffset === null) { expect(page.truncated).toBe(false); break }
+      expect(page.truncated).toBe(true); offset = Number(page.nextOffset)
+    }
+    expect(joined).toBe(content)
+    expect(await repo.execute({ action: 'read', branch: A, path: 'server/fix.mjs', offset: 2, length: 1 })).toMatchObject({ offset: 1, content: 'é', length: 2 })
+  })
+
   it('accepts exactly 4 MiB of private draft content (was 1 MiB) and bounds individual files and assembled commits', async () => {
     const { repo, calls } = await mounted()
     const content = 'é'.repeat(262144)
@@ -405,5 +422,54 @@ describe('her repo door at level open', () => {
     expect(repo.description).not.toContain('never .github files')
     const door = repo.description.slice(repo.description.indexOf('Your door is at level open'), repo.description.indexOf('Drafts are isolated'))
     expect(door.length).toBeGreaterThan(100); expect(door).not.toMatch(/token/iu)
+  })
+})
+
+// A file of ordinary size goes to her edge in ONE call, in the request body; the tool says the
+// real limit, a draft says it is waiting for commit, and the edge's named field refusal reaches her unchanged.
+describe('her content rides the request body', () => {
+  const KB64 = 'ordinary text of her module, one plain line at a time.\n'.repeat(1192).slice(0, 64 * 1024).padEnd(64 * 1024, '.')
+  const bodyOnly = (call: Call | undefined): void => {
+    expect(call?.request.method).toBe('POST')
+    expect(new URL(call!.request.url).search).toBe('')
+    for (const [, value] of call!.request.headers) expect(value.length).toBeLessThan(256)
+  }
+
+  it('sends a 64 KB write, edit, commit and apply_patch on her proposal branch whole, each in one body', async () => {
+    const { repo, calls } = await mounted()
+    expect(KB64.length).toBe(64 * 1024)
+    const patch = `diff --git a/docs/auma/big.md b/docs/auma/big.md\nnew file mode 100644\n--- /dev/null\n+++ b/docs/auma/big.md\n@@ -0,0 +1,1 @@\n+${KB64.replace(/\n/g, ' ')}\n`
+    for (const args of [
+      { action: 'write', branch: A, path: 'docs/auma/big.md', content: KB64, message: 'Write it whole' },
+      { action: 'edit', branch: A, path: 'docs/auma/a.md', oldString: 'two', newString: KB64, message: 'Grow it' },
+      { action: 'commit', branch: A, changes: [{ path: 'docs/auma/big.md', content: KB64 }], message: 'Commit it whole' },
+      { action: 'apply_patch', branch: A, baseSha: BASE, patch, message: 'Bring it home' },
+    ]) {
+      const before = calls.length
+      expect(await repo.execute(args)).toMatchObject({ ok: true })
+      expect(calls.length).toBe(before + 1)
+      bodyOnly(calls.at(-1))
+      expect(calls.at(-1)?.body).toEqual({ ...args, ownerSession: true })
+    }
+  })
+
+  it('says a write or edit without a message is a draft in this tab, waiting for commit', async () => {
+    const { repo } = await mounted()
+    for (const args of [{ action: 'write', branch: A, path: 'docs/auma/big.md', content: 'START\n' + KB64 }, { action: 'edit', branch: A, path: 'docs/auma/big.md', oldString: 'START', newString: 'BEGIN' }]) {
+      const answer = await repo.execute(args) as Args
+      expect(answer).toMatchObject({ ok: true, draftWaiting: true })
+      expect(String(answer.next)).toContain(`nothing is on ${A} yet`)
+      expect(String(answer.next)).toContain('x6_repo commit')
+    }
+    expect(await repo.execute({ action: 'commit', branch: A, message: 'Land the draft' })).not.toHaveProperty('draftWaiting')
+  })
+
+  it('passes the edge refusal that names an unexpected field through unchanged, and states the real limit in one sentence', async () => {
+    const { repo, state } = await mounted()
+    const refusal = { ok: false, code: 'BROKER_QUERY_INVALID', unexpected: ['paths'], allowed: ['action', 'branch', 'changes', 'message'], next: 'Send this action again with only the allowed fields.' }
+    state.respond = () => Response.json(refusal, { status: 400 })
+    expect(await repo.execute({ action: 'commit', branch: A, changes: [{ path: 'docs/auma/big.md', content: KB64 }], paths: ['docs/auma/big.md'], message: 'm' })).toMatchObject(refusal)
+    expect(repo.description).toContain('Content always travels in the request body, never a URL, so one `write`, `edit` or `commit` carries a whole file of up to 512 KiB (a patch up to 256 KiB);')
+    expect(repo.description).toContain('BROKER_QUERY_INVALID only ever means a field the action does not take, named in `unexpected`.')
   })
 })

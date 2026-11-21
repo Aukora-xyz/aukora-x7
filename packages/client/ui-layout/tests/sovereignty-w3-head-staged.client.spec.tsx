@@ -18,7 +18,7 @@ import { parseLiveMessage } from '../src/client/spatial/work/autonomy.ts'
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-const ORIGIN = 'https://x61.example.invalid'
+const ORIGIN = 'https://node.example.invalid'
 
 // HEAD's own canonical JSON, loaded from this checkout: the digest this page recomputes is HEAD's digest, byte for byte.
 const transitionPath = ['', '../../../'].map(prefix => resolve(process.cwd(), `${prefix}server/ball-transition.mjs`)).find(existsSync)
@@ -138,9 +138,11 @@ describe('HEAD\'s own staged record, as the page reads it (Wave 3)', () => {
   it('the page names the same governance organs as HEAD, so the two classify a change alike', async () => {
     // HEAD's list (server/ball-transition.mjs T2_ONLY_ORGANS, the edge's OWNER_GOVERNANCE_ORGANS). A widening there fails here.
     expect([...GOVERNANCE_ORGANS]).toEqual([...transition.T2_ONLY_ORGANS])
-    expect(GOVERNANCE_ORGANS).toHaveLength(15)
+    expect(GOVERNANCE_ORGANS).toHaveLength(16)
     // An organ HEAD added after Round 24 is a governance change to the page too (it was "no passkey needed" before).
-    for (const organ of ['auma-scion', 'seed-boot', 'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys']) {
+    // QA-0 (2026-11-16): her kernel is one of them by name, whatever its entry declares.
+    const later = ['auma-scion', 'seed-boot', 'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys', 'auma-kernel']
+    for (const organ of later) {
       const before = { [organ]: { specifier: `ball:${'a'.repeat(64)}`, disabled: false, config: {} } }
       const after = { [organ]: { specifier: `ball:${'b'.repeat(64)}`, disabled: false, config: {} } }
       expect(classifyHeadTransition(before, after)).toEqual({ class: 3, entryIds: [organ] })

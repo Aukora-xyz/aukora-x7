@@ -1,12 +1,10 @@
 # Contributing
 
-English | [中文](CONTRIBUTING.zh.md)
-
 Aukora is building a personally owned AI that can change its own software, while a separate authority keeps the person who owns it in control of sensitive actions. This page says how to get the code, check it, and send a change.
 
 The rule the code is built around is also the rule for contributing: **what proposes never permits.** Auma, the AI in this repository, can write and stage a new version of herself, but only the owner can make it live: a passkey approval for her protected modules, an owner sign-in session for an ordinary one ([SECURITY.md](SECURITY.md), claim 3), both checked by a separate program, the edge. Here, your pull request is the proposal and a maintainer's review is the approval. The same holds if you are an AI agent opening the pull request.
 
-This page replaces the inherited upstream guide, which said outside pull requests could not be accepted. This project accepts them. `CONTRIBUTING.zh.md` is the Chinese twin of this page; where the two differ, this page applies.
+This page replaces the inherited upstream guide, which said outside pull requests could not be accepted. This project accepts them. This page has no Chinese twin: by the owner's ruling of 2026-11-21, the project's own front pages are written in English only.
 
 Maturity labels used on this page and in every new claim you write:
 
@@ -90,7 +88,7 @@ Things to know before you do:
 - **No checks run on a pull request.** Every workflow in `.github/workflows/` has its automatic triggers commented out and only manual dispatch is live (three reusable workflows can also be called by another workflow). Reviewers rely on what you report and what they run themselves.
 - **The issue and pull request templates are inherited and in Chinese** (`.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`), and blank issues are switched off in `.github/ISSUE_TEMPLATE/config.yml`. Write in English or Chinese and skip template fields that do not apply. Replacing the templates is a welcome change.
 - **The inherited review automation** in `.github/review-ownership/` is not how this project reviews; its workflow is switched off.
-- **Paired pages.** Most pages under `docs/` and some root pages have a Chinese twin (`*.zh.md`) and a pairing record (`*.i18n.yaml`), checked by `scripts/verify-translation-pairing.ts` (`pnpm run verify-translation-pairing`). This is inherited. The new front pages have twins and records too; where a twin differs from its English page, the English page applies. If you change an English page that has a twin, say in the pull request whether the twin still matches.
+- **Paired pages.** Most pages under `docs/` and some root pages have a Chinese twin (`*.zh.md`) and a pairing record (`*.i18n.yaml`), checked by `scripts/verify-translation-pairing.ts` (`pnpm run verify-translation-pairing`). This is inherited. The project's own front pages (`README.md`, this page, `SECURITY.md`, and under `docs/` the pages AI-START-HERE, DIRECTION, WHAT-IS-BUILT, ARCHITECTURE-MAP, COMMUNITY, OPEN-SOURCE-READINESS, GOOD-FIRST-CONTRIBUTIONS and SIZE-AND-ORIGIN) have no twin and no record; the pairing rule names each of them in its exclusions (`scripts/translation-pairing.manifest.json`), as it names the white paper. If you change an English page that has a twin, say in the pull request whether the twin still matches.
 - **`AGENTS.md` at the root is the inherited harness's coding guide,** apart from a pointer at its top. It does not describe Aukora's rule. Start from [docs/AI-START-HERE.md](docs/AI-START-HERE.md) instead.
 - **Licence and terms.** The repository is AGPL-3.0-or-later ([LICENSE](LICENSE)). There is no contributor agreement and no sign-off rule yet, and the copyright holders are not named ([docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md)). Until there are, state in your pull request that you offer the change under AGPL-3.0-or-later.
 - **Security flaws** go through [SECURITY.md](SECURITY.md), not a public issue.

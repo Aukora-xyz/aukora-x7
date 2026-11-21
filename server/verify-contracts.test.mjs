@@ -250,13 +250,13 @@ test('G2: server classification detects protected addition, removal, specifier, 
   assert.equal(classifyHeadTransition({ entries: {} }, candidate).class, 3)
 })
 
-test('F1: all fifteen fixed governance IDs and versioned IDs retain Class 3 despite caller labels', async () => {
+test('F1: all sixteen fixed governance IDs and versioned IDs retain Class 3 despite caller labels', async () => {
   // Pinned exactly: the first eight and the seven that an earlier commit added. Every one of them is exercised by the loop below.
   assert.deepEqual(OWNER_GOVERNANCE_ORGANS, [
     'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
     'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
     'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys',
-    'auma-scion', 'seed-boot',
+    'auma-scion', 'seed-boot', 'auma-kernel',
   ])
   for (const organId of OWNER_GOVERNANCE_ORGANS) for (const entryId of [organId, `${organId}:${'e'.repeat(64)}`]) {
     const entry = { id: entryId, specifier: 'ball:' + 'a'.repeat(64), disabled: false, governance: false, config: { governance: false }, class: 1 }

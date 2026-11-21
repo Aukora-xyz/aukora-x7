@@ -183,6 +183,23 @@ describe('dsh-workflow-ptc', { timeout: 120_000 }, () => {
       expect(execute.mock.calls[0]?.[0].sandboxPolicy?.mode).toBe('danger-full-access')
     })
 
+    it('carries agent() maxTokens to the child options and answers AGENT_TIMEOUT past timeoutMs, through the PTC process', async () => {
+      const { ctx, parent, provider } = await setup({ manual: true })
+      const handle = ctx.workflowEngine.start({ ...scripted(`
+        const capped = agent('bounded', { maxTokens: 2048 })
+        let code = null
+        try { await agent('slow', { timeoutMs: 50 }) } catch (error) { code = error.code }
+        return { code, capped: await capped }
+      `), parent })
+      try {
+        await waitFor(() => { expect(provider.runs).toHaveLength(2) })
+        expect(provider.runs[0]?.request.agentOptions).toEqual({ maxTokens: 2048 })
+        provider.runs[0]?.settle(text('within the cap'))
+        const result = await handle.result
+        expect(result).toMatchObject({ stopReason: 'completed', value: { code: 'AGENT_TIMEOUT', capped: 'within the cap' } })
+      } finally { await handle.dispose() }
+    })
+
     it('captures args at start and isolates subsequent caller and script mutations', async () => {
       const { ctx, parent } = await setup()
       const args = { values: [1] }

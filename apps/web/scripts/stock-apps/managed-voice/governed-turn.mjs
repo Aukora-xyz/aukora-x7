@@ -57,7 +57,7 @@ export function createGovernedTurnRunner({
   onHer = () => {}, onFirstText = () => {}, mind = () => '', timers = globalThis, voiceLevel = null,
 }) {
   const readLevel = typeof voiceLevel === 'function' ? voiceLevel : async () => 'unknown'
-  return async function runTurn({ turnId, transcript, signal, say, carry = () => {} }) {
+  return async function runTurn({ turnId, transcript, signal, say, carry = () => {}, council = false }) {
     const cancelled = { ok: false, code: FAIL_CODES.cancelled }
     // A sentence the page says for this turn: spoken through the call, and her line in the transcript.
     const sayLine = (line, before = '') => {
@@ -126,7 +126,8 @@ export function createGovernedTurnRunner({
     let result
     try {
       result = await bridged({
-        turnId, transcript, signal: local.signal, mind: mind(),
+        // A turn the edge marked as his ask for the council (genesis-live.js VOICE_COUNCIL_PART).
+        turnId, transcript, council: council === true, signal: local.signal, mind: mind(),
         onActivity: () => { if (!local.signal.aborted) arm(idleMs) },
         onToken: value => {
           if (local.signal.aborted) return

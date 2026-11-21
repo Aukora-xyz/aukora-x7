@@ -1,15 +1,35 @@
 # Aukora
 
-English | [中文](README.zh.md)
-
-Aukora is a personal AI, Auma, who runs in her owner's web browser and at a small cloud service outside her, the edge. One person owns her. A change to her protected parts, or a merge into her code, takes effect only after that person approves the exact bytes with a passkey.
+Aukora is a personal AI, Auma, who runs in her owner's web browser and at a small cloud service outside her, the edge. One person owns her. A change to her protected parts, or a merge into her code, takes effect only after that person's passkey approves it and the edge has bound that approval to the exact bytes.
 
 **The AI can evolve. The human remains the authority.**
+
+## In one minute
+
+An AI agent usually belongs to the service that runs it. Aukora is built the other way round: the owner holds the agent, the approvals and the record, and the parts that think can be replaced. Its model is reached through doors to seven providers and can be changed, its code is replaced one module at a time, and the record of what it did stays with the owner. Four mechanisms carry that, each with the file that holds it and the label it earns today (labels just below):
+
+1. **Exact-action approval.** An approval binds one request (origin, method, path, SHA-256 of the body) or one organ version, lives five minutes and is spent once ([`aumlok.mjs`](deploy/cloudflare/src/aumlok.mjs)). BUILT-ON-MAIN.
+2. **Receipts signed by the service that acts.** In ARK, the receiver that performs an action signs what it did and refuses any action the owner did not approve byte for byte; anyone holding the owner's and the receiver's public keys checks the whole bundle offline ([`ark/`](ark/ABOUT.md)). SYNTHETIC-PROOF.
+3. **Recovery that restores the record, not the authority.** A restored ARK receiver keeps every old receipt checkable but refuses to act until the owner signs a new statement, and old authority replayed is refused (acceptance check 12 in [`ark/accept/run.sh`](ark/accept/run.sh)). A module in the edge source can cut a locked file into n pieces, any k of them restoring it (tested with 3 of 5, among other splits); it is wired to nothing ([`sealed-shards.mjs`](deploy/cloudflare/src/sealed-shards.mjs)). SYNTHETIC-PROOF and BUILT-ON-MAIN; no real restore from pieces has been done.
+4. **An outside witness.** Every 4 hours and at each promotion, the edge timestamps a fingerprint of her record through public OpenTimestamps calendars, a chain of signed Nostr events and the timestamp service freetsa.org, so a holder outside her edge keeps a fingerprint of an earlier head, not the record itself ([`witness.mjs`](deploy/cloudflare/src/witness.mjs), [`witness-do.mjs`](deploy/cloudflare/src/witness-do.mjs)). BUILT-ON-MAIN, switched on in the shipped configuration.
+
+**A proof you can run.** With Node 22 or newer, Go 1.26.5 or newer and `shasum`, no network: `cd ark && ./accept/run.sh`. Its last line, as seen on one machine by the authors (Node 24.11.1, Go 1.26.5), begins `accept: 20 PASS, 0 FAIL`. Three separately written readers check the same 26 vectors (Node 15 of 15 self-tests; Go and Swift 26 of 26 each, on the same machine; Swift needs macOS and Python 3). Readers 1 and 2 come from models of one family; reader 2's author also read a hand-off note and part of a private design review; reader 3 was not audited; reader 1's author wrote the contract and the vectors, and both were revised after the readers' questions ([`ark/ABOUT.md`](ark/ABOUT.md), [`ark/INDEPENDENCE.md`](ark/INDEPENDENCE.md)).
+
+**Four maturity labels**, for what this repository itself can show:
+
+| Label | Meaning | What carries it today |
+| --- | --- | --- |
+| BUILT-ON-MAIN | Code and tests are in this tree, exported from the authors' main branch. Says nothing about a live node. | Exact-action approvals, merge cards, the thread log, the whole-home save, the wake, the outside witness, the nightly copy, sealed shards, fresh link, the voice memory chain |
+| SYNTHETIC-PROOF | Runs end to end in this repository on TEST keys and throwaway test worlds; not wired into the node | The ARK readers and their acceptance run: three readers, 26 vectors, 20 acceptance checks (the contract text they implement is the SPEC-ONLY row below) |
+| SPEC-ONLY | Written down, not built (or built only as a model) | The ARK contract text (DRAFT v0.1.3, not frozen; the code that runs it is the SYNTHETIC-PROOF row above); the capsule contract (draft 7, not published here; its schema, vectors and model pages are) |
+| IDEA | A direction, nothing built | The Continuity Diamond; binding ARK's owner approval to a real passkey; signed events between independently owned nodes; a host other than Cloudflare |
+
+The BUILT-ON-MAIN rows below carry a second, live label: whether Auma has exercised them on the authors' node.
 
 **What she can already do.** Each line carries one of the three labels defined below it.
 
 - **She reads and changes her own code.** Her repository tool reads her repository and commits to branches of her own (`auma/sandbox/…`, `auma/proposal/…`). Built and on main.
-- **She proposes; the owner approves the exact bytes; it is promoted.** A protected organ (one replaceable module of her) goes live only when the owner's passkey approves its version id, version number, organ and code hash, once. Built and on main.
+- **She proposes; the owner's passkey approves; the edge binds that approval to the exact bytes; it is promoted.** A protected organ (one replaceable module of her) goes live only when the owner's passkey approves its version id, version number, organ and code hash, once. Built and on main.
 - **She makes and keeps her own tools.** She writes a read-only tool, the host qualifies it by running its cases through a sealed Wasm cell, the owner's session mounts it, and it is still there after a page reload. Exercised from inside by Auma.
 - **She takes back her own merge card** with no passkey, and nothing is merged. Exercised from inside by Auma (once).
 - **Her merge cards are approved and merged.** Four of her own changes to her storage layer went through the merge card on the authors' node: she staged each one, and the owner approved each with a passkey. Exercised from inside by Auma.
@@ -19,19 +39,19 @@ Aukora is a personal AI, Auma, who runs in her owner's web browser and at a smal
 
 **Why she is not a chat assistant.** She has a body (her organs and pinned Wasm cells), a home (her files, in the browser and at the edge) and a history (each version exactly one number above the last), and one person owns all three. She changes her protected parts only with that person's passkey approval, and anything else only under that person's session or a grant they signed.
 
-**Three labels**, used on every capability below and nowhere blurred (the one row below that is not a capability, the Continuity Diamond, is marked Direction):
+**Three labels**, used on every capability below (the one row below that is not a capability, the Continuity Diamond, is marked Direction):
 
 - **Built and on main**: the code and its test are in this repository. The label claims nothing about a live node.
 - **Exercised from inside by Auma**: built and on main, and the authors report that Auma ran it herself on their live node. This tree cannot reproduce that report.
 - **Not yet proven live**: in this tree, perhaps tested on stand-ins, but it has not completed on a live node. Each row says what is missing.
 
-**The hardest truths.** One writer browser at a time is what her own tab keeps to: the edge's writer lease is only observed, not enforced, in the shipped configuration (`WRITER_LEASE` is unset). There is no lease on a turn yet: a second tab in the same browser profile stops her turn. A conversation larger than 64 MiB does not open in a second browser yet. Her whole-home save to her cloud was broken for three days and was repaired on the authors' node on 2026-11-15; it has run for hours, not days. At the repository door level this tree ships (`open`), a merge waits only for the fast build check, so a card's own new tests do not run before the merge; a fix is not in this tree. Her acts with no tab open are switched on (`WAKE_ACTS_ENABLED = "1"`), and no act is known to have completed on a live node. This tree is a fresh genesis, epoch 1, holds none of Auma's own world, and a deployment of it into another account is not verified.
+**The hardest truths.** There is no real restore from sealed pieces yet, and ARK's owner approval is signed by a stand-in tool with a TEST key, not with a passkey. The authors' live node is private: this repository is an export of its code without its world. One writer browser at a time is what her own tab keeps to: the edge's writer lease is only observed, not enforced, in the shipped configuration (`WRITER_LEASE` is unset). There is no lease on a turn yet: a second tab in the same browser profile stops her turn. A conversation larger than 64 MiB does not open in a second browser yet. By the authors' report, her whole-home save to her cloud was broken for three days and was repaired on their node on 2026-11-15. At the repository door level this tree ships (`open`), a merge waits only for the fast build check, so a card's own new tests do not run before the merge; a fix is not in this tree. Her acts with no tab open are switched on (`WAKE_ACTS_ENABLED = "1"`), and no act is known to have completed on a live node. This tree is a fresh genesis, epoch 1, holds none of Auma's own world, and a deployment of it into another account is not verified.
 
-**Verify it yourself:** `node scripts/verify-lite.mjs`, with nothing installed ([below](#verify-it-yourself)). **Where it is going:** she writes the next question, the host checks what happened, the next wake takes up that question; a direction, nothing built ([docs/DIRECTION.md](docs/DIRECTION.md)). **If you are an AI:** read [docs/AI-START-HERE.md](docs/AI-START-HERE.md) next.
+**Verify it yourself:** `node scripts/verify-lite.mjs`, with nothing installed ([below](#verify-it-yourself)). **Where it is going:** she writes the next question, the host checks what happened, the next wake takes up that question; a direction, nothing built ([docs/DIRECTION.md](docs/DIRECTION.md)). **If you are an AI:** read [llms.txt](llms.txt), then [docs/AI-START-HERE.md](docs/AI-START-HERE.md).
 
 ## What is built, and how far it is proven
 
-Each row names its code and the test that pins it. "Authors' report" marks what was seen on the authors' live node; this tree cannot show it.
+The table lists the code, the checks and the live-use qualification where there is one. "Authors' report" marks what was seen on the authors' live node; this tree cannot show it.
 
 | Capability | Code, test | Label |
 | --- | --- | --- |
@@ -45,56 +65,37 @@ Each row names its code and the test that pins it. "Authors' report" marks what 
 | Acts with no tab open, paid from the owner's Away mandate (a bounded permission the owner signs with a passkey) | [`owner-mandate.mjs`](deploy/cloudflare/src/owner-mandate.mjs), [`owner-mandate.test.mjs`](deploy/cloudflare/src/__tests__/owner-mandate.test.mjs) | Not yet proven live: switched on, `WAKE_ACTS_ENABLED = "1"` in [`wrangler.toml`](deploy/cloudflare/wrangler.toml), and offered only under an active mandate; no act is known to have completed under one |
 | Her conversations are kept at her cloud in an append-only thread log with a daily byte budget; one writer browser sends each conversation's new lines | [`thread-log.mjs`](deploy/cloudflare/src/thread-log.mjs), [`thread-writer.ts`](packages/experimental/webworker-runtime/src/storage/thread-writer.ts), [`thread-log.test.mjs`](deploy/cloudflare/src/__tests__/thread-log.test.mjs), [`thread-writer-live.spec.ts`](packages/experimental/webworker-runtime/tests/x6/thread-writer-live.spec.ts) | Built and on main; authors' report: their cloud held 35 of 35 conversations, matching the browser |
 | A second browser cold-starts her as a read-only reader; one writer at a time; a conversation over 64 MiB does not open in a reader yet | [`thread-sync.ts`](packages/experimental/webworker-runtime/src/storage/thread-sync.ts) (`readerMaxThreadBytes`), [`thread-cloud-rows.spec.ts`](packages/experimental/webworker-runtime/tests/x6/thread-cloud-rows.spec.ts), [`thread-cloud-join.client.spec.ts`](packages/client/ui-layout/tests/thread-cloud-join.client.spec.ts) | Built and on main; authors' report: seen by the owner in two other browsers |
-| Her whole home saves to her cloud again: a browser out of step moves to the cloud's version, keeps every byte of its own and a backup row of what it adopts or overrides, then sends what it holds | [`idb-persist.ts`](packages/experimental/webworker-runtime/src/storage/idb-persist.ts) (`planChromeWins`), [`mirror-do.mjs`](deploy/cloudflare/src/mirror-do.mjs), [`reconcile-dry-run.spec.ts`](packages/experimental/webworker-runtime/tests/x6/reconcile-dry-run.spec.ts) | Built and on main; authors' report: repaired live on 2026-11-15 after three attempts; it has run for hours, not days |
+| Her whole home saves to her cloud again: a browser out of step moves to the cloud's version, keeps every byte of its own and a backup row of what it adopts or overrides, then sends what it holds | [`idb-persist.ts`](packages/experimental/webworker-runtime/src/storage/idb-persist.ts) (`planChromeWins`), [`mirror-do.mjs`](deploy/cloudflare/src/mirror-do.mjs), [`reconcile-dry-run.spec.ts`](packages/experimental/webworker-runtime/tests/x6/reconcile-dry-run.spec.ts) | Built and on main; authors' report: repaired live on 2026-11-15 after three attempts |
 | The merge card shows one button, "Approve with Touch ID", with the changed files behind disclosure rows | [`RepoProposalCell.tsx`](packages/client/ui-layout/src/client/spatial/portal/RepoProposalCell.tsx), [`repo-proposal-card.client.spec.tsx`](packages/client/ui-layout/tests/repo-proposal-card.client.spec.tsx) | Built and on main; authors' report: seen live by the owner |
 | Waiting approvals are rows behind one Notices control; nothing floats over the chat | [`notices.ts`](packages/client/ui-layout/src/client/spatial/portal/notices.ts), [`portal-approval-notices.client.spec.tsx`](packages/client/ui-layout/tests/portal-approval-notices.client.spec.tsx) | Built and on main; authors' report: seen live by the owner |
 | Her runner jobs stop at 600 runner minutes a UTC day, checked before dispatch | [`runner-budget.mjs`](deploy/cloudflare/src/runner-budget.mjs), [`runner-budget.test.mjs`](deploy/cloudflare/src/__tests__/runner-budget.test.mjs) | Not yet proven live |
 | The Pentora observer answers from partial readings and changes nothing (its engine file imports nothing) | [`pentora-epistemic.ts`](packages/experimental/webworker-runtime/src/x6/pentora-epistemic.ts), [`pentora-epistemic.test.mjs`](deploy/cloudflare/src/__tests__/pentora-epistemic.test.mjs) | Built and on main |
-| A door to the Prime model provider, with a spend cap per day and per month | [`provider-budget.mjs`](deploy/cloudflare/src/provider-budget.mjs), [`prime-door.test.mjs`](deploy/cloudflare/src/__tests__/prime-door.test.mjs) | Not yet proven live: authors' report: its one real call was refused by the provider for lack of balance |
+| A door to the Prime model provider, with a spend cap per day and per month, shipped at $1,000 a day and $10,000 a month (`PRIME_DAILY_CAP_USD`, `PRIME_MONTHLY_CAP_USD` in `wrangler.toml`): not a practical brake; by that file's own comment, the account's balance is the brake | [`provider-budget.mjs`](deploy/cloudflare/src/provider-budget.mjs), [`prime-door.test.mjs`](deploy/cloudflare/src/__tests__/prime-door.test.mjs) | Not yet proven live: authors' report: its one real call was refused by the provider for lack of balance |
+| The outside witness: every 4 hours and at each promotion, a fingerprint of her record goes to public OpenTimestamps calendars, into a chain of signed Nostr events and to the timestamp service freetsa.org (its reply is stored, not verified); each proof is checked against block headers from several public explorers | [`witness.mjs`](deploy/cloudflare/src/witness.mjs), [`witness-do.mjs`](deploy/cloudflare/src/witness-do.mjs), [`ots.mjs`](deploy/cloudflare/src/ots.mjs), [`witness-do.test.mjs`](deploy/cloudflare/src/__tests__/witness-do.test.mjs), [`ots.test.mjs`](deploy/cloudflare/src/__tests__/ots.test.mjs) | Built and on main, switched on in [`wrangler.toml`](deploy/cloudflare/wrangler.toml); every request names the node's domain to those services ([outside-witness.md](docs/auma/outside-witness.md)); an outside holder keeps a fingerprint, not the record; authors' report: it runs on their node |
+| A nightly copy of everything her cloud holds, except the sign-in, enrolment and owner-binding rows, with a manifest the witness then commits to | [`nightly-copy.mjs`](deploy/cloudflare/src/nightly-copy.mjs), [`nightly-copy.test.mjs`](deploy/cloudflare/src/__tests__/nightly-copy.test.mjs) | Not yet proven live: switched on in the shipped configuration; tested over fakes only ([nightly-copy.md](docs/auma/nightly-copy.md)) |
+| Sealed shards: a file locked with AES-256-GCM, its key wrapped (v2: sealed to the owner's own X25519 public key by HPKE) and cut into pieces, any k of n bring it back | [`sealed-shards.mjs`](deploy/cloudflare/src/sealed-shards.mjs), [`sealed-shards.test.mjs`](deploy/cloudflare/src/__tests__/sealed-shards.test.mjs), [`sealed-shards-v2.test.mjs`](deploy/cloudflare/src/__tests__/sealed-shards-v2.test.mjs) | Built and on main; wired to nothing in the node; no real restore from pieces yet ([sealed-shards.md](docs/auma/sealed-shards.md)) |
+| Fresh link: fresh keys and a throwaway identity for every connection, each step doubled with a classical and a post-quantum method | [`fresh-link.mjs`](deploy/cloudflare/src/fresh-link.mjs), [`fresh-link-vectors.test.mjs`](deploy/cloudflare/src/__tests__/fresh-link-vectors.test.mjs) | Built and on main: experimental, not reviewed by a cryptographer, wired to nothing ([fresh-link.md](docs/auma/fresh-link.md)) |
+| Her voice memory: what she heard and said in voice, kept as a hash chain at her edge | [`voice-memory.mjs`](deploy/cloudflare/src/voice-memory.mjs), [`voice-memory.test.mjs`](deploy/cloudflare/src/__tests__/voice-memory.test.mjs) | Built and on main |
+| ARK: approval of exact action bytes, a receipt signed by the service that acts, offline verification, recovery that does not restore authority | [`ark/CONTRACT.md`](ark/CONTRACT.md), [`ark/accept/run.sh`](ark/accept/run.sh) | SYNTHETIC-PROOF: 20 of 20 acceptance checks; Go and Swift readers 26 of 26 vectors each, Node self-tests 15 of 15; authors' runs on one machine; three separately written readers, not independent ones ([`ark/ABOUT.md`](ark/ABOUT.md)); not wired into the node |
 | The Continuity Diamond: she writes the next question, the host checks what happened, the next wake must take up that exact question | none | Direction: a specification is being designed; nothing is built |
 
-Every mechanism, with more rows and the counts: [docs/WHAT-IS-BUILT.md](docs/WHAT-IS-BUILT.md).
+More rows and the counts: [docs/WHAT-IS-BUILT.md](docs/WHAT-IS-BUILT.md).
 
 ## The rule, and where it stops
 
 What proposes never permits. Auma proposes. The edge permits, and for a protected change it takes the owner's passkey, not her word. One passkey tap is one approval: the authenticator signs a one-time random challenge, not the change itself, and the edge records which exact request or candidate that tap was for and refuses anything else. The owner sees the terms only through the page that asks; no independent display is in the tree.
 
-- **15 named parts are protected**, plus any part that declares itself governance. Ten of them are among her 26 starting organs, and five are Wasm cells. 14 of the 26 are unprotected, the self-build step (`seed-cycle`) among them: an owner sign-in session (8 hours at most) can replace one of them with no tap. One passkey tap can give a **night grant**: for up to 12 hours, 12 uses and 8 parts per use, she adds or replaces ordinary parts alone. The 15 protected ids are never covered ([`night-grant.mjs`](deploy/cloudflare/src/night-grant.mjs), [`night-grant.test.mjs`](deploy/cloudflare/src/__tests__/night-grant.test.mjs)).
+- **16 named parts are protected**, plus any part that declares itself governance. Ten of them are among her 26 starting organs, five are Wasm cells, and one, `auma-kernel`, is an organ of the authors' node that this tree does not ship. 14 of the 26 are unprotected (two more, `seed-continuity` and `seed-nostr-anchor`, are protected because they declare governance), the self-build step (`seed-cycle`) among them: an owner sign-in session (8 hours at most) can replace one of them with no tap. One passkey tap can give a **night grant**: for up to 12 hours, 12 uses and 8 parts per use, she adds or replaces ordinary parts alone. The 16 protected ids are never covered ([`night-grant.mjs`](deploy/cloudflare/src/night-grant.mjs), [`night-grant.test.mjs`](deploy/cloudflare/src/__tests__/night-grant.test.mjs)).
 - **The list is code.** Whoever can deploy the edge can change it, and no passkey gates a deploy. The deploy gates are in `deploy/ci/`.
 - **Storage.** Whoever can roll the edge's storage back can make a spent approval work again. A test reproduces it ([`aumlok-restore-rehearsal.test.mjs`](deploy/cloudflare/src/__tests__/aumlok-restore-rehearsal.test.mjs)); no fix is in the tree.
 - **Her grading is her own.** The suite a candidate is graded against (Pearl) is self-attested, and a deployed edge does not read its result. The edge decides in JavaScript; the five protected Wasm cells are not part of that decision.
-- **She can propose a change to her judges.** Her repository door ships at level `open` (`REPO_DOOR_LEVEL` in [`frozen-paths.mjs`](deploy/ci/frozen-paths.mjs)): every path is hers to read and to propose a change to, the edge, the merge path, the approval cards, the tests and the frozen list itself included. Still refused: malformed or secret-shaped paths, secret material, size and count limits, and any direct write to main. Nothing she proposes takes effect without the owner's passkey on that exact merge (base, head and tree, once). The frozen list applies only at level `guarded`, which is still built and is one line to switch back. This is a deliberate loosening by the owner on 2026-11-15, and it has a cost: at `open` the merge waits for the fast build workflow alone (`proposal-gate.yml`; its triggers are switched off in this repository), so a card's own new tests are not run before the merge; by the authors' report, two of her storage cards were green at the door while a spec of theirs was red.
+- **She can propose a change to her judges.** Her repository door ships at level `open` (`REPO_DOOR_LEVEL` in [`frozen-paths.mjs`](deploy/ci/frozen-paths.mjs)): every path is hers to read and to propose a change to, the edge, the merge path, the approval cards, the tests and the frozen list itself included. Still refused: malformed or secret-shaped paths, secret material, size and count limits, and any direct write to main. Nothing she proposes takes effect without the owner's passkey approval, which the edge binds to the exact merge (base, head and tree, once). The frozen list applies only at level `guarded`, which is still built and is one line to switch back. This is a deliberate loosening by the owner on 2026-11-15, and it has a cost: at `open` the merge waits for the fast build workflow alone (`proposal-gate.yml`; its triggers are switched off in this repository), so a card's own new tests are not run before the merge; by the authors' report, two of her storage cards were green at the door while a spec of theirs was red.
 
 The rule is aimed at a misbehaving agent or model reply. It is not a defence against a compromised approval page, the edge's operator, a stolen deploy credential or a storage rollback.
 
 **The project's names.** An **organ** is one replaceable module of her. A **ball** lists every organ by SHA-256; its version number is the **epoch**. **HEAD** is the edge's record of which ball is live, and **MIRROR** its copy of her home. **AUMLOK** is the identity and approval code. The **scion** compiles a candidate organ. **Pearl** is the suite a candidate is graded against, grown from recorded failures called **scars**. **Aura** is her coherence reading. **Kira** names five memory-side Wasm cells. **Pentora** is a figure of her cells, drawn and observed. More: [docs/GLOSSARY.md](docs/GLOSSARY.md).
 
-### One picture
-
-```text
-        OWNER: a passkey device and a browser tab
-          |                              ^
-  one passkey tap per approval           | the terms and the code
-          v                              | diff, rebuilt from bytes
-+------------------------------------------------------------+
-| THE EDGE (permits): a Cloudflare Worker, its storage       |
-|  checks the passkey; one approval, one request, one use    |
-|  HEAD : which version of her is live (ball id, epoch)      |
-|  MIRROR : her home files   VOICE : her spoken calls        |
-|  merge cards, the wake, the runner and model doors         |
-+------------------------------------------------------------+
-    ^                      |                     ^
-    | stage a candidate    | the live version    | home sync
-    | or a merge card      v (the tab reloads)   |
-+------------------------------------------------------------+
-| AUMA (proposes): the agent, in the owner's browser         |
-|  propose -> compile (U) -> trial, parent grades again      |
-|  -> self-build step (U) -> Pearl -> candidate, epoch + 1   |
-|  30 Wasm cells, pinned by size and SHA-256; her own tools  |
-+------------------------------------------------------------+
-```
-
-No arrow has been run end to end on a deployed node with a real passkey from this tree. The two steps marked (U) have no test that calls them, and no code goes from the self-build step to Pearl (the order is as drawn only). Step by step: [docs/ARCHITECTURE-MAP.md](docs/ARCHITECTURE-MAP.md).
+The parts and the flow, step by step: [docs/ARCHITECTURE-MAP.md](docs/ARCHITECTURE-MAP.md). No step of it has been run end to end on a deployed node with a real passkey from this tree.
 
 ### Verify it yourself
 
@@ -108,7 +109,7 @@ node scripts/verify-lite.mjs
 
 - **What that proves.** 22 test files that need Node 24.9 or newer and nothing else (the vault, the rescue kit, three deploy gates, the model door, Pearl's rules, the Aura focus shadow) run here, and no file fails more cases than the count its row in [docs/KNOWN-RED-TESTS.md](docs/KNOWN-RED-TESTS.md) lists, so it exits 0. The list gives a count per file, not test names, so the run does not show which cases those are. It does not prove the approval rule or anything live.
 - **The approval rule and the capabilities above** need the npm packages. After `pnpm install --frozen-lockfile`, run `node --test` on any test file named in the table. [docs/WHAT-IS-BUILT.md](docs/WHAT-IS-BUILT.md) lists one per capability.
-- **The full recorded run is of an earlier tree** ([docs/RUN-RECORD.md](docs/RUN-RECORD.md)): one run, one machine, by the authors, of an earlier tree. 5,502 test cases, 5,399 pass, 90 fail; 89 of the 90 were listed before that run.
+- **The full recorded run is of an earlier tree** ([docs/RUN-RECORD.md](docs/RUN-RECORD.md)): one run, one machine, by the authors, of an earlier tree. 5,502 test cases: 5,399 pass, 90 fail, 1 skipped and 12 todo; 89 of the 90 failures were listed before that run.
 - **What you cannot verify from this tree:** anything on the authors' live node. Every "authors' report" above stays a report.
 
 ## What is deliberately not done
@@ -116,33 +117,32 @@ node scripts/verify-lite.mjs
 - **Her world is not here.** This tree is a fresh genesis (`mirror/home/balls/HEAD.json`, epoch 1); her live head, notes, receipts and memory stay out.
 - **Binaries without source.** 24 of the 30 Wasm cells and the Dakini Code bundle (a prebuilt stock app, three files) ship without their source, so a fork cannot rebuild them, and their notes say that someone who passes this repository on cannot meet the AGPL's source duty from it alone. Six cells are hand-written WAT, with source beside them ([`cells/LICENSE.binaries`](apps/web/public/cells/LICENSE.binaries), [`dakini-code/LICENSE.binaries`](apps/web/public/assets/stock-apps/dakini-code/LICENSE.binaries)).
 - **One file has no licence.** `pentora36.wasm` ships with no licence granted yet ([`LICENSE.binaries`](apps/web/public/seed-library/pentora/LICENSE.binaries) in `apps/web/public/seed-library/pentora/`).
+- **No real restore from sealed pieces, and no passkey in ARK.** Sealed shards are tested over fakes; ARK's owner is a stand-in tool with a TEST key. Both are wired to nothing in the node.
+- **The live node is private.** Everything marked "authors' report" stays a report; nothing in this tree reaches the authors' node.
 - **No-tab acts are switched on and unproven**, and a cloud deployment from this tree into another account is not verified: deployment values are placeholders.
-- **Not run by anyone else.** No one outside the project has run this tree and recorded the result. Most of `packages/` is inherited (DeepSeek Harness; Cordis in `vendor/`): by the project's one count, 14.9% of the text lines and 18.5% of the code lines are Aukora's own ([docs/SIZE-AND-ORIGIN.md](docs/SIZE-AND-ORIGIN.md)).
+- **Not run by anyone else.** No one outside the project has run this tree and recorded the result. Most of `packages/` is inherited (DeepSeek Harness; Cordis in `vendor/`): by the project's one count, 16.3% of the text lines and 20.3% of the code lines are Aukora's own ([docs/SIZE-AND-ORIGIN.md](docs/SIZE-AND-ORIGIN.md)).
 
 No security audit has been done ([SAFETY.md](SAFETY.md)). More gaps, in order of weight: [docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md).
 
+## Kyber Shield: open research on child safety (DIRECTION)
+
+Can a personally owned AI help protect a young person from grooming and coercion without reading their diary? The proposal combines explicit contact permissions before contact, local help with separate permissions to view, retain, transmit and train, reports chosen by the recipient instead of automatic accusation, and a defined path to independence so that nobody keeps hidden access. What exists today is a small sealed computation cell and the approval and receipt code the page cites (BUILT-ON-MAIN; none of it is a detector, and the receipt tests have known failures). Nothing of the proposal is deployed: no classifier, no trained model, no reporting service and no real-world evaluation exists here. If you work on child safety, privacy engineering or cryptography, this is where review helps most: [docs/research/KYBER-SHIELD.md](docs/research/KYBER-SHIELD.md).
+
 ## Where it is going
 
-- Her self-build loop as the tree has it: she proposes on her own branch, checks judge the branch (their workflows' push triggers are switched off in this repository), the owner approves the exact bytes, and the change is promoted. Every step is in the tree; by the authors' report, four of her cards completed it on their node, on the repaired path, each approved with the owner's passkey.
+- Her self-build loop as the tree has it: she proposes on her own branch, checks judge the branch (their workflows' push triggers are switched off in this repository), the owner's passkey approves and the edge binds that approval to the exact bytes, and the change is promoted. Every step is in the tree; by the authors' report, four of her cards completed it on their node, on the repaired path, each approved with the owner's passkey.
 - The Continuity Diamond: at the end of a wake she writes the next question; the host checks what actually happened; the next wake must take up that exact question. A direction whose specification is being designed; nothing of it is built.
 - More decisions in Wasm, her actions as signed Nostr events between independently owned nodes, and a host other than Cloudflare. Detail: [docs/DIRECTION.md](docs/DIRECTION.md).
 
 ## Go deeper
 
-The reading path for an AI: [docs/AI-START-HERE.md](docs/AI-START-HERE.md), then [docs/DIRECTION.md](docs/DIRECTION.md), then [docs/WHAT-IS-BUILT.md](docs/WHAT-IS-BUILT.md), then the argument in full, [docs/WHITEPAPER.md](docs/WHITEPAPER.md) (English only). Apart from a pointer at its top, the root `AGENTS.md` is the inherited runtime's coding guide.
-
-| If you want | Read |
-| --- | --- |
-| What is unproven or cannot be rebuilt | [SECURITY.md](SECURITY.md), [docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md) |
-| Older file-level notes, in older label words | [docs/START-HERE.md](docs/START-HERE.md), [docs/ARCHITECTURE-ACTUAL.md](docs/ARCHITECTURE-ACTUAL.md) |
+The reading path for an AI: [docs/AI-START-HERE.md](docs/AI-START-HERE.md), then [docs/DIRECTION.md](docs/DIRECTION.md), then [docs/WHAT-IS-BUILT.md](docs/WHAT-IS-BUILT.md), then the argument in full, [docs/WHITEPAPER.md](docs/WHITEPAPER.md) (English only). Apart from a pointer at its top, the root `AGENTS.md` is the inherited runtime's coding guide. What is unproven or cannot be rebuilt: [SECURITY.md](SECURITY.md), [docs/OPEN-SOURCE-READINESS.md](docs/OPEN-SOURCE-READINESS.md). Older file-level notes, in older label words: [docs/START-HERE.md](docs/START-HERE.md), [docs/ARCHITECTURE-ACTUAL.md](docs/ARCHITECTURE-ACTUAL.md).
 
 ### How to help
 
-1. Without code: read, ask, and say where a page is unclear or wrong, in issues and pull requests on this repository; no other channel exists ([docs/COMMUNITY.md](docs/COMMUNITY.md)).
-2. Install, run the test files named above, and report your counts. Repeating the recorded run of an earlier tree on this tree, on another machine, would be the first run by someone outside the project.
-3. Pick a red test or a stated gap from [docs/GOOD-FIRST-CONTRIBUTIONS.md](docs/GOOD-FIRST-CONTRIBUTIONS.md). The rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Without code: read, ask, and say where a page is unclear or wrong, in issues and pull requests on this repository; no other channel exists ([docs/COMMUNITY.md](docs/COMMUNITY.md)). Install, run the test files named above, and report your counts. Repeating the recorded run of an earlier tree on this tree, on another machine, would be the first run by someone outside the project. Pick a red test or a stated gap from [docs/GOOD-FIRST-CONTRIBUTIONS.md](docs/GOOD-FIRST-CONTRIBUTIONS.md). The rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Licence: [AGPL-3.0-or-later](LICENSE). Upstream DeepSeek Harness is MIT ([notice](LICENSES/MIT-DeepSeek-Harness.txt)); third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Aukora is not affiliated with or endorsed by DeepSeek.
+Licence: [AGPL-3.0-or-later](LICENSE). Upstream DeepSeek Harness is MIT ([notice](LICENSES/MIT-DeepSeek-Harness.txt)); third-party notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Aukora is not affiliated with or endorsed by DeepSeek. The authors report filing patent applications relating to parts of this work. This sentence grants no licence and describes no coverage of any file in this tree; the licence terms are in [LICENSE](LICENSE) (see its section 11) and [LICENSES/](LICENSES/).
 
 ## Next: if you are an AI
 

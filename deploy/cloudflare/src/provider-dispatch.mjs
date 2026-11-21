@@ -99,7 +99,10 @@ export function createProviderDispatcher({ storage, env, networkFetch = fetch })
           if (provider !== 'anthropic') headers.set('x-api-key', key)
           if (provider === 'anthropic' && key.startsWith('sk-ant-oat')) headers.set('anthropic-beta', 'oauth-2025-04-20')
           const beta = request.headers.get('anthropic-beta')
-          if (beta && /^[A-Za-z0-9_,.-]{1,256}$/.test(beta)) headers.set('anthropic-beta', beta)
+          // The caller's betas JOIN the oauth beta set above, never replace it (an OAuth credential on
+          // /v1/messages needs `oauth-2025-04-20`: claude-api shared/anthropic-cli.md; the header carries "Beta feature IDs":
+          // curl/examples.md "Required Headers").
+          if (beta && /^[A-Za-z0-9_,.-]{1,256}$/.test(beta)) headers.set('anthropic-beta', [headers.get('anthropic-beta'), beta].filter(Boolean).join(','))
         }
         let body
         if (request.method === 'POST') {

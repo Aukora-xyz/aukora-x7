@@ -20,6 +20,7 @@ import { NUCLEUS_SHADOW_MISMATCHES_KEPT, type NucleusShadowTally } from './nucle
 import { NUCLEUS_TIER_FACT_NAMES, NUCLEUS_TIER_OUTCOME_BITS } from './nucleus-tier.ts'
 import { CELL_LOAD_FAILURES, type CellJournalSummary, type CellRow } from './cell-journal.ts'
 import type { CellHost } from './wasm-cells.ts'
+import { claudeStepUsd } from '../claude-prices.ts'
 
 export const SELF_STATE_SCHEMA = 'aukora.self-state.v1' as const
 export const SELF_STATE_RESULT_BYTES = 16 * 1024
@@ -108,6 +109,8 @@ export interface SelfStateRegistry {
     readonly lastOkAtMs: number | null
     readonly lastError: string | null
   } | null
+  /** What her model steps cost in this page life (the the cost change block below). Absent: no `spend` key; wrong shape: null. */
+  readonly spend?: SpendSnapshot
 }
 
 /** The edge's answer to GET /api/build, reduced to the revision or a reason. */
@@ -331,6 +334,9 @@ export function projectSelfState(observation: SelfStateObservation): Json {
   // Shown only when the loader passes it (it always does); a value of the wrong shape is null.
   const hasSync = registry.threadSync !== undefined
   const sync = hasSync ? threadSyncView(registry.threadSync) : null
+  // Shown only when the loader passes it (it always does); a value of the wrong shape is null.
+  const hasSpend = registry.spend !== undefined
+  const spend = hasSpend ? spendView(registry.spend) : null
 
   const organRow = (organ: SelfStateOrganRecord, rows: SelfStateUnknown[]): Json => {
     const id = safeText(organ.id)
@@ -382,6 +388,7 @@ export function projectSelfState(observation: SelfStateObservation): Json {
     if (hasSkills && skillRows === null) rows.push({ field: 'skills', reason: 'read-failed' })
     if (skillRows !== null && skillCount < allSkills.length) rows.push({ field: 'skills.kept', reason: 'too-many' })
     if (hasSync && sync === null) rows.push({ field: 'threadSync', reason: 'read-failed' })
+    if (hasSpend && spend === null) rows.push({ field: 'spend', reason: 'read-failed' })
     rows.sort((a, b) => byString(a.field, b.field) || byString(a.reason, b.reason))
     return {
       schema: SELF_STATE_SCHEMA,
@@ -400,6 +407,7 @@ export function projectSelfState(observation: SelfStateObservation): Json {
         : {}),
       ...(hasSkills ? { skills: skillRows === null ? null : { count: allSkills.length, kept: skillRows.slice(0, skillCount) } } : {}),
       ...(hasSync ? { threadSync: sync } : {}),
+      ...(hasSpend ? { spend } : {}),
       unknown: rows,
     }
   }
@@ -552,7 +560,11 @@ export function selfStateToolSpec(deps: () => SelfStateDeps) {
       + 'and changes nothing; `writer`: your one body, copying each new line to your cloud as it is written; `none`), `sent` '
       + 'the whole lines your cloud acknowledged this load, `pending` the whole lines only this browser holds, `lastOkAtMs` '
       + 'the last acknowledged copy and `lastError` the last reason copying waited or stopped. Copy and Join on /rescue '
-      + 'remain the fallback.',
+      + 'remain the fallback. '
+      + '`spend` is what your model steps cost in this page life, counted in your worker from the usage each step reports '
+      + '(`since`, then `byModel`: `provider`, `model`, `steps`, `input` (uncached), `cacheRead`, `cacheWrite`, `output` '
+      + 'tokens, and `usd` from the provider\'s price table, or null where no usage came back or no price is known; never a '
+      + 'guess). A reload starts a new count (docs/auma/cost.md).',
     parameters: {
       organs: { type: 'json', description: 'Optional list of organ ids (1 to 64) to narrow the organ list; default all.' },
     },
@@ -561,3 +573,143 @@ export function selfStateToolSpec(deps: () => SelfStateDeps) {
     },
   }
 }
+
+// ---- COST-CHANGE block begin: `spend` (kept in this file, which the loader already imports) ----
+
+/**
+ * `spend`: what her model steps cost in this page life, counted in her worker from the per-step usage her
+ * harness records on each `assistant/message` event (agent-loop agent.ts: `usage`, the adapter's TokenUsage) and on each
+ * `compaction/summary` written by a model call (compaction-basic region.ts: provider, model, usage), and shown read-only
+ * by `x6_self_state` as `spend`. Per provider and model: the steps, the compactions, the uncached input, the cache read,
+ * the cache write and the output tokens, `usd` summed over the calls priced from the reference table (../claude-prices.ts),
+ * and `unpricedCalls`: the calls that came back with no usage (none at all, or all zero: what the older chat-compatible
+ * wire logs) or whose model has no price. `usd` is null only when no call of the row was priced. Never a guess. Nothing
+ * here is stored or sent; a reload starts a new count.
+ */
+export interface SpendRow {
+  readonly provider: string
+  readonly model: string
+  /** Model steps (`assistant/message`). */
+  readonly steps: number
+  /** Compaction summary calls (`compaction/summary` written by a model call). */
+  readonly compactions: number
+  readonly input: number
+  readonly cacheRead: number
+  readonly cacheWrite: number
+  readonly output: number
+  /** Dollars of the priced calls; null when no call of this row could be priced. */
+  readonly usd: number | null
+  /** Calls not in `usd`: no usage came back (all zero counts as none), or the model has no price. */
+  readonly unpricedCalls: number
+}
+
+export interface SpendSnapshot {
+  /** When this page life's count began (epoch milliseconds). */
+  readonly since: number
+  readonly byModel: readonly SpendRow[]
+}
+
+interface Counting {
+  steps: number
+  compactions: number
+  input: number
+  cacheRead: number
+  cacheWrite: number
+  output: number
+  /** The sum over the priced calls only. */
+  usd: number
+  pricedCalls: number
+  /** Calls (steps or compactions) that came back with no usage, or whose model has no price. */
+  unpricedCalls: number
+}
+
+const SPEND_NAME = /^[A-Za-z0-9._:/@+-]{1,128}$/
+/** At most this many rows are kept (one per provider and model she used in this page life). */
+const SPEND_ROWS_MAX = 64
+
+const isSpendRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
+const spendCount = (value: unknown): number | null => value === undefined ? 0
+  : typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : null
+
+export function createSpendTally(since: number): {
+  observe(session: unknown, event: unknown): void
+  snapshot(): SpendSnapshot
+} {
+  const rows = new Map<string, Counting & { provider: string; model: string }>()
+  // A failed attempt (`assistant/attempt`) is not counted: its record names no provider or model, and naming one would be a guess.
+  return {
+    observe(_session, event) {
+      try {
+        if (!isSpendRecord(event) || !isSpendRecord(event.data)) return
+        let provider: unknown, model: unknown
+        const compaction = event.type === 'compaction/summary'
+        if (event.type === 'assistant/message') {
+          const message = event.data.message
+          const source = isSpendRecord(message) && isSpendRecord(message.source) ? message.source : undefined
+          provider = source?.provider
+          model = source?.model
+        } else if (compaction) {
+          // A summary written without a model call (a template) costs nothing; one written by a model call carries usage.
+          if (event.data.llmStreamCall !== true && event.data.usage === undefined) return
+          provider = event.data.provider
+          model = event.data.model
+        } else return
+        if (typeof provider !== 'string' || typeof model !== 'string' || !SPEND_NAME.test(provider) || !SPEND_NAME.test(model)) return
+        const usage = event.data.usage
+        let tokens = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
+        if (usage !== undefined) {
+          if (!isSpendRecord(usage)) return
+          const input = spendCount(usage.inputTokens), cacheRead = spendCount(usage.cacheReadTokens)
+          const cacheWrite = spendCount(usage.cacheWriteTokens), output = spendCount(usage.outputTokens)
+          if (input === null || cacheRead === null || cacheWrite === null || output === null) return
+          tokens = { input, cacheRead, cacheWrite, output }
+        }
+        const key = `${provider}\u0000${model}`
+        let row = rows.get(key)
+        if (row === undefined) {
+          if (rows.size >= SPEND_ROWS_MAX) return
+          row = { provider, model, steps: 0, compactions: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0, usd: 0,
+            pricedCalls: 0, unpricedCalls: 0 }
+          rows.set(key, row)
+        }
+        if (compaction) row.compactions += 1
+        else row.steps += 1
+        row.input += tokens.input
+        row.cacheRead += tokens.cacheRead
+        row.cacheWrite += tokens.cacheWrite
+        row.output += tokens.output
+        const came = tokens.input + tokens.cacheRead + tokens.cacheWrite + tokens.output > 0
+        const usd = came ? claudeStepUsd(model, tokens) : null
+        if (usd === null) row.unpricedCalls += 1
+        else { row.usd += usd; row.pricedCalls += 1 }
+      } catch { /* a count never breaks her session */ }
+    },
+    snapshot() {
+      const byModel = [...rows.values()]
+        .sort((a, b) => a.provider < b.provider ? -1 : a.provider > b.provider ? 1 : a.model < b.model ? -1 : a.model > b.model ? 1 : 0)
+        .map(row => ({ provider: row.provider, model: row.model, steps: row.steps, compactions: row.compactions, input: row.input,
+          cacheRead: row.cacheRead, cacheWrite: row.cacheWrite, output: row.output,
+          usd: row.pricedCalls > 0 ? Math.round(row.usd * 1e6) / 1e6 : null, unpricedCalls: row.unpricedCalls }))
+      return { since, byModel }
+    },
+  }
+}
+
+/** `x6_self_state` `spend`: the snapshot checked field by field, or null when it is not that shape. */
+export function spendView(value: unknown): SpendSnapshot | null {
+  if (!isSpendRecord(value) || !Number.isSafeInteger(value.since)) return null
+  if (!Array.isArray(value.byModel) || value.byModel.length > SPEND_ROWS_MAX) return null
+  const rows: SpendRow[] = []
+  for (const row of value.byModel) {
+    if (!isSpendRecord(row) || typeof row.provider !== 'string' || !SPEND_NAME.test(row.provider)) return null
+    if (typeof row.model !== 'string' || !SPEND_NAME.test(row.model)) return null
+    const numbers = [row.steps, row.compactions, row.input, row.cacheRead, row.cacheWrite, row.output, row.unpricedCalls]
+    if (numbers.some(item => typeof item !== 'number' || !Number.isSafeInteger(item) || item < 0)) return null
+    if (row.usd !== null && (typeof row.usd !== 'number' || !Number.isFinite(row.usd) || row.usd < 0)) return null
+    rows.push({ provider: row.provider, model: row.model, steps: row.steps as number, compactions: row.compactions as number,
+      input: row.input as number, cacheRead: row.cacheRead as number, cacheWrite: row.cacheWrite as number,
+      output: row.output as number, usd: row.usd, unpricedCalls: row.unpricedCalls as number })
+  }
+  return { since: value.since as number, byModel: rows }
+}
+// ---- COST-CHANGE block end ----

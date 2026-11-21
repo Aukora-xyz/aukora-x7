@@ -44,11 +44,18 @@ import { sha256HexSync, type WorkerModuleLoader } from '../module-system/module-
 import { join } from '../module-system/posix-path.ts'
 import { createWakeLoop } from './wake-loop.ts'
 import { liveWriteSet } from './write-set-inventory.ts'
-import { createCapabilityIndex, type CapabilityIndex } from './capability-index.ts'
+import { classifyReadBasis, classifyToolMutation, createCapabilityIndex, summarizeParameters, type CapabilityIndex } from './capability-index.ts'
 import { hostFactsToolSpec } from './host-facts.ts'
 import { cellFactsOf, cloudflareDoorStatusOf, selfStateToolSpec, type SelfStateLoaded, type SelfStateRegistry } from './self-state.ts'
+import { createSpendTally } from './self-state.ts' // the cost change hook (its `spend` block)
 import { selfCheckToolSpec } from './self-check.ts'
+import { checkpointVerifyToolSpec } from './checkpoint-verify-tool.ts' // CKPT hook
 import { createExecTool, execPost, EXEC_TOOL_DESCRIPTION, EXEC_TOOL_PARAMETERS, EXEC_TOOL_READS } from './exec-tool.ts'
+import { VOICE_SCRATCH_FAST_CALL, VOICE_SCRATCH_TOOL, voiceScratchToolSpec } from './voice-scratch.ts'
+// the voice memory hook: her voice memory's chain store and its verifier
+import { createVoiceMemoryStore, VOICE_MEMORY_LIMITS, VOICE_MEMORY_TOOL, voiceMemoryToolSpec } from '../storage/voice-memory.ts'
+import { createHeardFeed, createTimelineCapture, createTimelineStore, MEMORY_TOOL, memoryToolSpec } from '../storage/memory-timeline.ts'
+import { VOICE_RECALL_PIN } from './voice-organ-pins.ts'
 import { REPO_ECHO_MODES, repoEchoAnswer, type RepoEchoMode } from './repo-echo.ts' // HANDS hook
 // ---- TOOLS block begin ----
 // x6_tools: her own read-only tools, proposed, qualified in a sealed cell and mounted under the owner's session (tool-registry.ts).
@@ -63,7 +70,7 @@ import { createNucleusShadow, TOUCH_ID_TIER_REFLEX_MAX_BYTES, TOUCH_ID_TIER_REFL
 import { idleFetch } from '../idle-fetch.ts'
 import { pentoraCarry } from './pentora-carry.ts' // x6_cell `carry` (a compute through the pinned pentora-codec cell)
 import { pentoraEpistemicTool } from './pentora-epistemic-tool.ts'
-import { inspectBrowserEstate, type EstateCordisView } from './browser-estate.ts'
+import { inspectBrowserEstate, withholdSecrets, type EstateCordisView } from './browser-estate.ts'
 import { readThreads, registerThreadTools, threadStoreView } from './thread-reader.ts'
 // ---- VOICEAWARE block begin ----
 import { renderVoiceMap, screenText, seenOf, sinceLines, VOICE_MAP_HANDOFF_CHARS, type VoiceMapFacts, type VoiceMapSeen, type VoiceMapTool } from './voice-map.ts'
@@ -76,8 +83,12 @@ const VOICE_AWARENESS_PATH = '/dsh/home/auma/AWARENESS.v1.json'
 import {
   createVoiceLookOnly, indexedDbVoiceMarkStore, VOICE_PROBE_REFUSAL, VOICE_PROBE_SESSION, type VoiceLevel, type VoiceMarkStore,
 } from './voice-marks.ts'
-import { isSpokenUserMessage, VOICE_SPOKEN_ELSEWHERE_REFUSAL, type VoiceHomeRecord, type VoiceToolOrigin } from './voice-read-only.ts'
+import {
+  isSpokenUserMessage, voiceOpenFastVerdict, voiceRealPathRefusal, voiceRefusal, voiceSearchWithheldNote, voiceVerdict, VOICE_HOME_PRESET,
+  VOICE_SPOKEN_ELSEWHERE_REFUSAL, withholdVoiceSearchEntries, type VoiceHomeRecord, type VoiceToolOrigin,
+} from './voice-read-only.ts'
 import { threadSyncSelfStateField } from '../storage/thread-sync.ts'
+import { describeBudgets, setWorkflowChildGate } from './workflow-executor.ts'
 import {
   createTransitionContext,
   isTransitionKind,
@@ -90,7 +101,7 @@ export const T2_ONLY_ORGANS = Object.freeze([
   'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
   'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
   'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys',
-  'auma-scion', 'seed-boot',
+  'auma-scion', 'seed-boot', 'auma-kernel',
 ])
 const protectedOrgans = new Set<string>(T2_ONLY_ORGANS)
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -591,8 +602,33 @@ export function classifyActionIrreversibility(action: string | Record<string, un
   if (['x6-facts', 'ball-status', 'self-facts', 'ball-put', 'pearl-put', 'compile-organ', 'trial-candidate', 'trial-retention-candidate', 'stage-head-promotion',
     'stage-organ-promotion', 'x6-browser-estate', 'x6-voice-status'].includes(operation || name)
     && input.promote !== true) return 0
+  // the voice memory hook: x6_voice_memory only reads, for EVERY action word (storage/voice-memory.ts runVoiceMemoryTool has no
+  // write path at all: verify, tail, search and head read her home's two files and the edge's managed_status; any other
+  // action is refused by the tool itself with VOICE_MEMORY_ACTION_INVALID before anything is read). Its writer is the
+  // page-only route /__x6__/voice-memory, never this tool.
+  if (name === 'x6-voice-memory') return input.promote !== true ? 0 : 2
+  // the one memory hook: x6_memory only reads, for EVERY action word (storage/memory-timeline.ts runMemoryTool has no write path:
+  // timeline, search, around, head and verify read her home's timeline and voice files; any other action is refused by
+  // the tool itself with MEMORY_ACTION_INVALID before anything is read). Its writer is the turn capture, never this tool.
+  if (name === 'x6-memory') return input.promote !== true ? 0 : 2
   // x6_self_check only reads (its probes are reads; it writes, stages and approves nothing).
   if (name === 'x6-self-check' && !operation && input.promote !== true) return 0
+  // head_adopt only reads the published head (one GET of /_head/ball, checkPublishedHead) and says
+  // whether this tab runs it; nothing mounted changes. `force` is refused by the tool and is not a read here either.
+  if (name === 'head-adopt' && !operation && input.force === undefined && input.promote !== true) return 0
+  // CKPT hook: x6_checkpoint_verify only reads (GET-only edge reads; `verify` judges her own candidate, `capture` returns
+  // shapes; it writes, stages and approves nothing). Its NAME holds "checkpoint", so without this line the history rule at
+  // the end of this function took every call but an explicit `verify` as an append-only history write and the tool
+  // answered X6_HISTORY_APPEND_ONLY (her live report, 2026-11-16).
+  // Only the tool's two declared actions (and no action, which the tool reads as `verify`) are reads here: any other
+  // operation word falls through to the history rule below and is refused, so the name alone never opens a door
+  // (Auma's finding, 2026-11-16: the first form of this line answered 0 for every operation, `delete` included).
+  // This tool is closed: an operation word it does not declare is never a read here, even one the generic verb list
+  // below would accept for another tool (`run`, `trial`): it answers the history class and is refused at the gate.
+  if (name === 'x6-checkpoint-verify') return ['', 'verify', 'capture'].includes(operation) && input.promote !== true ? 0 : 2
+  // the voice safety change RELAYREAD hook: crew_relay selects by `op`, not `action`; `op: "read"` is one GET of /_host/crew-relay.
+  // `say` (a post under the owner's name) falls through to the class it had.
+  if (name === 'crew-relay' && operation === '' && input.op === 'read' && input.promote !== true) return 0
   // x6_exec `status`, `logs`, `list`, `artifacts` read; `run` spends runner minutes and runs code and `cancel`
   // stops a run, so neither is a read (the generic list below would call `run` one); it writes nothing in her home.
   if (name === 'x6-exec') return EXEC_TOOL_READS.includes(operation) && input.promote !== true ? 0 : 1
@@ -609,6 +645,11 @@ export function classifyActionIrreversibility(action: string | Record<string, un
     || (name === 'auma-snapshot' && operation === 'create')) return 2
   const t1QualifiedOrganUpdate = typeof input.qualificationId === 'string' && input.qualificationId.length > 0
     && input.unchangedOtherEntries === true && input.config === undefined && input.disabled === undefined
+  // the kernel check hook (2026-11-16): `auma_kernel`, her kernel organ's own tool, takes no argument and reads one fixed file. It
+  // keeps the class it had before `auma-kernel` joined T2_ONLY_ORGANS (1); without this line the name rule below would
+  // ask the owner's passkey for every read of it, and its schema accepts no `action` word to say "read" with. CHANGING
+  // the kernel organ is what became class 3: a call that names a target, an operation or `promote` never gets this answer.
+  if (name === 'auma-kernel' && operation === '' && targetId === '' && input.promote !== true) return 1
   const targetGov = classifyEntryGovernance(target, entries[targetId] ?? entries[target]) === 3
     || classifyEntryGovernance(target, input) === 3
   if (!t1QualifiedOrganUpdate && targetGov) return 3
@@ -1521,13 +1562,33 @@ export interface ConsultAnswer {
   /** When an answer was cut: what to do to get the rest, in one sentence. */
   readonly next?: string | null
   /**
-   * The caller's own cap or time was below the default and starved the first try (thinking used the whole cap,
-   * or the clock ran out before any answer text), so it was asked ONCE more at the default; this answer is that second try.
+   * True when the output cap cut this answer (the provider stopped for length, or thinking spent
+   * the whole cap before any answer text). Nothing is asked again: the answer is what that one paid call returned.
    */
-  readonly retried?: ConsultRetry | null
+  readonly capped?: boolean
+  /** Output tokens the provider said this call used (thinking included), or null when it did not say. */
+  readonly tokensUsed?: number | null
 }
-/** Which number a consult raised to its default for its one retry, from what, to what. */
-export interface ConsultRetry { readonly field: 'maxTokens' | 'timeoutMs'; readonly from: number; readonly to: number }
+/**
+ * Each model's own output ceiling, as the tree's model catalogue states it
+ * (`packages/bundle/web-app/cordis.patch.yml`, the `llm-pi-ai` rows; checked against that file by
+ * tests/x6/consult-long-answers.spec.ts). A consult or swarm worker asked without `maxTokens` gets this; a model the
+ * catalogue does not list keeps `CONSULT_LIMITS.defaultMaxTokens`.
+ */
+export const CONSULT_MODEL_CEILINGS: Readonly<Record<string, number>> = Object.freeze({
+  'anthropic/claude-opus-5-5': 128_000, 'anthropic/claude-fable-5-2': 128_000, 'anthropic/claude-sonnet-5-5': 128_000,
+  'openrouter/moonshotai/kimi-k3.1-pro': 128_000, 'openrouter/openai/gpt-6.1-sol': 128_000, 'openrouter/openai/gpt-6-astra': 128_000,
+  'openrouter/meta/muse-spark-1.3': 128_000, 'openrouter/z-ai/glm-5.3': 128_000, 'openrouter/google/gemini-4-argon': 128_000,
+  'openrouter/x-ai/grok-4.7': 128_000,
+})
+/**
+ * The cap a consult asks with when the caller names none.
+ * @param provider - The provider door.
+ * @param model - The model id at that door.
+ * @returns The catalogue ceiling (never above `CONSULT_LIMITS.maxTokens`), else the default.
+ */
+export const consultDefaultMaxTokens = (provider: string, model: string): number =>
+  Math.min(CONSULT_LIMITS.maxTokens, CONSULT_MODEL_CEILINGS[`${provider}/${model}`] ?? CONSULT_LIMITS.defaultMaxTokens)
 /** One provider answer read off the wire (a stream or a single JSON body), before it becomes a `ConsultAnswer`. */
 interface ConsultRead {
   readonly text: string | null
@@ -1787,11 +1848,9 @@ const CONSULT_ROLE = /^[A-Za-z0-9][^\u0000-\u001f\u007f]{0,199}$/
  * grants anything: the answers are text for Auma to weigh.
  * @param input - `{ provider, model, prompt, system?, maxTokens?, timeoutMs? }`, or a council:
  *   `{ targets: [{ provider, model, role? }], prompt, ... }`.
- * No starving by accident: a target that ends `CONSULT_REASONING_EXHAUSTED_MAX_TOKENS` (thinking
- * used the whole cap, no answer text) under a caller's `maxTokens` BELOW the default, or `CONSULT_TIMEOUT` (no answer
- * text when the clock ran out) under a caller's `timeoutMs` BELOW the default, is asked ONCE more at the default, and
- * that answer says so (`retried: { field, from, to }`). A caller's number at or above the default is respected and never
- * retried; a caller's cancel stays `CONSULT_CANCELLED` and is never retried.
+ * One paid call per target: a target with no
+ * `maxTokens` asks with its model's own ceiling (`consultDefaultMaxTokens`); an answer cut by its cap comes back as it
+ * is, with `capped: true`, its `stopReason` and `tokensUsed`, and is never asked again at a bigger number or a longer time.
  * @param deps - Trusted origin, fetch and clock. With a parent, every attempt carries its lifecycle ID and a unique request ID;
  *   without one, this helper makes independent requests. Mounted tools require an acknowledged parent and caller cancellation.
  *   `timeoutSignal` makes the per-target clock (default `AbortSignal.timeout`); tests pass a faster one.
@@ -1822,7 +1881,7 @@ export async function consultProviders(input: unknown, deps: {
   if (askedMaxTokens !== null && !capInRange) {
     // One default on every provider since the raised limits (`anthropicDefaultMaxTokens` equals `defaultMaxTokens`).
     return { ok: false, code: 'CONSULT_MAX_TOKENS_INVALID', reason: `maxTokens is a whole number from 1 to ${String(CONSULT_LIMITS.maxTokens)} `
-      + `per target (the ceiling); leave it out for the default ${String(CONSULT_LIMITS.defaultMaxTokens)}.` }
+      + `per target (the ceiling); leave it out for the model's own ceiling (else ${String(CONSULT_LIMITS.defaultMaxTokens)}).` }
   }
   const timeoutMs = input.timeoutMs === undefined ? CONSULT_LIMITS.defaultTimeoutMs : input.timeoutMs
   if (!Number.isSafeInteger(timeoutMs) || (timeoutMs as number) < 1000 || (timeoutMs as number) > CONSULT_LIMITS.timeoutMs) {
@@ -1844,25 +1903,10 @@ export async function consultProviders(input: unknown, deps: {
     if (role === undefined) return { ok: false, code: 'CONSULT_ROLE_INVALID' }
     targets.push({ provider: item.provider, model: item.model, role })
   }
-  /** One target, asked once or once more at the default when the caller's own smaller number starved it. */
+  /** One target, asked once: the caller's cap, else its model's own ceiling. Nothing is asked twice at a bigger number. */
   const ask = async (target: ConsultTarget): Promise<ConsultAnswer> => {
-    const started = now()
-    const wire = CONSULT_PROVIDERS[target.provider] ?? 'openai'
-    const defaultCap = wire === 'anthropic' ? CONSULT_LIMITS.anthropicDefaultMaxTokens : CONSULT_LIMITS.defaultMaxTokens
-    const callerCap = askedMaxTokens === null ? null : askedMaxTokens as number
-    const limitMs = timeoutMs as number
-    const first = await attempt(target, callerCap ?? defaultCap, limitMs, started)
-    if (deps.signal?.aborted) return first
-    // Only a cap the provider did not lower itself (`maxTokens` still the caller's) counts as the caller's starving number.
-    const retry: ConsultRetry | null = first.code === 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' && callerCap !== null
-      && callerCap < defaultCap && first.maxTokens === callerCap ? { field: 'maxTokens', from: callerCap, to: defaultCap }
-      : first.code === 'CONSULT_TIMEOUT' && input.timeoutMs !== undefined && limitMs < CONSULT_LIMITS.defaultTimeoutMs
-        ? { field: 'timeoutMs', from: limitMs, to: CONSULT_LIMITS.defaultTimeoutMs } : null
-    if (retry === null) return first
-    const second = retry.field === 'maxTokens'
-      ? await attempt(target, retry.to, limitMs, started)
-      : await attempt(target, callerCap ?? defaultCap, retry.to, started)
-    return { ...second, retried: retry }
+    const cap = askedMaxTokens === null ? consultDefaultMaxTokens(target.provider, target.model) : askedMaxTokens as number
+    return await attempt(target, cap, timeoutMs as number, now())
   }
   const attempt = async (target: ConsultTarget, startCap: number, limitMs: number, started: number): Promise<ConsultAnswer> => {
     const timeoutSignal = clockFor(limitMs)
@@ -1894,7 +1938,8 @@ export async function consultProviders(input: unknown, deps: {
     }
     /** One read answer to what she gets back: the text so far, whether it was cut, why it stopped, and what to do next. */
     const settle = (status: number, read: ConsultRead, limit: number): ConsultAnswer => {
-      const told = { status, stopReason: read.stopReason, maxTokens: limit, usage: read.usage }
+      const told = { status, stopReason: read.stopReason, maxTokens: limit, usage: read.usage, capped: read.hitLength,
+        tokensUsed: read.usage?.outputTokens ?? null }
       const next = read.hitLength
         ? limit < CONSULT_LIMITS.maxTokens
           ? `The provider stopped at maxTokens ${String(limit)} (thinking included); ask again with a larger maxTokens, up to ${String(CONSULT_LIMITS.maxTokens)}.`
@@ -1916,7 +1961,7 @@ export async function consultProviders(input: unknown, deps: {
       }
       if (read.text === null || read.text.trim() === '') {
         const exhausted = read.hasReasoning || read.hitLength
-        return answer({ ...told, code: exhausted ? 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' : read.text === null ? 'CONSULT_ANSWER_UNREADABLE' : 'CONSULT_ANSWER_EMPTY',
+        return answer({ ...told, capped: read.hitLength || exhausted, code: exhausted ? 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS' : read.text === null ? 'CONSULT_ANSWER_UNREADABLE' : 'CONSULT_ANSWER_EMPTY',
           ...(exhausted ? { next: next ?? `The thinking used the whole cap; ask again with a larger maxTokens, up to ${String(CONSULT_LIMITS.maxTokens)}.` } : {}) })
       }
       // The provider's own stop at the length cap is a cut-off answer too, not only this page's size cap.
@@ -2355,6 +2400,89 @@ const HANDOFF_PATH = '/dsh/home/auma/HANDOFF.md'
 /** Legacy home (pre meta-workspace): still mirrored on write for old readers, and read only when the auma copy is absent. */
 const AUMA_ONE_HANDOFF_PATH = '/dsh/home/auma-one/HANDOFF.md'
 const WORKSPACE_HANDOFF_PATH = '/dsh/workspace/HANDOFF.md'
+
+/**
+ * What the runtime-context snapshot (`auma:live-state-map`) carries of HANDOFF.md. The loop appends
+ * a whole new snapshot whenever any byte of it changes and never removes the old one, so a 126 KB note she edits every
+ * turn multiplied her conversation by about 35 thousand tokens a turn. A note up to `wholeBytes` is carried whole; a
+ * longer one as its first section (at most `headBytes`, cut at a line), one pointer line, and its last `tailBytes` (cut
+ * forward to a line start). Only the injected text changes; the file in her home is never touched here.
+ */
+export const HANDOFF_MAP_LIMITS = Object.freeze({ wholeBytes: 12 * 1024, headBytes: 4 * 1024, tailBytes: 8 * 1024 })
+
+const NEWLINE_BYTE = 0x0a
+/** True when `at` is not inside a UTF-8 character (a continuation byte is 10xxxxxx). */
+const isCharBoundary = (bytes: Uint8Array, at: number): boolean => at <= 0 || at >= bytes.length || ((bytes[at] ?? 0) & 0xc0) !== 0x80
+
+/** The note's first section: from the start to the first `\n## ` after the first heading, at most `max` bytes, cut at a line. */
+function handoffHeadBytes(bytes: Uint8Array, note: string, max: number): Uint8Array {
+  const firstHeading = /^#/m.exec(note)
+  let end = bytes.length
+  if (firstHeading) {
+    const nextSection = note.indexOf('\n## ', firstHeading.index + 1)
+    if (nextSection >= 0) end = new TextEncoder().encode(note.slice(0, nextSection)).length
+  }
+  if (end <= max) return bytes.subarray(0, end)
+  const lastNewline = bytes.subarray(0, max + 1).lastIndexOf(NEWLINE_BYTE)
+  if (lastNewline > 0) return bytes.subarray(0, lastNewline)
+  // One line longer than the limit: cut at the last whole character instead.
+  let at = max
+  while (at > 0 && !isCharBoundary(bytes, at)) at -= 1
+  return bytes.subarray(0, at)
+}
+
+/** The note's last `max` bytes, cut forward to a line start (or, with no line break in them, to a character boundary). */
+function handoffTailBytes(bytes: Uint8Array, max: number): Uint8Array {
+  const start = Math.max(0, bytes.length - max)
+  if (start === 0 || bytes[start - 1] === NEWLINE_BYTE) return bytes.subarray(start)
+  const nextNewline = bytes.indexOf(NEWLINE_BYTE, start)
+  // A line cut that would leave only white space (her newest line is longer than the tail) falls back to the character cut.
+  if (nextNewline >= 0 && bytes.subarray(nextNewline + 1).some(byte => byte !== 0x0a && byte !== 0x0d && byte !== 0x20 && byte !== 0x09)) {
+    return bytes.subarray(nextNewline + 1)
+  }
+  let at = start
+  while (at < bytes.length && !isCharBoundary(bytes, at)) at += 1
+  return bytes.subarray(at)
+}
+
+/** What the live state map carries of her hand-off note (see HANDOFF_MAP_LIMITS). */
+export function liveMapHandoffText(note: string): string {
+  const bytes = new TextEncoder().encode(note)
+  if (bytes.length <= HANDOFF_MAP_LIMITS.wholeBytes) return note.trim()
+  const decode = (part: Uint8Array): string => new TextDecoder().decode(part)
+  const head = decode(handoffHeadBytes(bytes, note, HANDOFF_MAP_LIMITS.headBytes)).trimEnd()
+  const tail = decode(handoffTailBytes(bytes, HANDOFF_MAP_LIMITS.tailBytes)).trimEnd()
+  const pointer = `[hand-off note: ${String(bytes.length)} bytes, sha256 ${sha256HexSync(bytes).slice(0, 12)}; the middle `
+    + 'is not shown here. Read it with auma_handoff (action read, optional offset and bytes).]'
+  return [head, pointer, tail].filter(part => part !== '').join('\n\n')
+}
+
+/** `auma_handoff read` with optional byte `offset` and `bytes`; edges inside a character move to its boundary. */
+function readHandoffRange(note: string, args: { offset?: unknown; bytes?: unknown }): Record<string, unknown> {
+  const bytes = new TextEncoder().encode(note)
+  const total = bytes.length
+  const refuse = (why: string) => ({ ok: false, code: 'HANDOFF_RANGE_INVALID', totalBytes: total,
+    error: `${why} The note is ${String(total)} bytes; offset is 0 to ${String(total)}, bytes is a whole number of at least 1.` })
+  const offsetGiven = args.offset !== undefined && args.offset !== null
+  const bytesGiven = args.bytes !== undefined && args.bytes !== null
+  if (offsetGiven && (typeof args.offset !== 'number' || !Number.isInteger(args.offset) || args.offset < 0 || args.offset > total)) {
+    return refuse(`offset ${JSON.stringify(args.offset)} is out of range.`)
+  }
+  if (bytesGiven && (typeof args.bytes !== 'number' || !Number.isInteger(args.bytes) || args.bytes < 1)) {
+    return refuse(`bytes ${JSON.stringify(args.bytes)} is not allowed.`)
+  }
+  if (!offsetGiven && !bytesGiven) return { content: note, totalBytes: total, offset: 0, bytes: total }
+  let start = offsetGiven ? args.offset as number : 0
+  let end = bytesGiven ? Math.min(total, start + (args.bytes as number)) : total
+  while (start < total && !isCharBoundary(bytes, start)) start += 1
+  while (end > start && !isCharBoundary(bytes, end)) end -= 1
+  // A range smaller than the character at `start` returns that whole character, so paging by offset += bytes never stalls.
+  if (end <= start && start < total) {
+    end = start + 1
+    while (end < total && !isCharBoundary(bytes, end)) end += 1
+  }
+  return { content: new TextDecoder().decode(bytes.subarray(start, end)), totalBytes: total, offset: start, bytes: end - start }
+}
 const WISH_PATH = '/dsh/home/auma/WISH.md'
 const CORDIS_PATCH_PATH = '/dsh/home/profiles/web/cordis.patch.yml'
 const RETENTION_SUITE_PATH = '/dsh/home/auma/seed/pearl/retention-suite.v1.json'
@@ -3292,6 +3420,33 @@ export interface X6BallRuntime {
   capabilityIndex(): CapabilityIndex
 }
 
+/** The fast voice's tool route (`/__x6__/voice-tool`): the largest request body, the longest wait for one
+ * tool, and the most output it hands back (her page then cuts one result to 6 KiB, with a note). */
+export const VOICE_TOOL_BODY_BYTES = 16_384
+export const VOICE_TOOL_WAIT_MS = 8000
+export const VOICE_TOOL_OUTPUT_BYTES = 65_536
+/** One page of a `look` answer (its note fits inside the 6 KiB result the edge gives the model). */
+export const VOICE_TOOL_PAGE_BYTES = 6000
+
+/**
+ * One page of a tool's answer: UTF-8 bytes [from, from + VOICE_TOOL_PAGE_BYTES) (never inside a character), with ONE note
+ * when it is not the whole answer: `[bytes A to B of N; call again with from:B for more]`, or `...; that is the end]`.
+ * @param text - the whole answer.
+ * @param from - the first byte asked for.
+ */
+export function voiceToolPage(text: string, from: number): string {
+  const bytes = new TextEncoder().encode(text)
+  const total = bytes.byteLength
+  let start = Math.min(Math.max(0, Math.floor(from)), total)
+  while (start < total && ((bytes[start] ?? 0) & 0xc0) === 0x80) start++
+  let end = Math.min(start + VOICE_TOOL_PAGE_BYTES, total)
+  while (end > start && end < total && ((bytes[end] ?? 0) & 0xc0) === 0x80) end--
+  const body = new TextDecoder().decode(bytes.subarray(start, end))
+  if (start === 0 && end === total) return body
+  return `${body}\n[bytes ${String(start)} to ${String(end)} of ${String(total)}; `
+    + `${end < total ? `call again with from:${String(end)} for more` : 'that is the end'}]`
+}
+
 export async function mountX6BallRuntime(
   hostCtx: CordisContextLike,
   vfs: MemoryVfs,
@@ -3458,6 +3613,9 @@ export async function mountX6BallRuntime(
     })
   }
 
+  // the repository door hook: a workflow agent() child meets the same gate as a direct `subagent` call.
+  setWorkflowChildGate((request) => { enforceToolInvocation('subagent', request, currentBall.entries) })
+
   // Enhance ToolsService.prototype.register so agent-authored plugins can use either
   // `defineTool(...)` OR shorthand `ctx.tools.register('my_tool', { description, inputSchema, execute })`
   // AND record Motor Memory telemetry (calls, errors, latency) on every tool invocation!
@@ -3480,6 +3638,8 @@ export async function mountX6BallRuntime(
       }
       proto.register = function (this: unknown, arg1: unknown, arg2?: unknown): () => void {
         const { definition, options } = normalizeShorthandToolDefinition(arg1, arg2)
+        // the repository door hook: budgets she can see (workflow agent() options, max_tokens on subagent and subagent_fork).
+        if (definition && typeof definition === 'object') describeBudgets(definition)
         if (definition && typeof definition === 'object' && 'execute' in (definition as object)) {
           const defRec = definition as { name?: string; execute?: (args: unknown, exec: unknown) => Promise<unknown> }
           const toolName = String(defRec.name || 'unknown')
@@ -5987,7 +6147,7 @@ export async function mountX6BallRuntime(
   const buildLiveStateMapText = (): string => {
     const entryNames = Object.keys(currentBall.entries)
     const customPrompts = Object.keys(promptSections)
-    const handoffText = readHandoffSafe().trim()
+    const handoffText = liveMapHandoffText(readHandoffSafe())
     const lines = [
       '# Auma X6.1 Live Runtime State Map',
       `- Active Ball ID: \`${currentBall.ballId.slice(0, 16)}\` (epoch ${String(currentBall.epoch)})`,
@@ -6014,6 +6174,58 @@ export async function mountX6BallRuntime(
       })
     } catch (ctxErr) {
       console.warn('x6-ball: could not register auma:live-state-map context', ctxErr)
+    }
+  }
+  // the one memory hook: her timeline (storage/memory-timeline.ts). At the end of every turn of every top-level conversation one
+  // record is appended to /dsh/home/auma/timeline/, with no model and no choice of hers; a voice exchange her home keeps
+  // gets a pointer record (the voice memory store's onAppended, below). A failure is counted, never thrown into a turn.
+  const timelineStore = createTimelineStore(vfs)
+  const timeline = createTimelineCapture({
+    store: timelineStore, nowMs: () => Date.now(), screen: withholdSecrets, isSpoken: isSpokenUserMessage,
+    titleOf: (session) => {
+      const titles = hostCtx.get('sessionTitle') as { get?: (session: unknown) => { title?: unknown } | undefined } | undefined
+      const title = titles?.get?.(session)?.title
+      return typeof title === 'string' ? title : ''
+    },
+  })
+  try {
+    hostCtx.on?.('session/event', (session: unknown, event: unknown) => { timeline.observe(session, event) })
+  } catch {
+    console.warn('x6-ball: could not register the timeline capture')
+  }
+  // the cost change hook: what her model steps cost in this page life, from the usage each committed step records (self-state.ts, the cost change block);
+  // shown read-only by x6_self_state as `spend`. Counted here only; nothing is stored or sent.
+  const spendTally = createSpendTally(Date.now())
+  try {
+    hostCtx.on?.('session/event', (session: unknown, event: unknown) => { spendTally.observe(session, event) })
+  } catch {
+    console.warn('x6-ball: could not register the spend count')
+  }
+  // The voice pointers a reload or a failed write left out, once a page life (never older history).
+  void timeline.voiceCatchUp()
+  // the one memory hook, the one memory: one memory. Every conversation of hers hears, once, what happened elsewhere since it last
+  // heard: what was said in Auma Live and what her other conversations did, read from her timeline. One user message
+  // (source `auma:voice-heard`) at the first step of a turn, beside (never inside) the runtime-context snapshot above, so
+  // a new record never re-sends her whole hand-off note (storage/memory-timeline.ts createHeardFeed). Her voice
+  // conversation (a spoken turn, or the home proven and marked) gets no voice exchange: it has the page's spoken-since block.
+  // The block as she asked for it; its cursor (/dsh/home/auma/timeline/heard.v1.json) is written through the
+  // timeline store's one queue when the block is logged, and a failed write is counted (x6_memory head shows it).
+  const voiceHeard = createHeardFeed({
+    vfs, nowMs: () => Date.now(), screen: withholdSecrets, newId: () => randomUUID(), store: timelineStore,
+    isVoice: (sessionId, messages) => voiceLookOnly.isMarked(sessionId) || messages.some(isSpokenUserMessage),
+    // Review (landing): only a turn captured as spoken tells a spoken hand-off (storage/memory-timeline.ts timelineSince).
+    spokenTurns: () => timeline.spokenTurns(),
+  })
+  {
+    try {
+      hostCtx.on?.('agent/pre-step', (payload: unknown, next: unknown) =>
+        voiceHeard.preStep(record(payload) ? payload : {}, next as () => Promise<unknown>))
+      // The conversation counts as having heard only once its session logs the message (a stopped step gives it again).
+      hostCtx.on?.('session/event', (session: unknown, event: unknown) => {
+        if (record(session) && typeof session.id === 'string') voiceHeard.logged(session.id, event)
+      })
+    } catch {
+      console.warn('x6-ball: could not register the one-memory pre-step listener')
     }
   }
 
@@ -7990,8 +8202,33 @@ export async function mountX6BallRuntime(
         skills: keptSkillRows(vfs),
         // ---- KYBERSKILL block end ----
         ...threadSyncSelfStateField(), // THREADSYNC hook (a copy; reads only); the thread sync switch: no key while switched off
+        spend: spendTally.snapshot(), // the cost change hook (a copy; reads only)
       }
     }
+    // the voice memory hook: x6_voice_memory, her voice memory's verifier (storage/voice-memory.ts). A read: her home's two
+    // chain files and the edge's managed_status (the same POST x6_voice_status makes), never a write.
+    registerBuiltin({ ...voiceMemoryToolSpec(() => ({ vfs, nowMs: () => Date.now(),
+      edgeStatus: async () => {
+        if (!origin || origin === 'null') throw new Error('x6_voice_memory requires a connected host origin')
+        const response = await fetch(new URL('/_host/voice', origin).href, { method: 'POST',
+          headers: { 'content-type': 'application/json' }, body: '{"action":"managed_status"}',
+          credentials: 'same-origin', signal: AbortSignal.timeout(6000) })
+        if (!response.ok) throw new Error(`managed_status ${String(response.status)}`)
+        return await response.json() as unknown
+      } }), (args) => { refuseBrokerAuthorityInputs(args); enforceToolInvocation(VOICE_MEMORY_TOOL, args) }),
+    output: jsonOut })
+    // the one memory hook: x6_memory, the one tool to ask her timeline (storage/memory-timeline.ts). A read of her home's files only.
+    const memoryDeps = () => ({ vfs, nowMs: () => Date.now(), screen: withholdSecrets, failures: () => timeline.failures(),
+      heardFailures: () => voiceHeard.cursorFailures(),
+      // Relay cfe9e459 (c): attempts beside failures, per page life.
+      captureCounts: () => timeline.counts(), heardCursorCounts: () => voiceHeard.cursorCounts() })
+    const memoryEnforce = (args: Record<string, unknown>): void => {
+      refuseBrokerAuthorityInputs(args)
+      enforceToolInvocation(MEMORY_TOOL, args)
+    }
+    registerBuiltin({ ...memoryToolSpec(memoryDeps, memoryEnforce), output: jsonOut })
+    // the voice tools hook: her voice scratch space (voice-scratch.ts), the one write her fast voice has, confined to its folder.
+    registerBuiltin({ ...voiceScratchToolSpec(vfs, (args) => { enforceToolInvocation(VOICE_SCRATCH_TOOL, args) }), output: jsonOut })
     registerBuiltin({ ...selfStateToolSpec(() => ({ origin, registry: selfStateRegistry, readFile: path => vfs.readFileSync(path),
       settle: () => workerCellHost().journal() })),
     output: jsonOut })
@@ -8007,6 +8244,16 @@ export async function mountX6BallRuntime(
       },
       consultShadow: (previous: unknown, candidate: unknown, known: { readonly canonicalManifestMatches?: unknown }) =>
         nucleusShadow.consult(previous, candidate, known) })), output: jsonOut })
+    // CKPT hook: x6_checkpoint_verify (checkpoint-verify-tool.ts), her look-only thread checkpoint verifier. GET only:
+    // each route is read with her own session, same origin, never cached; a route that does not answer JSON gives a null body.
+    registerBuiltin({ ...checkpointVerifyToolSpec(() => ({ // CKPT hook
+      get: async (path: string) => { // CKPT hook
+        const response = await fetch(new URL(path, origin), { method: 'GET', mode: 'same-origin', credentials: 'same-origin', // CKPT hook
+          redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(10_000) }) // CKPT hook
+        const body: unknown = await response.json().catch(() => null) // CKPT hook
+        return { status: response.status, body } // CKPT hook
+      }, // CKPT hook
+      nowMs: () => Date.now() })), output: jsonOut }) // CKPT hook
     registerBuiltin({
       name: 'x6_browser_estate',
       description: 'Read-only inventory of this browser\'s own estate, no GitHub or Mac needed: MemoryVfs tree with sizes and SHA-256 under /dsh/home/auma (and workspaces), session index and bounded transcript search over /dsh/home/sessions (legacy dirs included), IndexedDB persistence queue/tombstones/conflicts, Cordis fibers/organs/services/tools, Wasm pins and memory limits, receipt chain and checkpoint summary. /dsh/home/auma/private/** is reported by existence and size only. Output is bounded; page with cursor/limit.',
@@ -8055,9 +8302,12 @@ export async function mountX6BallRuntime(
         + '`promotion_status` inspects staged head promotions, `stagedRepoProposal`, live edge HEAD lease and publish/merge outcomes, '
         + '`promote_staged` promotes a staged head promotion (`/dsh/home/auma/staged/head-promotion.json` or `path`) directly to edge HEAD under an active owner session and adopts it locally, '
         + '`transcript` reads or appends to the DO-resident cross-browser continuity transcript, turn lease, and idempotent tool-call table (`/_head/transcript`), '
-        + '`tree` lists repository files (optionally under a directory `prefix`; up to 4000 entries within 224 KiB, `truncated` says when more exist), `read` reads one file (`path`, with optional `offset` and `length` for ranged reads; `nextOffset` names the next range), '
+        + '`tree` lists repository files (optionally under a directory `prefix`; up to 4000 entries within 224 KiB, `truncated` says when more exist), `read` reads one file (`path`): with no `offset`/`length` the whole file (files up to 2 MiB; the large-file reads); `offset` and `length` count UTF-8 BYTES, a page ends on a whole character, and every answer says `totalBytes`, `nextOffset` (send it as the next `offset`, null at the end) and `truncated`; no line is ever cut: a long line continues on the next page, so pages joined in order are the file byte for byte, ' // the repository reads hook: bytes
+
         + '`search` finds at most 200 bounded source lines and reports truncated/filesScanned; regex supports only literals, character classes, dot and anchors, without repetition, alternation or groups. '
-        + '`compare_files` compares two files from auto, mirror or GitHub sources, each up to 1 MiB and at most what one read returns (512 KiB). '
+        // the repository reads hook: search pages.
+        + 'One search answers one page: at most 128 files, 4 MiB of text, 200 matches (about 96 KiB of lines) and 20 seconds; when more remain it answers `truncated: true` and `next` ({ path, line }): send the same search with `cursor` set to `next` to continue (or a narrower `prefix`). A file over 512 KiB is still searched, whole and with its own line numbers, when it is first-party source or you name it as `prefix`; a file over 2 MiB (or a large one that is neither) is skipped and named with reason too_large. '
+        + '`compare_files` compares two files from auto, mirror or GitHub sources, each up to 1 MiB (a live mirror file up to 512 KiB). '
         + '`bytes` inspects a bounded byte slice, hex, and whole-file SHA-256 of `path`, '
         + '`state_diff` compares HEAD and MIRROR state against an optional `base` snapshot or ballId, '
         + '`diff` and `log` read history; `write` stages or writes a source file, `edit` replaces an exact unique `oldString` with `newString` in `path`, and `commit` commits explicit or staged changes. '
@@ -8073,8 +8323,14 @@ export async function mountX6BallRuntime(
         + 'A write, edit or commit of yours on main that touches a deployed path is refused with `REPO_PROPOSAL_REQUIRED` and a `next` field: that answer reaches you unchanged and stages no Touch ID card; '
         + 'do what `next` says (put the change on an auma/proposal/<slug> branch, then `stage_proposal`). '
         + 'Private files are limited to 512 KiB UTF-8 each; a commit or retained branch draft holds at most 64 files and 4 MiB of content, across at most eight retained branch drafts. JSON requests allow 12 MiB plus 32 KiB for escaping and metadata. '
+        // the body write hook: the real limit, in one sentence.
+        + 'Content always travels in the request body, never a URL, so one `write`, `edit` or `commit` carries a whole file of up to 512 KiB (a patch up to 256 KiB); a larger file answers REPO_FILE_TOO_LARGE, and BROKER_QUERY_INVALID only ever means a field the action does not take, named in `unexpected`. '
+        // the large-file reads hook: the largest files of her repository.
+        + 'An `edit` with `message`, or an `apply_patch`, on your branch changes a file of up to 2 MiB (her largest, ball-loader.ts, is about 614 KB): only the edit or the patch travels, the edge reads the file, applies it and commits, and the answer carries the per-file facts and hunk, never the file; an `edit` without `message` of a file over 512 KiB answers REPO_FILE_TOO_LARGE with `next` (a draft in this tab is the whole file, at most 512 KiB), and a file over 2 MiB answers REPO_FILE_TOO_LARGE with `limitBytes`. '
         + '`draft_discard` requires an explicit private auma branch and removes only its local pending content (optionally one path), never remote files or branches; main drafts cannot be discarded here. Use it after preserving needed content when a draft base becomes stale, then reread before restaging. '
         + '`stage_proposal` prepares the exact merge for the owner’s Sovereignty card; `merge_proposal` cannot execute here and requires that card’s Touch ID. Never supply approval tokens or credentials. '
+        // the repository reads hook: stage across a moved main.
+        + 'When main has moved past your proposal branch, `stage_proposal` with `allowRebase: true` first merges main into YOUR branch (one merge commit there, never main, never a force push) and stages the new head: the answer\'s `rebase` names the old and new head, and the card\'s checks start on that new head (ciStatus none or pending until they finish; stage again to refresh). A conflict answers `REBASE_CONFLICT` with `conflicts` (files changed on both sides), merges, writes and stages nothing, and leaves your branch as it was. Without it, a branch behind main answers REPO_MAIN_ANCESTRY_REQUIRED as before. '
         + '`withdraw_proposal` (`branch`, `headSha` of the staged card) takes back the merge card you staged; it merges nothing and needs no fingerprint. '
         + '`withdraw_staged_head` (`ballId` of the staged head candidate) takes back the head candidate staged for the owner (it frees the one staged slot); it publishes nothing and needs no fingerprint; your review file stays unless you pass `removeLocalFile: true` and it names that same ballId. '
         + '`sync_head_to_github` saves the edge HEAD to GitHub; `head_rollback` restores a previous head or organ; `modules` reads stored module bytes and hashes. '
@@ -8106,7 +8362,7 @@ export async function mountX6BallRuntime(
         },
         allowRebase: {
           type: 'boolean',
-          description: 'When true on promote_staged, permits rebasing onto current HEAD and records old->new parent/ballId.',
+          description: 'When true on promote_staged, permits rebasing onto current HEAD and records old->new parent/ballId. When true on stage_proposal, merges main into your auma/proposal branch first (REBASE_CONFLICT names the files and stages nothing).', // the repository reads hook: stage_proposal
         },
         to: { type: 'string', description: 'Target ballId (or prefix) for action="head_rollback".' },
         entryId: { type: 'string', description: 'Optional organ entry ID for action="head_rollback".' },
@@ -8126,6 +8382,7 @@ export async function mountX6BallRuntime(
         regex: { type: 'boolean', description: 'Use the bounded regex subset (default false); repetition, alternation and groups are refused.' },
         caseSensitive: { type: 'boolean', description: 'Whether search is case-sensitive (default false).' },
         maxMatches: { type: 'number', description: 'Maximum search matches, 1..200.' },
+        cursor: { type: 'json', description: 'For search: the `next` ({ path, line }) of the previous page of the same search, to continue where it stopped.' },
         leftPath: { type: 'string', description: 'Left file for compare_files.' },
         rightPath: { type: 'string', description: 'Right file for compare_files.' },
         leftSource: { type: 'string', enum: ['auto', 'mirror', 'github'], description: 'Left source for compare_files (default auto).' },
@@ -8139,8 +8396,8 @@ export async function mountX6BallRuntime(
         headSha: { type: 'string', description: 'Exact 40-hex branch commit from the staged merge body.' },
         treeSha: { type: 'string', description: 'Exact 40-hex branch tree from the staged merge body.' },
         expectedHeadSha: { type: 'string', description: 'Optional exact 40-hex private-branch base for write/edit/commit; retained drafts pin this automatically.' },
-        offset: { type: 'number', description: 'Zero-based offset (for action="bytes" or ranged action="read", default 0).' },
-        length: { type: 'number', description: 'Slice length (for action="bytes" 1..4096, or ranged action="read" 1..2097152; a read returns at most the 512 KiB file and names nextOffset).' },
+        offset: { type: 'number', description: 'Zero-based BYTE offset (for action="bytes" or ranged action="read", default 0; for read, the previous answer\'s nextOffset).' }, // the repository reads hook: bytes
+        length: { type: 'number', description: 'Slice length in BYTES (for action="bytes" 1..4096, or ranged action="read" 1..2097152; the page ends on a whole character; a read returns at most the 2 MiB file and names nextOffset).' }, // the repository reads hook: bytes
         base: { type: 'json', description: 'Base commit SHA (for action="diff") or optional ballId / { head?, mirror? } baseline (for action="state_diff").' },
         ids: { type: 'json', description: 'Optional array of entry IDs to filter `state_diff` results (e.g. ["seed-receipts", "seed-aura"]).' },
         limit: { type: 'number', description: 'Commit count (for action="log", 1..100, default 10; the newest that fit 224 KiB come back, `truncated` says when fewer) or row limit (for action="transcript").' },
@@ -8208,6 +8465,8 @@ export async function mountX6BallRuntime(
         if (args.action === 'transcript') return await executeTranscriptOp(args, exec)
         const filterIds = Array.isArray(args.ids) ? args.ids.map(String) : null
         const localOnlyKeys = new Set(['ids', 'allowRebase', 'to', 'entryId', 'hashes', 'includeCode', 'echo']) // HANDS hook: echo
+        // the repository reads hook: stage_proposal's allowRebase goes to the edge (which takes a boolean only); every other action keeps it local.
+        if (args.action === 'stage_proposal') localOnlyKeys.delete('allowRebase')
         const payload: Record<string, unknown> = Object.fromEntries(
           Object.entries(args).filter(
             ([key, value]) => value !== undefined && value !== null && !localOnlyKeys.has(key) && !(key === 'prefix' && value === ''),
@@ -8239,12 +8498,16 @@ export async function mountX6BallRuntime(
           const length = args.length
           if (!Number.isSafeInteger(offset) || Number(offset) < 0
             || (length !== undefined && (!Number.isSafeInteger(length) || Number(length) < 1 || Number(length) > REPO_RANGE_LENGTH))) throw new Error('REPO_BYTE_RANGE_INVALID')
-          const content = localContent.slice(Number(offset), length === undefined ? undefined : Number(offset) + Number(length))
+          // the repository reads hook: her draft pages by UTF-8 BYTES exactly as the edge's read does (whole characters, nothing cut).
+          const bytes = new TextEncoder().encode(localContent), total = bytes.length
+          if (Number(offset) > total) throw new Error('REPO_BYTE_RANGE_INVALID')
+          const boundary = (at: number): number => { while (at > 0 && at < total && ((bytes[at] ?? 0) & 0xc0) === 0x80) at--; return at }
+          const start = boundary(Number(offset))
+          let end = length === undefined ? total : boundary(Math.min(total, start + Number(length)))
+          if (end === start && start < total) { end = start + 1; while (end < total && ((bytes[end] ?? 0) & 0xc0) === 0x80) end++ }
+          const content = new TextDecoder().decode(bytes.subarray(start, end))
           return { ok: true, path: args.path, branch, content, staged: true, scope: 'caller', source: 'caller-draft', baseSha: draft?.baseSha,
-            ...(args.offset !== undefined || length !== undefined ? { offset, length: content.length,
-              totalBytes: new TextEncoder().encode(localContent).byteLength, totalLength: localContent.length,
-              nextOffset: Number(offset) + content.length < localContent.length ? Number(offset) + content.length : null,
-              truncated: Number(offset) + content.length < localContent.length } : {}) }
+            offset: start, length: end - start, totalBytes: total, nextOffset: end < total ? end : null, truncated: end < total, unit: 'bytes' }
         }
         if (isOwnerSessionMutator) {
           payload.ownerSession = true
@@ -8355,7 +8618,13 @@ export async function mountX6BallRuntime(
           // Her previous draft of this file, when the tab held one: the hunk she sees is the edit she just made on it.
           const previousDraft = localContent !== undefined && typeof args.path === 'string' && args.message === undefined
             && ['write', 'edit'].includes(actionText(args.action)) ? { path: args.path, previous: localContent } : undefined
-          return repoEchoAnswer(json, args.echo as RepoEchoMode | undefined, previousDraft)
+          const answer = repoEchoAnswer(json, args.echo as RepoEchoMode | undefined, previousDraft)
+          // the body write hook: a write or edit without `message` is a draft in this tab by design; the answer says so plainly.
+          if (answer.ok === true && args.message === undefined && args.dryRun !== true && ['write', 'edit'].includes(actionText(args.action))) {
+            return { ...answer, draftWaiting: true,
+              next: `Kept as a draft in this tab only; nothing is on ${branch} yet. Land it with x6_repo commit (branch, message), or pass message on the write or edit to land it in one call.` }
+          }
+          return answer
         }
         return json
       },
@@ -8607,9 +8876,10 @@ export async function mountX6BallRuntime(
     registerBuiltin({
       name: 'auma_handoff',
       description:
-        'Read or update `/dsh/home/auma/HANDOFF.md` (your live cross-session and cross-preset state map, '
-        + 'which is automatically injected into every session via `ctx.systemPrompt.context("auma:live-state-map")`). '
-        + 'Actions: `read`, `write`, `append`.',
+        'Read or update `/dsh/home/auma/HANDOFF.md` (your live cross-session and cross-preset state map). '
+        + 'Every session sees it through `auma:live-state-map`: whole when it is 12 KiB or less; otherwise its first section, '
+        + 'one line with its size and sha256, and its last 8 KiB, so the middle must be read here on purpose. '
+        + 'Actions: `read` (the whole note, or a byte range with `offset` and `bytes`; the answer says `totalBytes`), `write`, `append`.',
       parameters: {
         action: {
           type: 'string',
@@ -8618,17 +8888,17 @@ export async function mountX6BallRuntime(
           description: 'Handoff operation.',
         },
         content: { type: 'string', description: 'Markdown content to write or append.' },
+        offset: { type: 'number', description: 'read only: first byte to return (0 to the note size; default 0).' },
+        bytes: { type: 'number', description: 'read only: how many bytes to return (at least 1; default to the end of the note).' },
       },
       output: jsonOut,
-      execute(args: { action: string; content?: string }) {
+      execute(args: { action: string; content?: string; offset?: unknown; bytes?: unknown }) {
         const action = args.action || 'read'
         enforceToolInvocation('auma_handoff', { ...args, action })
         if (action === 'read') {
-          return Promise.resolve({
-            ok: true,
-            path: HANDOFF_PATH,
-            content: readHandoffSafe(),
-          })
+          const range = readHandoffRange(readHandoffSafe(), args)
+          if (range.ok === false) return Promise.resolve(range)
+          return Promise.resolve({ ok: true, path: HANDOFF_PATH, ...range })
         }
         if (action === 'write') {
           const text = String(args.content ?? '')
@@ -8908,9 +9178,12 @@ export async function mountX6BallRuntime(
         + '(never a value), which key name is in use, the resource kind, live conversations, and the last recorded closed failure '
         + 'stages at the owner door and the provider door (for example mint-401, jwt-bad). Also the last 4 calls (seconds '
         + 'granted, how each ended: owner-stop, deadline, provider-closed, unclaimed, journal-unavailable or error, and how long '
-        + 'it lasted), the last 8 turns (outcome, seconds to your first words, longest quiet) and the seconds left today and this '
-        + 'month; `runtime` adds the voice level and the newest stages this page noted. A read; it changes nothing. '
-        + 'See docs/auma/voice-bridge.md for what each stage means.',
+        + 'it lasted), the last 24 turns (each with its outcome, its closed reason or null, and integer milliseconds from the '
+        + 'transcript: journalMs, modelFirstMs, firstSpeechMs, endMs; calls, merged, cues, and up to 8 toolRounds by tool name '
+        + 'with sentMs, backMs and result), the counts (what was kept, merged, stopped, cued, handed or trimmed), the streamKeys '
+        + '(key names only, per block type, from the last call) and the seconds left today and this month; an edge from before '
+        + 'these fields may send fewer. `runtime` adds the voice level and the newest stages this page noted. Names and numbers '
+        + 'only, never words. A read; it changes nothing. See docs/auma/voice-bridge.md for what each field and stage means.',
       parameters: {},
       output: jsonOut,
       async execute(args: Record<string, unknown>) {
@@ -8945,10 +9218,10 @@ export async function mountX6BallRuntime(
         + 'smaller maxTokens leaves room for more calls). `model` may instead be a name from the composer pill (Opus 5.5, Fable 5.2, Sonnet 5.5, Kimi K3.1, GPT-6.1 Sol, '
         + 'GPT Astra, Meta Muse, GLM 5.3, Gemini Argon, Grok 4.7, DeepSeek Flash), which picks the provider too. Returns each answer with its latency, or its refusal code (e.g. PROVIDER_SECRET_NOT_CONFIGURED). '
         + 'Answers stream from the provider, so long ones are fine. Leave `maxTokens` and `timeoutMs` out unless you have a reason: '
-        + 'the defaults (32000, thinking included, on every provider; 600000 ms) give a thinking model room. A small cap starves a '
-        + 'thinking model: it spends the whole cap thinking and the answer comes back empty; a short time cuts it off before its first word. '
-        + 'If your own smaller maxTokens or timeoutMs starves it like that, it is asked once more at the default and the answer says '
-        + '`retried: { field, from, to }`. You may ask for up to 128000 and 1800000 ms. Every answer says `truncated` (true when it was cut) and `stopReason`; '
+        + 'with no `maxTokens` each model gets its own output ceiling from the model catalogue (128000 for the pill models; 32000 for a model the catalogue does not list), thinking included; the default time is 600000 ms. '
+        + 'A thinking model spends its cap on thinking first, so a small cap can leave no answer at all. '
+        + 'Nothing is ever asked twice: an answer cut by its cap comes back as it is, with `capped: true`, its `stopReason` and `tokensUsed`, so you pay once and decide. '
+        + 'You may ask for up to 128000 and 1800000 ms. Every answer says `truncated` (true when it was cut) and `stopReason`; '
         + 'a cut answer keeps its text so far and says in `next` how to get the rest; an answer still streaming at timeoutMs is cut there, not lost. '
         + 'Answers are advice to weigh, never authority.',
       parameters: {
@@ -8957,7 +9230,7 @@ export async function mountX6BallRuntime(
         targets: { type: 'json', description: 'Array of { provider, model, role? } for a parallel council (instead of provider/model).' },
         prompt: { type: 'string', required: true, description: 'What to ask (at most 256 KiB).' },
         system: { type: 'string', description: 'Optional system prompt (at most 64 KiB); a council role is appended per target.' },
-        maxTokens: { type: 'number', description: 'Answer length cap per target, thinking included (1..128000; default 32000). Leave it out unless you have a reason: a small cap starves a thinking model.' },
+        maxTokens: { type: 'number', description: 'Answer length cap per target, thinking included (1..128000; default: the model\'s own ceiling from the catalogue, else 32000). Leave it out unless you have a reason: a thinking model spends its cap on thinking first.' },
         timeoutMs: { type: 'number', description: 'Time limit per target in ms (1000..1800000, default 600000). Leave it out unless you have a reason.' },
       },
       output: jsonOut,
@@ -9372,13 +9645,16 @@ export async function mountX6BallRuntime(
       description:
         'Parallel subagent swarm dispatcher across configured provider doors (`anthropic`, `openrouter`, `deepseek`, `openai`, `xai`, `moonshot`, `prime`). '
         + 'Accepts either `tasks` (up to 12 independent subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`) '
-        + 'or `targets` + shared `prompt`. Executes all workers in parallel and returns individual worker outputs and latencies.',
+        + 'or `targets` + shared `prompt`. Executes all workers in parallel and returns individual worker outputs and latencies. '
+        + 'Each worker is one x6_consult call: with no `maxTokens` it asks with its model\'s own output ceiling, and a worker cut by its cap '
+        + 'comes back once, as it is, with `capped: true`, `stopReason` and `tokensUsed` (never asked again at a bigger number). '
+        + 'A thinking model spends its cap on thinking first, so a small cap can leave no answer at all.',
       parameters: {
         tasks: { type: 'json', description: 'Array of up to 12 parallel subagent tasks `{ id?, role?, provider?, model?, prompt, system? }`.' },
         targets: { type: 'json', description: 'Optional array of `{ provider?, model, role? }` when sharing a single `prompt`.' },
         prompt: { type: 'string', description: 'Shared prompt if `tasks` do not specify individual prompts.' },
         system: { type: 'string', description: 'Optional shared system prompt.' },
-        maxTokens: { type: 'number', description: 'Answer length cap per worker, thinking included (1..128000; leave it out for the x6_consult default 32000: a small cap starves a thinking model).' },
+        maxTokens: { type: 'number', description: 'Answer length cap per worker, thinking included (1..128000; leave it out for the model\'s own ceiling, else 32000).' },
         timeoutMs: { type: 'number', description: 'Time limit per worker in ms (1000..1800000; leave it out for the x6_consult default 600000).' },
       },
       output: jsonOut,
@@ -9704,6 +9980,21 @@ export async function mountX6BallRuntime(
     }
     // Her voice thread thinks at least a little: never `off` there.
     if (reasoningEffort === 'off' && voiceLookOnly.isMarked(sessionId)) return { status: 400, body: { ok: false, code: 'VOICE_EFFORT_OFF_REFUSED' } }
+    // Her three Claude models take exactly `auto` (her default: no level, the chat wire she ran before) and the
+    // five Claude levels (src/claude-efforts.ts; the voice level table), refused here before the adapter is asked.
+    // Closed lists written here, so this judge imports no open file.
+    if (provider === 'anthropic-door' && ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5'].includes(model)
+      && reasoningEffort !== undefined && !['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(reasoningEffort)) {
+      return { status: 400, body: { ok: false, code: 'SESSION_EFFORT_UNKNOWN' } }
+    }
+    // The named Claude levels (the Messages wire) are opt-in through the pill only. Her voice
+    // thread's own ask (the page's VOICE_EFFORT on spoken turns) is refused, as the adapter refused it at an earlier commit, so
+    // her voice turns stay on the chat wire she ran before. `auto` and no level pass. No level now means the
+    // route default (`medium`, the Messages wire, cached); only a stored `auto` is the chat wire. This rule is unchanged.
+    if (provider === 'anthropic-door' && ['claude-fable-5-2', 'claude-opus-5-5', 'claude-sonnet-5-5'].includes(model)
+      && reasoningEffort !== undefined && reasoningEffort !== 'auto' && voiceLookOnly.isMarked(sessionId)) {
+      return { status: 400, body: { ok: false, code: 'VOICE_CLAUDE_LEVEL_OPT_IN' } }
+    }
     type AgentLike = { model?: { select?: (selection: Record<string, unknown>) => void } }
     const typert = hostCtx.get('typert') as { lookups?: { get?: (key: string) => { resolve(id: string): Promise<unknown> } | undefined } } | undefined
     const lookup = typert?.lookups?.get?.('agent')
@@ -9797,6 +10088,111 @@ export async function mountX6BallRuntime(
   }
   // ---- VOICEAWARE block end ----
 
+  /** Her tool `tool` as the fast voice may call it: the global registry first, else as her voice preset
+   * (auma-alien) registers it. Her home-file tools (read, glob, grep, ...) are mounted only in that preset's scope
+   * (packages/bundle/web-app/cordis.patch.yml disables the host-plane ones), so a global lookup alone never finds them.
+   * The preset's lease is held while the call runs (`release` after). */
+  const voiceToolDefinition = async (tool: string): Promise<{ def: ToolDefinitionLike | undefined; release: () => Promise<void> }> => {
+    const none = async (): Promise<void> => {}
+    const global = hostCtx.tools?.get?.(tool)
+    if (global) return { def: global, release: none }
+    const presets = hostCtx.get('agentPresets') as { acquireScope?(id?: string): Promise<{ key: object } & AsyncDisposable> } | undefined
+    if (typeof presets?.acquireScope !== 'function') return { def: undefined, release: none }
+    const lease = await presets.acquireScope(VOICE_HOME_PRESET)
+    const release = async (): Promise<void> => { await lease[Symbol.asyncDispose]() }
+    try { return { def: hostCtx.tools?.get?.(tool, lease.key), release } } catch (error) { await release(); throw error }
+  }
+
+  /** One fast-voice tool call (see the `/voice-tool` route). Without `from`, the output is cut at
+   * VOICE_TOOL_OUTPUT_BYTES with a note (her page's own awareness reads). With `from` (the `look` tool always sends it),
+   * one page of VOICE_TOOL_PAGE_BYTES from that byte is answered, with one note saying where to ask for more. */
+  /** Her home's chain files, written only through `/__x6__/voice-memory` (one writer, in order). */
+  const voiceMemory = createVoiceMemoryStore(vfs, (records) => { timeline.voiceAppended(records) })
+  const runVoiceMemory = async (method: string, bodyText: string): Promise<{ status: number; body: unknown }> => {
+    let input: unknown = null
+    if (method === 'POST' && bodyText.length <= VOICE_MEMORY_LIMITS.bodyBytes) {
+      try { input = JSON.parse(bodyText) } catch { /* refused below */ }
+    }
+    if (!record(input) || (input.action !== 'head' && input.action !== 'append')) {
+      return { status: 400, body: { ok: false, code: 'VOICE_MEMORY_INVALID' } }
+    }
+    if (input.action === 'head') return { status: 200, body: await voiceMemory.head() }
+    return { status: 200, body: await voiceMemory.append(input.items) }
+  }
+
+  const runVoiceTool = async (method: string, bodyText: string): Promise<{ status: number; body: unknown }> => {
+    let input: unknown = null
+    if (method === 'POST' && bodyText.length <= VOICE_TOOL_BODY_BYTES) { try { input = JSON.parse(bodyText) } catch { /* refused below */ } }
+    if (!record(input) || typeof input.name !== 'string' || (input.from !== undefined && !(Number.isSafeInteger(input.from) && (input.from as number) >= 0))) {
+      return { status: 400, body: { ok: false, ran: false, code: 'VOICE_TOOL_INVALID' } }
+    }
+    const tool = input.name.replace(/-/g, '_')
+    const args: unknown = input.args === undefined ? {} : input.args
+    const from = typeof input.from === 'number' ? input.from : null
+    let found: { def: ToolDefinitionLike | undefined; release: () => Promise<void> }
+    try { found = await voiceToolDefinition(tool) } catch { found = { def: undefined, release: async () => {} } }
+    const def = found.def
+    let refused: string | undefined
+    try {
+      const origin = voiceToolOrigin(tool)
+      // V4: her voice scratch space is the one write the fast voice has; it confines itself (voice-scratch.ts). Only the
+      // built-in this runtime registered passes, never an organ's or a plugin's tool of that name.
+      const scratch = tool === VOICE_SCRATCH_TOOL && origin.kind === 'builtin'
+      // Review: `recall` of her memory organ at its checked bytes only (voice-organ-pins.ts VOICE_RECALL_PIN). Its answer, as
+      // every answer here since the voice safety change, goes through the same secret-shape filter as x6_threads.
+      const recall = tool === VOICE_RECALL_PIN.tool && origin.kind === 'organ' && origin.organId === VOICE_RECALL_PIN.organId
+        && origin.organSha === VOICE_RECALL_PIN.sha256
+      const githubClass = tool === 'x6_github' && record(args) ? githubApiClass(args) : null
+      refused = scratch || recall ? undefined : voiceVerdict({ tool, args, origin, githubClass })
+      // Review: at voice level open (where a spoken governed turn calls every tool), a read her capability index knows as
+      // a read runs too; still never a change (voice-read-only.ts voiceOpenFastVerdict).
+      if (refused !== undefined && voiceLookOnly.level() === 'open' && def) {
+        const parameters = summarizeParameters(def.parameters)
+        const declaration = def as { readOnly?: unknown; mutating?: unknown }
+        const mutation = { ...classifyToolMutation(tool, parameters, declaration), basis: classifyReadBasis(tool, parameters, declaration) }
+        // The runtime's own classifier for this exact call (the one enforceToolInvocation uses) must ALSO class
+        // it 0; it is one of two locks, beside the written read and VOICE_FAST_NOT_READS (voice-read-only.ts).
+        const runtimeClass = (call: Record<string, unknown>): number => classifyActionIrreversibility(call, currentBall.entries)
+        const parameterNames = parameters.map(parameter => parameter.name)
+        const mountedReadOnly = mountedToolsReadOnly.get(tool) === true // Her registry's fact, not the name
+        const call = { tool, args, origin, githubClass, mutation, parameterNames, mountedReadOnly, runtimeClass }
+        refused = voiceOpenFastVerdict(call, refused)
+      }
+      // A path argument is judged at its real location too (a link outside her private folder into it).
+      if (refused === undefined && !scratch) refused = voiceRealPathRefusal(tool, args, path => vfs.realpathSync(path))
+    } catch {
+      refused = 'VOICE_LOOK_ONLY: I could not check that call, so I did not run it.'
+    }
+    try {
+      if (refused !== undefined) return { status: 200, body: { ok: true, ran: false, refused } }
+      if (!def || typeof def.execute !== 'function') return { status: 200, body: { ok: true, ran: false, refused: voiceRefusal(tool) } }
+      enforceToolInvocation(tool, args, currentBall.entries)
+      // Her scratch tool is told the call is her fast voice's (its notes then carry the provenance header).
+      const exec = { signal: AbortSignal.timeout(VOICE_TOOL_WAIT_MS), [VOICE_SCRATCH_FAST_CALL]: Date.now() }
+      const out: unknown = await def.execute(args, exec)
+      // JSON.stringify answers undefined for undefined (its type says string).
+      // the voice safety change V2-1: grep and glob judge only the folder they search; each file they found is judged as `read` judges
+      // one (private folder, key-like name, thread logs, memory stores) and withheld, with a count. Then EVERY answer is
+      // screened whole for secret shapes before it leaves for the bridge (before any page or cut), as x6_threads is.
+      const searched = withholdVoiceSearchEntries(tool, args, out)
+      const value = searched.out
+      const json = typeof value === 'string' ? value : (JSON.stringify(value) as string | undefined) ?? ''
+      const raw = searched.withheld > 0 ? `${json}\n${voiceSearchWithheldNote(searched.withheld)}` : json
+      const text = withholdSecrets(raw)
+      if (from !== null) return { status: 200, body: { ok: true, ran: true, tool, output: voiceToolPage(text, from) } }
+      const bytes = new TextEncoder().encode(text)
+      const kept = new TextDecoder().decode(bytes.subarray(0, VOICE_TOOL_OUTPUT_BYTES)).replace(/\uFFFD$/, '')
+      const output = bytes.byteLength > VOICE_TOOL_OUTPUT_BYTES
+        ? `${kept}\n[cut at ${String(VOICE_TOOL_OUTPUT_BYTES)} bytes of ${String(bytes.byteLength)}]` : text
+      return { status: 200, body: { ok: true, ran: true, tool, output } }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { status: 200, body: { ok: false, ran: true, tool, error: withholdSecrets(message).slice(0, 600) } }
+    } finally {
+      await found.release().catch(() => {})
+    }
+  }
+
   const handleControlRequest = async (
     method: string,
     path: string,
@@ -9851,6 +10247,16 @@ export async function mountX6BallRuntime(
         }
         return await selectSessionModel(input)
       }
+      // Her FAST voice's tool call (deploy/cloudflare/src/voice-fast.mjs `look`), sent by the edge to her tab and
+      // from her tab here. It is judged by the SAME look-only classification as a spoken governed turn (voiceVerdict, with
+      // the origin from her own registry), at EVERY voice level: the fast voice may run exactly what a look-only spoken
+      // turn may run, and a refusal is that turn's own words. Then her own registered tool runs it (the invocation check
+      // first, as every call), at most VOICE_TOOL_WAIT_MS. Closed: any fault answers `ran: false`.
+      if (sub === '/voice-tool') return await runVoiceTool(method, bodyText)
+      // Her voice memory's chain, kept in her home (storage/voice-memory.ts). `head` and `append` only; the
+      // page carries the edge's `memory` frames here. The same guards as the voice-tool route: this page's own worker
+      // channel only, POST, a body cap; every item is checked before anything is written.
+      if (sub === '/voice-memory') return await runVoiceMemory(method, bodyText)
       if (sub === '/stage-head-promotion' && new TextEncoder().encode(bodyText).byteLength > STAGED_HEAD_PROMOTION_MAX_BYTES) {
         return { status: 413, body: { ok: false, code: 'STAGED_PROMOTION_BYTE_LIMIT' } }
       }

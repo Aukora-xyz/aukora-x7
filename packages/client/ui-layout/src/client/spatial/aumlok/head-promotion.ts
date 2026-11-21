@@ -6,7 +6,8 @@
  * HEAD classifies every publish itself (`classifyHeadTransition`, deploy/cloudflare/src/owner-grant-policy.mjs): a change
  * to a governance organ's execution is Class 3, and HEAD commits it only with a passkey approval bound to the exact
  * candidate (`headPromotionBinding`), consumed in the commit's own transaction, after its own checks (parent, writer
- * lease, qualification). A later change widens the governance set to named organs (fifteen today) and to any entry that
+ * lease, qualification). A later change widens the governance set to named organs (sixteen today, the kernel
+ * included) and to any entry that
  * declares `governance` (on itself or in its config, anything but false), on either side of the change; the page follows.
  *
  * WHAT IS BUILT HERE, AND WHAT IS ONLY PROPOSED:
@@ -28,11 +29,12 @@ import { canonicalJson } from './class3-approval.ts'
  * The governance organs HEAD protects by name: `T2_ONLY_ORGANS` (server/ball-transition.mjs), which the edge uses as
  * `OWNER_GOVERNANCE_ORGANS` (deploy/cloudflare/src/owner-grant-policy.mjs). The same names in the same order; a spec checks
  * this list against the edge's export, so a widening there fails here instead of drifting (it stood at eight until Wave 3
- * while the edge had grown to fifteen).
+ * while the edge had grown to fifteen; sixteen since the kernel joined).
  */
 export const GOVERNANCE_ORGANS: readonly string[] = [
   'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura', 'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
   'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys', 'auma-scion', 'seed-boot',
+  'auma-kernel',
 ]
 export const HEAD_PROMOTION_SCHEMA = 'aukora.class3.head-promotion.v1'
 /**

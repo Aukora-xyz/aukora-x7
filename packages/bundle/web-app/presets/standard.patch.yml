@@ -85,6 +85,21 @@
                     - provider: deepseek-official
                       model: deepseek-v4-pro
                       thresholdRatio: 0.35
+                    # the cost change (2026-11-17): her Claude conversations compact near 200,000 tokens (0.2 of their declared
+                    # 1,000,000 window, which stays honest) and keep about the newest 40,000 verbatim (4%); the summary is written
+                    # by the conversation's own model. Before this they compacted only at 800,000.
+                    - provider: anthropic-door
+                      model: claude-fable-5-2
+                      thresholdRatio: 0.2
+                      retainRatio: 0.04
+                    - provider: anthropic-door
+                      model: claude-opus-5-5
+                      thresholdRatio: 0.2
+                      retainRatio: 0.04
+                    - provider: anthropic-door
+                      model: claude-sonnet-5-5
+                      thresholdRatio: 0.2
+                      retainRatio: 0.04
               - id: command-compact
                 name: '@deepseek-ai/dsh-command-compact'
               - id: tool-result-pruner

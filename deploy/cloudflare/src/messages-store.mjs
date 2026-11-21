@@ -369,6 +369,34 @@ function identityView(state) {
     : { npub: null, pubkey: null, signing: 'unavailable' }
 }
 
+/** The fixed stand-in a nightly copy carries in place of the Nostr secret key. It is not a key and cannot be
+ * converted to one. A restored value that still carries it is refused as MESSAGES_STATE_CORRUPT by every
+ * validated path, provisioning included: strip or replace `identity` before writing the value back. */
+export const NIGHTLY_REDACTED_SECRET = '[nightly-copy:redacted]'
+
+/**
+ * Copy-time projection of the stored messages value: everything kept except the one secret field. Public
+ * identity fields stay so a copy still shows whose transcript it is. Pure; never mutates the stored value.
+ * @param {unknown} state Value read under {@link MESSAGES_STORAGE_KEY}.
+ * @returns {unknown} The value, or a shallow copy with `identity.secretKey` replaced by {@link NIGHTLY_REDACTED_SECRET}.
+ */
+export function redactMessagesForCopy(state) {
+  const refuseCopy = () => { throw Object.assign(new Error('Messages value cannot be redacted safely'), { code: 'NIGHTLY_REDACT_FAILED' }) }
+  if (!fields(state, ['version', 'conversations', 'turns'], ['identity']) || state.version !== VERSION
+    || !Array.isArray(state.conversations) || !Array.isArray(state.turns)) refuseCopy()
+  if (Object.hasOwn(state, 'identity')) {
+    const identity = state.identity
+    if (!fields(identity, ['version', 'secretKey', 'pubkey', 'npub'])
+      || typeof identity.version !== 'string' || typeof identity.secretKey !== 'string'
+      || typeof identity.pubkey !== 'string' || typeof identity.npub !== 'string') refuseCopy()
+  }
+  if (state === null || typeof state !== 'object' || Array.isArray(state)) return state
+  const identity = state.identity
+  if (identity === null || typeof identity !== 'object' || Array.isArray(identity)
+    || !Object.hasOwn(identity, 'secretKey')) return state
+  return { ...state, identity: { ...identity, secretKey: NIGHTLY_REDACTED_SECRET } }
+}
+
 /**
  * Read public signing metadata without initializing messages, signing, or contacting relays.
  * Existing private state is validated before projection; secrets never leave the transaction.

@@ -9,9 +9,10 @@
  * When she changes a pinned organ, its SHA-256 no longer matches and that organ leaves voice until it is checked again
  * ("that organ changed since it was checked for voice", R10). Read by `voiceVerdict` in voice-read-only.ts.
  *
- * Held, though proven read-only: `recall` (auma-memory-domain). It returns the words of every thread in this browser
- * verbatim, and voice has no secret-shape filter around it yet (R8 lets thread text into voice only through that
- * filter). Its row comes back when recall's answer in voice passes through the same filter as `x6_threads`.
+ * Held from a spoken governed turn, though proven read-only: `recall` (auma-memory-domain). It returns the words of every
+ * thread in this browser verbatim, and a governed voice turn has no secret-shape filter around it (R8 lets thread
+ * text into voice only through that filter). Her FAST voice's route (ball-loader.ts runVoiceTool) runs it from these exact
+ * bytes only (VOICE_RECALL_PIN) and passes its answer through the same filter as `x6_threads` (secret-shapes.ts).
  *
  * Left out on purpose (reasons in the spec and the handoff): `remember` and every writing action; `auma_memory_dag`
  * `dag_lineage` (its `nodeId` is joined into a file path unchecked, so `../` reads outside the memory folder, the
@@ -40,6 +41,10 @@ export interface VoiceOrganPin {
 }
 
 const MEMORY_DOMAIN_SHA = '918c397151db638bc4864631985ae92e2be86981978ece6409abe0feb705fba7'
+
+/** `recall` of the memory organ at its checked bytes: run only by the fast voice's route, its answer screened (above). */
+export const VOICE_RECALL_PIN = Object.freeze({ tool: 'recall', organId: 'auma-memory-domain', sha256: MEMORY_DOMAIN_SHA,
+  proof: 'tests/x6/voice-fast-tools.spec.ts "recall from the pinned memory organ"' })
 
 /** The checked rows. Each `proof` is a test name in tests/x6/voice-organ-readonly.spec.ts. */
 export const VOICE_ORGAN_PINS: readonly VoiceOrganPin[] = Object.freeze([

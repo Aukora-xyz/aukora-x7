@@ -1,4 +1,5 @@
 /** Ordered v2 mirror transport on Durable Object storage; no filesystem or local-host dependency. */
+import { NIGHTLY_PAGE_ROUTE, nightlyPageResponse } from './nightly-copy.mjs'
 import { canonicalBootstrap, digest, BOOTSTRAP_LIMITS, readBoundedBootstrapJson, createMirrorUpdate, MIRROR_UPDATE_LIMITS, CLOUD_WAKE_PATHS, CLOUD_WAKE_LIMITS, CLOUD_WAKE_CHECKPOINT_PATH, cloudWakeTextSafe } from './head-do.mjs'
 import { canonicalJson } from './owner-grant-policy.mjs'
 import { staleHeartbeatFacts } from '../../../server/aura-rules.mjs'
@@ -19,6 +20,7 @@ import { readTombstone } from './mirror-slot-tombstone.mjs' // ANYBROWSER hook
 import { noteWrote, recordHomePending, validHomeInput, worldStatus } from './world-home.mjs' // ANYBROWSER hook: when a browser last wrote; home pending
 import { threadCommit, threadLimits, threadPathAllowed } from './thread-log.mjs' // ANYBROWSER hook: the thread log's MIRROR half (its ONE path rule)
 import { threadSyncMode } from './thread-sync-mode.mjs' // THREAD_SYNC (off, pull, on), told to the client on the thread index only
+import { WITNESS_JOURNAL_PATHS } from './witness.mjs' // WITNESS hook: her two append-only chain files, in record order
 
 const BOOTSTRAP = 'mirror:bootstrap:v1'
 // JOIN hook (MUST 2b): the thread ops that write, and the named answer that rolls a committing transaction back.
@@ -406,8 +408,12 @@ const storedChunk = async (tx, id, metadata, index) => {
   return chunk
 }
 
-/** Canonical journals preserve their exact byte prefixes; existing content-addressed DAG nodes are immutable. */
-const protectedHistory = path => path === CLOUD_WAKE_CHECKPOINT_PATH || /^\/dsh\/home\/auma\/seed\/(receipts\.v3|checkpoints\.v1)\.jsonl$/.test(path) ? 'append'
+/** Canonical journals preserve their exact byte prefixes; existing content-addressed DAG nodes are immutable.
+ * Her voice memory's chain file is one of them (only ever grows); its words file is NOT (it must stay
+ * deletable: deleting words never touches the chain). Her timeline's chain file is under the same rule; its
+ * words file is not. */
+const protectedHistory = path => path === CLOUD_WAKE_CHECKPOINT_PATH || /^\/dsh\/home\/auma\/seed\/(receipts\.v3|checkpoints\.v1)\.jsonl$/.test(path)
+  || path === '/dsh/home/auma/voice/chain.v1.jsonl' || path === '/dsh/home/auma/timeline/chain.v1.jsonl' ? 'append'
   : /^\/dsh\/home\/auma\/memory\/dag\/(nodes\/)?[a-f0-9]{64}\.json$/.test(path) ? 'immutable' : null
 
 async function enforceHistoryPrefixes(tx, before, after) {
@@ -512,6 +518,42 @@ async function wakeFileTail(tx, path, limit) {
   return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes.subarray(cut)), truncated: true, totalBytes: metadata.bytes, fromByte: cut, screen }
 }
 // ---- WAKE block end ----
+
+// ---- WITNESS block begin ----
+/** WITNESS hook: the internal route the witness object reads her journal facts from (the Worker forwards no caller to it). */
+export const WITNESS_JOURNALS_ROUTE = '/_mirror/witness-journals'
+/** WITNESS hook: at most the newest 64 KiB of each journal is read. */
+export const WITNESS_JOURNAL_TAIL_BYTES = 64 * 1024
+/**
+ * WITNESS hook: each of her append-only chain files as `{ path, bytes, last }`: its byte length and the SHA-256 (lower-case
+ * hex) of its last line (the bytes after the last newline before its end, a trailing newline not counted). An absent file
+ * is `bytes: 0, last: ""`. Only the storage chunks holding the newest WITNESS_JOURNAL_TAIL_BYTES are read; a last line
+ * that does not fit in them refuses MIRROR_WITNESS_OVER_BOUND (413). Reads only; one transaction.
+ */
+export async function readWitnessJournals(storage) {
+  return storage.transaction(async tx => {
+    const journals = []
+    for (const path of WITNESS_JOURNAL_PATHS) {
+      const file = await wakeFileMetadata(tx, path)
+      if (file === null || file.metadata.bytes === 0) { journals.push({ path, bytes: 0, last: '' }); continue }
+      const { id, metadata } = file
+      const chunkBytes = CHUNK_CHARS / 4 * 3
+      const from = Math.max(0, metadata.bytes - WITNESS_JOURNAL_TAIL_BYTES), first = Math.floor(from / chunkBytes)
+      let b64 = ''
+      for (let index = first; index < metadata.chunks; index++) b64 += await storedChunk(tx, id, metadata, index)
+      const binary = atob(b64)
+      if (binary.length !== metadata.bytes - first * chunkBytes) fail('MIRROR_WITNESS_FILE_INVALID', 503)
+      const tail = Uint8Array.from(binary.slice(from - first * chunkBytes), char => char.charCodeAt(0))
+      const end = tail[tail.length - 1] === 0x0a ? tail.length - 1 : tail.length
+      const newline = end === 0 ? -1 : tail.subarray(0, end).lastIndexOf(0x0a)
+      if (newline === -1 && from > 0) fail('MIRROR_WITNESS_OVER_BOUND', 413)
+      const line = tail.subarray(newline + 1, end)
+      journals.push({ path, bytes: metadata.bytes, last: [...new Uint8Array(await crypto.subtle.digest('SHA-256', line))].map(byte => byte.toString(16).padStart(2, '0')).join('') })
+    }
+    return { ok: true, journals }
+  })
+}
+// ---- WITNESS block end ----
 
 async function wakeFence(tx, seedId) {
   const bootstrap = await tx.get(BOOTSTRAP), fence = await tx.get(FENCE)
@@ -1596,7 +1638,10 @@ export class MirrorDO {
     try { await Promise.race([operation, timeout]) }
     finally { clearTimeout(timer) }
   }
-  fetch(request) { return this.diagnostics.observe(request, () => this.handleRequest(request)) }
+  fetch(request) {
+    if (new URL(request.url).pathname === NIGHTLY_PAGE_ROUTE) return nightlyPageResponse(request, this.storage, 'MIRROR')
+    return this.diagnostics.observe(request, () => this.handleRequest(request))
+  }
   // JOIN hook: one thread step at a time in this object, and a save that is waiting goes first. A home
   // save is counted from its arrival to its answer (a counter only: no storage operation, no change to its answer). A
   // `/_mirror/thread` call takes the one thread turn, then, while saves are waiting, lets them go first (at most
@@ -1685,6 +1730,11 @@ export class MirrorDO {
         if (path === '/_mirror/bootstrap' && request.method === 'POST') return reply(await bootstrapMirror(this.storage, await readEnvelope(request)))
         const bootstrap = await mirrorBootstrapStatus(this.storage)
         if (bootstrap.phase !== 'ready' || request.headers.get('x-x6-bootstrap-seed') !== bootstrap.seedId) return reply({ ok: false, code: 'BOOTSTRAP_REQUIRED', phase: bootstrap.phase }, 503)
+        // WITNESS hook: her journal facts for the witness object, internal only: GET, no query, no body, this world's seed.
+        if (path === WITNESS_JOURNALS_ROUTE) { // WITNESS hook
+          if (request.method !== 'GET' || url.search || url.href.endsWith('?') || url.hash || request.body !== null) return reply({ ok: false, code: 'MIRROR_WITNESS_REQUEST_INVALID' }, 400) // WITNESS hook
+          return reply(await readWitnessJournals(this.storage)) // WITNESS hook
+        } // WITNESS hook
         // ANYBROWSER hook: the world budget, internal only: the Worker forwards no public request to this path (it answers 501),
         // ANYBROWSER hook: and like every route here it needs the internal mark and this world's seed. One transaction per call.
         if (path === '/_mirror/world/budget') { // ANYBROWSER hook

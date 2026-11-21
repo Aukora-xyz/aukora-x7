@@ -54,6 +54,9 @@ export const DECISION_6_FILES = Object.freeze([
 
 /** Single files: the edge's judges and doors, the transition rule, the deploy and build, the pins, her ledger. */
 export const FROZEN_FILES = Object.freeze([
+  // her checkpoint verifier and the look-only tool that reads the edge for it (card 1)
+  'packages/experimental/webworker-runtime/src/x6/checkpoint-verify.ts',
+  'packages/experimental/webworker-runtime/src/x6/checkpoint-verify-tool.ts',
   'deploy/cloudflare/src/cloud-brokers.mjs',
   'deploy/cloudflare/src/owner-grant-policy.mjs',
   'deploy/cloudflare/src/night-grant.mjs',
@@ -72,6 +75,8 @@ export const FROZEN_FILES = Object.freeze([
   'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', // the cell-call journal runs inside the cell host
   // the two-hosts handoff calls the edge and writes the journal
   'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+  // her workflow executor runs her own scripts inside the worker; ball-loader hands it the tool gate
+  'packages/experimental/webworker-runtime/src/x6/workflow-executor.ts',
   // ---- CORDECHO block begin ----
   // the Cord commit rule calls the edge, writes the journal and commits the head she holds
   'packages/experimental/webworker-runtime/src/x6/cord-run.ts',
@@ -85,6 +90,10 @@ export const FROZEN_FILES = Object.freeze([
   'packages/experimental/webworker-runtime/src/x6/menger-run.ts',
   'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
   // ---- MENGERHIVE block end ----
+  // ---- VOICE-TOOLS block begin ----
+  // her voice scratch space: the one write her fast voice has, and the confinement that keeps it in its folder
+  'packages/experimental/webworker-runtime/src/x6/voice-scratch.ts',
+  // ---- VOICE-TOOLS block end ----
   // ---- MANDATE block begin ----
   // the owner mandate: its policy, and the card's code that decides the terms he is shown before his passkey
   'deploy/cloudflare/src/owner-mandate.mjs',
@@ -151,12 +160,12 @@ export const FROZEN_ABSENT_FILES = Object.freeze([
   'deploy/cloudflare/src/__tests__/package.json',
 ])
 
-/** The 15 governance organs (server/ball-transition.mjs T2_ONLY_ORGANS; equality pinned by frozen-paths.test.mjs). */
+/** The 16 governance organs (server/ball-transition.mjs T2_ONLY_ORGANS; equality pinned by frozen-paths.test.mjs). */
 export const FROZEN_ORGAN_IDS = Object.freeze([
   'seed-receipts', 'seed-superagent', 'seed-pearl', 'seed-aura',
   'seed-predict', 'seed-recall', 'seed-memory', 'auma-body-map',
   'seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys',
-  'auma-scion', 'seed-boot',
+  'auma-scion', 'seed-boot', 'auma-kernel',
 ])
 
 /** Their sources in the repo copy of her home. */
@@ -214,11 +223,16 @@ export const OPEN_NEW_PATHS = Object.freeze([
 
 /** Closed although an open pattern covers them: her tools, the cell pins and her storage. */
 export const CLOSED_INSIDE_OPEN = Object.freeze([
+  // the two files card 1 adds are named closed here as well: an open path that holds them would let a later proposal edit the judge
+  'packages/experimental/webworker-runtime/src/x6/checkpoint-verify.ts',
+  'packages/experimental/webworker-runtime/src/x6/checkpoint-verify-tool.ts',
   'packages/experimental/webworker-runtime/src/x6/ball-loader.ts',
   'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
   'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', // the cell-call journal runs inside the cell host
   // the two-hosts handoff calls the edge and writes the journal
   'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+  // her workflow executor runs her own scripts inside the worker; ball-loader hands it the tool gate
+  'packages/experimental/webworker-runtime/src/x6/workflow-executor.ts',
   // ---- CORDECHO block begin ----
   // the Cord commit rule calls the edge, writes the journal and commits the head she holds
   'packages/experimental/webworker-runtime/src/x6/cord-run.ts',
@@ -232,6 +246,10 @@ export const CLOSED_INSIDE_OPEN = Object.freeze([
   'packages/experimental/webworker-runtime/src/x6/menger-run.ts',
   'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
   // ---- MENGERHIVE block end ----
+  // ---- VOICE-TOOLS block begin ----
+  // her voice scratch space: the one write her fast voice has, and the confinement that keeps it in its folder
+  'packages/experimental/webworker-runtime/src/x6/voice-scratch.ts',
+  // ---- VOICE-TOOLS block end ----
   // ---- MANDATE block begin ----
   // the owner mandate's card: it decides the terms he is shown before his passkey
   'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts',

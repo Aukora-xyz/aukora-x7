@@ -33,6 +33,18 @@ describe('proposal branch guard', () => {
     expect(calls.filter(call => call.path === '/_host/repo').map(call => call.body)).toEqual([
       { action: 'stage_proposal', branch: 'auma/proposal/receipts-fix', title: 'Fix', ownerSession: true }])
   })
+
+  it('stage_proposal sends allowRebase to the edge; every other action still keeps it local', async () => {
+    const { tool, calls } = await mountE4({ respond: (call: Call) => call.path === '/_host/repo' ? Response.json({ ok: true, staged: true }) : null })
+    const repo = tool('x6_repo')
+    expect(repo.description).toContain('`allowRebase: true`')
+    calls.length = 0
+    await repo.execute({ action: 'stage_proposal', branch: 'auma/proposal/receipts-fix', title: 'Fix', allowRebase: true })
+    await repo.execute({ action: 'read', path: 'docs/a.md', allowRebase: true })
+    expect(calls.filter(call => call.path === '/_host/repo').map(call => call.body)).toEqual([
+      { action: 'stage_proposal', branch: 'auma/proposal/receipts-fix', title: 'Fix', allowRebase: true, ownerSession: true },
+      { action: 'read', path: 'docs/a.md' }])
+  })
 })
 
 /**

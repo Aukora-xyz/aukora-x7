@@ -350,7 +350,8 @@ describe('the journal, her self-state, the write set, the classifications', () =
     await new Promise(resolve => setTimeout(resolve, 2))
     const two = await cell.execute({ action: 'forge', wat: constantWat(2), name: 'two' }) as J
     const state = await m.tool('x6_self_state').execute({}) as J
-    expect(Object.keys(state).slice(-4)).toEqual(['cellJournal', 'forgedCells', 'skills', 'unknown'])
+    // `spend` (her model steps by route, this page life) sits between `skills` and `unknown`.
+    expect(Object.keys(state).slice(-5)).toEqual(['cellJournal', 'forgedCells', 'skills', 'spend', 'unknown'])
     const row = (kept: J) => { const c = kept.cell as J; return { name: c.name, sha256: c.sha256, bytes: c.bytes } }
     expect(state.forgedCells).toEqual({ count: 2, cells: [row(two), row(one)] })
     expect(new TextEncoder().encode(JSON.stringify(state)).byteLength).toBeLessThanOrEqual(SELF_STATE_RESULT_BYTES)

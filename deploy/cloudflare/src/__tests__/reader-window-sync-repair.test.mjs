@@ -97,11 +97,13 @@ function workerFixture(extraEnv = {}, { networkFetch: customNetworkFetch } = {})
           success: true,
           errors: [],
           messages: [],
-          result_info: { page: 1, per_page: 1000, count: 3, total_count: 3, total_pages: 1 },
+          result_info: { page: 1, per_page: 1000, count: 4, total_count: 4, total_pages: 1 },
           result: [
             { id: '5ead0000000000000000000000000a01', name: 'your-node_X61HeadDurableObject', script: 'your-node', class: 'X61HeadDurableObject', use_sqlite: true },
             { id: '5ead0000000000000000000000000a02', name: 'your-node_MirrorDO', script: 'your-node', class: 'MirrorDO', use_sqlite: true },
             { id: '5ead0000000000000000000000000a04', name: 'your-node_VoiceBridgeDO', script: 'your-node', class: 'VoiceBridgeDO', use_sqlite: true },
+            // The outside witness is the live Worker's fourth storage object (wrangler.toml, migration x61-v3-witness).
+            { id: '5ead0000000000000000000000000a05', name: 'your-node_WitnessDO', script: 'your-node', class: 'WitnessDO', use_sqlite: true },
           ],
         })
       }

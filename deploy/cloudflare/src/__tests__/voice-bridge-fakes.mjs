@@ -4,13 +4,19 @@
  * The bridge object is made the first time the Worker reaches its binding (as Cloudflare makes it), so a test can see
  * that it never was. Fault hooks (tests of the review's items): `journalFault(body)` answers a HEAD journal call
  * instead of the real journal, `journalGate(body)` is awaited before one, `bridgeFault(request)` answers (or throws for)
- * a call to the bridge object. The page half's joint spec (apps/web/tests) uses this same file. */
+ * a call to the bridge object. The page half's joint spec (apps/web/tests) uses this same file. `modelFetch`
+ * (the provider's network for the fast path) makes HEAD answer its REAL provider budget and REAL provider dispatcher too;
+ * `budgetFault(input)` answers a budget call instead. */
 import assert from 'node:assert/strict'
 import { createWorker } from '../worker.mjs'
 import { VoiceBridgeDO } from '../voice-bridge-do.mjs'
 import { forgetProviderNotes } from '../voice-bridge.mjs'
 import { handleInternalTurnJournalRoute } from '../turn-journal.mjs'
 import { SPEECH_ENGINE_ISSUER, SPEECH_ENGINE_SUBJECT } from '../voice-provider-speech-engine.mjs'
+import { createProviderDispatcher } from '../provider-dispatch.mjs'
+import { MEMORY_KEYS } from '../voice-memory.mjs'
+import { MEMORY_DIGEST_KEY } from '../voice-bridge-do.mjs'
+import { providerBudgetLimits, reserveProviderBudget } from '../provider-budget.mjs'
 
 export const ORIGIN = 'https://voice.example.invalid'
 export const SEED = 'a'.repeat(64)
@@ -88,7 +94,9 @@ export function memoryStorage() {
     put: async (key, value) => { data.set(key, structuredClone(value)) },
     delete: async key => data.delete(key),
   }
-  return { data, ...view, transaction: async fn => fn(view) }
+  // The Durable Object alarm (the spoken history's sweep): its time is only recorded; a test runs alarm().
+  let alarm = null
+  return { data, ...view, transaction: async fn => fn(view), setAlarm: async at => { alarm = at }, getAlarm: async () => alarm, deleteAlarm: async () => { alarm = null }, alarmAt: () => alarm }
 }
 
 // ── The provider's JWT ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -110,19 +118,39 @@ export const settle = async bridge => {
 export function fixture(options = {}) {
   forgetProviderNotes() // each fixture stands for one fresh isolate (the provider-door throttle is per isolate)
   const clock = options.clock ?? manualClock()
-  const calls = { provider: [], journal: [], bridge: [], head: [] }
+  const calls = { provider: [], journal: [], bridge: [], head: [], model: [], budget: [] }
   const headStorage = memoryStorage()
   const env = {
     PUBLIC_HOST: new URL(ORIGIN).host, OWNER_EMAIL: OWNER, OWNER_PUBLIC_KEY_HEX: '11'.repeat(32),
     VOICE_MANAGED: '1', ELEVENLABS_API_KEY: KEY, ELEVENLABS_X61_VOICE_RESOURCE_ID: RESOURCE, ELEVENLABS_BRIDGE_SECRET: SECRET,
+    // The early "mm-hm" / "hmm" ships OFF. The fixtures keep it ON so every test of that
+    // machinery still runs; voice-bridge-cues.test.mjs proves the shipped setting says none.
+    VOICE_EARLY_CUE: 'on',
     ...options.env,
   }
   for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name]
   const status = phase => Response.json({ ok: true, phase, seedId: SEED, ballId: 'b'.repeat(64), epoch: 170 })
+  // With `modelFetch` (the fake provider network), HEAD also answers its REAL provider budget and its REAL
+  // provider dispatcher (provider-dispatch.mjs, over the same journal storage), as the edge's own door uses them.
+  const dispatcher = options.modelFetch ? createProviderDispatcher({ storage: headStorage, env, networkFetch: (url, init) => { calls.model.push({ url, init }); return options.modelFetch(url, init) } }) : null
   env.HEAD = { idFromName: name => { assert.equal(name, 'node-main-v1'); return name }, get: () => ({ fetch: async request => {
     const path = new URL(request.url).pathname
     calls.head.push(path)
     if (path === '/_head/bootstrap-status') return status('complete')
+    if (dispatcher && path === '/_head/provider-budget') {
+      assert.equal(request.headers.get('x-x6-internal-authorized'), '1')
+      const input = await request.json()
+      calls.budget.push(input)
+      if (options.budgetGate) await options.budgetGate(input)
+      if (options.budgetFault) { const fault = await options.budgetFault(input); if (fault) return fault }
+      try { return Response.json(await reserveProviderBudget(headStorage, input, providerBudgetLimits(env), clock.now())) }
+      catch (error) { return Response.json({ ok: false, code: error.code }, { status: error.status ?? 503 }) }
+    }
+    if (dispatcher && path === '/_head/provider-dispatch') {
+      assert.equal(request.headers.get('x-x6-internal-authorized'), '1')
+      assert.equal(request.headers.get('x-x6-bootstrap-seed'), SEED)
+      return dispatcher.dispatch(request)
+    }
     assert.equal(path, '/_head/turn-journal')
     assert.equal(request.headers.get('x-x6-internal-authorized'), '1')
     assert.equal(request.headers.get('x-x6-bootstrap-seed'), SEED)
@@ -135,7 +163,8 @@ export function fixture(options = {}) {
     return handleInternalTurnJournalRoute(headStorage, 'POST', body, clock.now)
   } }) }
   env.MIRROR = { idFromName: () => 'mirror', get: () => ({ fetch: async () => status('ready') }) }
-  const bridgeStorage = memoryStorage()
+  // A second fixture may share one bridge storage (a new object instance over the same storage).
+  const bridgeStorage = options.bridgeStorage ?? memoryStorage()
   let bridge = null
   const made = () => (bridge ??= new VoiceBridgeDO({ storage: bridgeStorage }, env, { now: clock.now, timers: clock.timers }))
   if (!options.noBinding) env.VOICE_BRIDGE = { idFromName: name => { assert.equal(name, 'x61-voice-bridge-v1'); return name }, get: () => ({ fetch: async request => {
@@ -152,6 +181,11 @@ export function fixture(options = {}) {
     if (parsed.pathname.startsWith('/v1/speech-engine/') || parsed.pathname.startsWith('/v1/convai/agents/')) {
       const seconds = Object.hasOwn(options, 'duration') ? options.duration : 1200
       return Response.json(parsed.pathname.startsWith('/v1/convai/agents/') ? { conversation_config: { conversation: { max_duration_seconds: seconds } } } : { conversation: { max_duration_seconds: seconds } })
+    }
+    // The status read asks the provider for its account and its newest conversations. A fixture that does
+    // not say otherwise (options.providerSide) answers 404, so every status read is the same in every test.
+    if (parsed.pathname === '/v1/user/subscription' || parsed.pathname === '/v1/convai/conversations' || parsed.pathname.startsWith('/v1/convai/conversations/')) {
+      return options.providerSide ? options.providerSide(parsed, init) : Response.json({ detail: 'not found' }, { status: 404 })
     }
     assert.equal(parsed.pathname, '/v1/convai/conversation/token')
     minted++
@@ -204,5 +238,24 @@ export function fixture(options = {}) {
   }
 }
 
+/** Her voice memory at the edge as the old spoken-history tests read it: each kept exchange's words (his,
+ * hers), how it ended and its seq, oldest first; and the digest a cut turn left for the next turn (or null). */
+export async function storedMemory(storage) {
+  const tail = (await storage.get(MEMORY_KEYS.tail)) ?? []
+  const digest = (await storage.get(MEMORY_DIGEST_KEY))?.digest ?? null
+  return { exchanges: tail.map(item => ({ heard: item.words.heard, said: item.words.said, ended: item.record.ended, seq: item.record.seq })), digest }
+}
+
 export const transcript = (eventId, text, history = []) => ({ type: 'user_transcript', event_id: eventId, user_transcript: [...history, { role: 'user', content: text }] })
 export const agentFrames = provider => provider.frames().filter(frame => frame.type === 'agent_response')
+
+/** The same fixture, where he first speaks once the call has been open AWARE_FIRST_HELLO_MS (2.5 s), so the
+ * first turn's bounded wait for the tab's first awareness frame (voice-bridge-do.mjs firstAwareness) is not taken. That
+ * wait is proven on its own in voice-bridge-aware-store.test.mjs, with `fixture` as is. */
+export const AFTER_HELLO_MS = 2500
+export function fixtureAfterHello(options = {}) {
+  const fx = fixture(options)
+  const connect = fx.connect
+  fx.connect = async () => { const call = await connect(); fx.clock.advance(AFTER_HELLO_MS); await fx.settle(); return call }
+  return fx
+}

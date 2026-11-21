@@ -1215,7 +1215,9 @@ export function mountAumaLive(root, options = {}) {
       field.setActive(surfaceActive);
       if (surfaceActive && channel) voice.enable(voiceClaim);
       else if (!surfaceActive) {
-        closeChannel();
+        // Another app selected is a presentation change. The older channel is torn down as
+        // before (an inactive app shares nothing), but a managed call goes on; it ends on Stop, unload or the provider.
+        closeOldChannelOnly();
         if (personaAudio) void stopPersonaPlex();
         clearReplyWatchdog();
         duplex = false;
@@ -1224,7 +1226,7 @@ export function mountAumaLive(root, options = {}) {
         voice.disconnect();
         setOrb();
       }
-      if (surfaceActive) announceCanvasReady();
+      if (surfaceActive) { announceCanvasReady(); showManagedCall(); }
       return;
     }
     if (canvasMode && message.type === 'canvas-document') {
@@ -2863,8 +2865,14 @@ export function mountAumaLive(root, options = {}) {
       if (channelOpeningAttempt === attempt) channelOpeningAttempt = 0;
     }
   }
+  /** True only while closeOldChannelOnly runs: the older channel's teardown, the managed call kept. */
+  let keepingCall = false;
+  function closeOldChannelOnly() {
+    keepingCall = true;
+    try { closeChannel(); } finally { keepingCall = false; }
+  }
   function closeChannel() {
-    stopManagedVoice();
+    if (!keepingCall) stopManagedVoice();
     clearTimeout(voiceExpiryTimer); voiceExpiryTimer = 0;
     voiceExpired = false;
     presenceBlocked = false;
@@ -2885,8 +2893,15 @@ export function mountAumaLive(root, options = {}) {
     duplex = false;
     ttsPending = 0;
     playerNode?.port.postMessage({ cmd: 'clear' });
+    if (keepingCall && managedState !== 'idle') { showManagedCall(); return; }
     field.alien('[field reset]');        // channel closed = her resting body, not the last skin she wore
     setMode('idle');
+  }
+  /** The screen shows the managed call that is still running (its own state), when there is one. */
+  function showManagedCall() {
+    if (managedState === 'idle') return;
+    orb.setAttribute('aria-busy', String(managedState === 'connecting'));
+    setMode(managedState === 'connecting' ? 'thinking' : managedState);
   }
   orb.addEventListener('click', () => {
     if (personaAudio?.running || personaStarting) void stopPersonaPlex();
@@ -2988,6 +3003,16 @@ export function mountAumaLive(root, options = {}) {
         muted: micMuted,   // the page's mute state now; setMute keeps the call in step from here on
         runTurn,
         arrival,
+        // Her page's awareness for the edge's fast voice, and its exchanges for her next governed prompt.
+        // `hooks.onLater` pushes the next frame once her slow reads settle.
+        awareness: (facts, hooks) => presenceFetch.voiceAwareness?.(facts, hooks) ?? Promise.resolve(null),
+        onSpoken: (exchange) => presenceFetch.noteSpoken?.(exchange),
+        // Her fast voice's tool calls, run by her own tools under her worker's look-only rule.
+        tools: (call) => presenceFetch.voiceTool?.(call) ?? Promise.resolve({ ok: false, text: 'This page cannot run my tools.' }),
+        // Her home keeps her voice memory's chain (genesis-live.js voiceMemory -> /__x6__/voice-memory).
+        memory: (body) => presenceFetch.voiceMemory?.(body) ?? Promise.resolve(null),
+        // the voice tools V5: a hand-off that names one of her conversations is queued there as a follow-up.
+        handOff: (turn) => presenceFetch.handOffTo?.(turn) ?? Promise.resolve({ ok: false, reason: 'not-wired' }),
         onState: (next) => {
           if (next === 'idle') { managedSettled(); return; }
           managedState = next;
@@ -3037,9 +3062,11 @@ export function mountAumaLive(root, options = {}) {
   // F3: when the tab is backgrounded, the AudioContext suspends and the worklet
   // stops emitting the audible→false tick — so tell the sidecar she's done NOW,
   // over the WS, before that happens. This is the #1 real-world latch trigger.
+  // A hidden page is a presentation change; a managed call is NOT ended by it (it ends on
+  // Stop, on `pagehide`, or when the provider ends it). Her old speech bookkeeping is still dropped at once.
   const onVis = () => {
-    if (document.hidden) { dropHer(); stopManagedVoice(); }   // a managed call ends when the page is hidden
-    else if (channel) onAudioStateChange();
+    if (document.hidden) dropHer();
+    else { if (channel) onAudioStateChange(); showManagedCall(); }
   };
   document.addEventListener('visibilitychange', onVis);
   window.addEventListener('pagehide', stopManagedVoice);

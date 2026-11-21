@@ -1461,6 +1461,47 @@ describe('default one-shot summarizer', () => {
     expect(instruction?.type === 'text' ? instruction.text : '').toContain('## Primary Request and Intent')
   })
 
+  // Review fix: an effort change invalidates the provider's messages cache (prompt-caching.md,
+  // invalidation hierarchy), so a summary written by the conversation's own route runs at the conversation's effort.
+  describe('summary effort follows the conversation it summarises', () => {
+    class EffortAdapter extends ScriptedAdapter {
+      override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({ provider, id: model, name: model, reasoning: {
+          efforts: (['auto', 'medium', 'high'] as const).map(id => ({ id: id as never, name: id })),
+          defaultEffort: 'medium' as never,
+        } })
+      }
+    }
+    async function effortHarness(config: BasicCompactionConfig = { auto: false }) {
+      const ctx = new Context()
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(SessionProjectionRegistry)
+      void new TokenMeter(ctx)
+      const adapter = new EffortAdapter([{ type: 'text', text: 'summary' }])
+      ctx.llm.registerAdapter([MODEL, 'other'], adapter)
+      return { adapter, compact: new ExposedCompactionEngine(ctx, config) }
+    }
+
+    it.each(['high', 'auto', 'medium'])('the last request ran %s: the summary call asks for the same level', async (effort) => {
+      const { adapter, compact } = await effortHarness()
+      const session = conversation(1)
+      session.append('request/header', { header: { config: { provider: MODEL, model: MODEL, reasoningEffort: effort as never } }, reason: 'resume' })
+      await compact.runSummarize(promptInput('transcript'), agent(session, MODEL), SIGNAL)
+      expect(adapter.lastOptions?.reasoningEffort).toBe(effort)
+    })
+
+    it('a configured summary model keeps its own default effort; no header leaves the effort to the route', async () => {
+      const configured = await effortHarness({ auto: false, summarizationProvider: 'other', summarizationModel: 'other' })
+      const session = conversation(1)
+      session.append('request/header', { header: { config: { provider: MODEL, model: MODEL, reasoningEffort: 'high' as never } }, reason: 'resume' })
+      await configured.compact.runSummarize(promptInput('transcript'), agent(session, MODEL), SIGNAL)
+      expect(configured.adapter.lastOptions?.reasoningEffort).toBe('medium')
+      const bare = await effortHarness()
+      await bare.compact.runSummarize(promptInput('transcript'), agent(conversation(1), MODEL), SIGNAL)
+      expect(bare.adapter.lastOptions?.reasoningEffort).toBe('medium')
+    })
+  })
+
   it('replays the conversation prefix and appends the instruction as the final message', async () => {
     const { adapter, compact } = await summarizerHarness([{ type: 'text', text: 'summary' }])
     const tools = [{ name: 'do_thing', description: 'd', parameters: { type: 'object' } }]
@@ -1988,6 +2029,42 @@ describe('automatic listener and loader composition', () => {
     await expect(preStep(ctx, agent(session, MODEL))).resolves.toEqual({ kind: 'enter', messages: [] })
     expect(warnings).toContainEqual(expect.stringContaining('temporary failure'))
     expect(session.snapshotEvents().some(event => event.type === 'compaction/summary')).toBe(false)
+  })
+
+  // Each attempt is a model call over the whole range. A summary that keeps failing was
+  // paid for on every step of a turn; now the automatic check rests 1, 3, 7, ... steps after consecutive failures.
+  it('rests after a failed step compaction instead of retrying on every step, and starts over after one that works', async () => {
+    const ctx = createContext()
+    const warnings: string[] = []
+    ctx.logger.warn = ((message: string) => void warnings.push(message)) as typeof ctx.logger.warn
+    const compact = new TestCompactionEngine(ctx, { headroomTokens: 0, maxTokens: 8192, thresholdRatio: 0.5, retainTokens: 180 })
+    compact.error = 'temporary failure'
+    const session = conversation(4)
+    const failed = (): number => warnings.filter(message => message.includes('temporary failure')).length
+    const attemptsAfter: number[] = []
+    for (let step = 1; step <= 16; step += 1) {
+      await expect(preStep(ctx, agent(session, MODEL))).resolves.toEqual({ kind: 'enter', messages: [] })
+      attemptsAfter.push(failed())
+    }
+    // Attempts at steps 1, 3, 7 and 15: after k failures in a row the check rests 2^k - 1 steps.
+    expect(attemptsAfter).toEqual([1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4])
+    expect(warnings.at(-1)).toContain('rests for 15 steps')
+    // Another conversation is not held back by this one's failures.
+    const other = conversation(4)
+    await preStep(ctx, agent(other, MODEL))
+    expect(failed()).toBe(5)
+    // The summary works again: the rest of 15 steps (16 to 30) is served, then step 31 succeeds and the count starts over.
+    compact.error = undefined
+    for (let step = 17; step <= 30; step += 1) await preStep(ctx, agent(session, MODEL))
+    expect(session.snapshotEvents().some(event => event.type === 'compaction/summary')).toBe(false)
+    await preStep(ctx, agent(session, MODEL))
+    expect(session.snapshotEvents().some(event => event.type === 'compaction/summary')).toBe(true)
+    expect(failed()).toBe(5)
+    // Starts over: the next failure is met on the very next step and rests for one.
+    compact.error = 'temporary failure'
+    const again = conversation(4)
+    await preStep(ctx, agent(again, MODEL))
+    expect(warnings.at(-1)).toContain('rests for 1 step ')
   })
 
   it('warns once per routed target when proactive pressure has no context metadata', async () => {

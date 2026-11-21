@@ -129,6 +129,10 @@ describe('x6_repo apply_patch', () => {
 })
 
 // ---- HANDS block begin: a branch edit answers with the facts and the hunk, not the whole file ----
+/** A write or edit without `message` is a draft in this tab, and the answer says so plainly. */
+const draftNote = (branch: string): Args => ({ draftWaiting: true,
+  next: `Kept as a draft in this tab only; nothing is on ${branch} yet. Land it with x6_repo commit (branch, message), or pass message on the write or edit to land it in one call.` })
+
 describe('x6_repo branch writes answer with the hunk, not the whole file', () => {
   const FILE = 'x'.repeat(37 * 1024) + '\nold line\n'
   const NEW = 'x'.repeat(37 * 1024) + '\nnew line\n'
@@ -147,7 +151,7 @@ describe('x6_repo branch writes answer with the hunk, not the whole file', () =>
     const { repo, calls, state } = await mounted()
     state.respond = staged
     const answer = await repo.execute({ action: 'edit', branch: A, path: 'docs/auma/a.md', oldString: 'old line', newString: 'new line' }) as Args
-    expect(answer).toEqual({ ok: true, action: 'edit', branch: A, path: 'docs/auma/a.md', baseSha: BASE, bytesWritten: NEW.length, staged: true, scope: 'caller', echo: 'hunk', changes: CHANGES })
+    expect(answer).toEqual({ ok: true, action: 'edit', branch: A, path: 'docs/auma/a.md', baseSha: BASE, bytesWritten: NEW.length, staged: true, scope: 'caller', echo: 'hunk', changes: CHANGES, ...draftNote(A) })
     expect(JSON.stringify(answer).length).toBeLessThan(1024)
     expect(await repo.execute({ action: 'read', branch: A, path: 'docs/auma/a.md' })).toMatchObject({ content: NEW, source: 'caller-draft' })
     await repo.execute({ action: 'edit', branch: A, path: 'docs/auma/a.md', oldString: 'new line', newString: 'third line', echo: 'none' })
@@ -158,7 +162,7 @@ describe('x6_repo branch writes answer with the hunk, not the whole file', () =>
     const { repo, state } = await mounted()
     state.respond = staged
     const { changes: _changes, ...before } = await staged({ action: 'edit' }).json() as Args
-    expect(await repo.execute({ action: 'edit', branch: A, path: 'docs/auma/a.md', oldString: 'old line', newString: 'new line', echo: 'file' })).toEqual(before)
+    expect(await repo.execute({ action: 'edit', branch: A, path: 'docs/auma/a.md', oldString: 'old line', newString: 'new line', echo: 'file' })).toEqual({ ...before, ...draftNote(A) })
     state.respond = body => Response.json({ ok: true, action: body.action, branch: A, commit: SHA, commitSha: SHA, headSha: SHA, paths: ['docs/auma/a.md'], stdout: SHA, stderr: '', changes: CHANGES })
     const facts = CHANGES.map(({ hunk: _hunk, hunkOmittedBytes: _omitted, ...rest }) => rest)
     expect(await repo.execute({ action: 'commit', branch: A, message: 'm', changes: [{ path: 'docs/auma/a.md', content: NEW }], echo: 'none' }))
@@ -189,10 +193,10 @@ describe('an old edge keeps the whole file; a draft edit shows the edit she just
     state.respond = body => Response.json(answerOf(body))
     for (const echo of [undefined, 'hunk', 'none']) {
       expect(await repo.execute({ action: 'edit', branch: B, path: 'docs/auma/a.md', oldString: 'x', newString: 'y', ...(echo ? { echo } : {}) }))
-        .toEqual({ ...answerOf({ action: 'edit' }), echo: 'file', echoNote: 'facts_unavailable' })
+        .toEqual({ ...answerOf({ action: 'edit' }), echo: 'file', echoNote: 'facts_unavailable', ...draftNote(B) })
       await repo.execute({ action: 'draft_discard', branch: B })
     }
-    expect(await repo.execute({ action: 'edit', branch: B, path: 'docs/auma/a.md', oldString: 'x', newString: 'y', echo: 'file' })).toEqual(answerOf({ action: 'edit' }))
+    expect(await repo.execute({ action: 'edit', branch: B, path: 'docs/auma/a.md', oldString: 'x', newString: 'y', echo: 'file' })).toEqual({ ...answerOf({ action: 'edit' }), ...draftNote(B) })
     expect(await repo.execute({ action: 'read', branch: B, path: 'docs/auma/a.md' })).toMatchObject({ content: 'edited\n', source: 'caller-draft' })
   })
 
@@ -200,7 +204,7 @@ describe('an old edge keeps the whole file; a draft edit shows the edit she just
     const { repo, state } = await mounted()
     state.respond = body => Response.json({ ok: true, action: body.action, branch: A, path: 'docs/auma/a.md', content: body.content ?? FILE, baseSha: BASE, bytesWritten: 1, staged: true, scope: 'caller', changes: [head(body)] })
     expect(await repo.execute({ action: 'write', branch: A, path: 'docs/auma/a.md', content: FILE, echo: 'file' }))
-      .toEqual({ ok: true, action: 'write', branch: A, path: 'docs/auma/a.md', content: FILE, baseSha: BASE, bytesWritten: 1, staged: true, scope: 'caller' })
+      .toEqual({ ok: true, action: 'write', branch: A, path: 'docs/auma/a.md', content: FILE, baseSha: BASE, bytesWritten: 1, staged: true, scope: 'caller', ...draftNote(A) })
   })
 
   it('with her previous draft held, the hunk is the edit she just made (hunkFrom "draft"); the facts stay the edge\'s; no draft keeps the edge hunk', async () => {

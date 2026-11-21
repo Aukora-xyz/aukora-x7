@@ -148,7 +148,7 @@ describe('classification, voice and her words', () => {
     for (const words of ['Node, pnpm', 'Python 3, git, gh (not signed in), jq and rg', 'It holds no secret',
       'does NOT come back by itself', '$ARTIFACTS', 'commit through x6_repo', 'one to three minutes to start', 'at most 30 minutes',
       'one at a time per branch', '`browser: true` adds headless Chromium', '60 runs an hour and 300 a day', 'docs/auma/exec.md',
-      'without sudo', 'not durably', '`-` and 8 hex are added']) {
+      'without sudo', 'not durably', '`-` and 8 hex are added', 'EXEC_LOG_NOT_READY', 'currentStep']) { // Logs in every state
       expect(EXEC_TOOL_DESCRIPTION).toContain(words)
     }
     expect(EXEC_TOOL_DESCRIPTION).not.toMatch(/token/iu)

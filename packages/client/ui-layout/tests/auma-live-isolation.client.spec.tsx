@@ -44,6 +44,7 @@ const genesis = await import(pathToFileURL(appFile('genesis-live.js')).href) as 
   AUMA_LIVE_AUTO_HOME: string
   AUMA_LIVE_ALIEN_VOICE_DIRECTIVE: string
   VOICE_PROVENANCE: string
+  VOICE_CHANNEL_GUIDANCE: string
   ROSTER_HEAD: string
   GENESIS_PROVIDER: string
   GENESIS_VOICE_CLASSES: readonly string[]
@@ -223,6 +224,8 @@ describe('Auma Live voice channel isolation and spoken Alien presence', () => {
       // The roster of her other threads, after the provenance part.
       { type: 'text', text: `${genesis.ROSTER_HEAD}\n(no other threads listed)` },
       { type: 'text', text: genesis.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE },
+      // The voice-channel guidance rides just ahead of his words (on main since an earlier commit).
+      { type: 'text', text: genesis.VOICE_CHANNEL_GUIDANCE },
       { type: 'text', text: 'Auma, can you hear me?' },
     ])
     expect(genesis.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE).toContain('[field hue=')

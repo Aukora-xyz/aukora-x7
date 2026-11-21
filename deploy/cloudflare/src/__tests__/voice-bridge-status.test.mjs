@@ -142,7 +142,7 @@ test('item 3: every refusal after admission records exactly one closed stage, wi
   assert.deepEqual(await ownerStages(both), ['duration-read', 'mint-401'])
   // Refusals before admission record nothing.
   const quota = fixture()
-  await quota.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 21600, month: '2026-11', monthSeconds: 21600, slots: {} })
+  await quota.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5356800, month: '2026-11', monthSeconds: 5356800, slots: {} })
   assert.equal((await quota.ownerDoor()).status, 429)
   assert.equal(await stored(quota), null)
 })
@@ -254,7 +254,27 @@ test('managed_status: names, the key in use, the resource kind, live conversatio
     failures: [{ door: 'owner', stage: 'mint-401', atMs: AT }, { door: 'owner', stage: 'duration-read', atMs: AT }],
     calls: [],
     turns: [],
-    secondsLeft: { today: 21600, month: 180000 },
+    secondsLeft: { today: 5356800, month: 5356800 },
+    // The bridge's counts by name, and the last call's stream key names.
+    // Four memory counts and the memory object.
+    counts: { backchannelsKept: 0, wordsMerged: 0, stops: 0, presenceCues: 0, handoffsKept: 0, handoffEchoes: 0, fastFallbacks: 0, toolTimeouts: 0, awareFrames: 0, awareStoredLoads: 0, blocksTrimmed: 0, nothingNew: 0, grownTurns: 0, agentTailEvents: 0, resumes: 0, resumesByHistory: 0, resumeLimit: 0,
+      memoryRecords: 0, memoryAcks: 0, memoryNacks: 0, memoryAdoptedFromHome: 0, memoryOtherOwner: 0,
+      // CHANGED 2026-11-18 (additive): the brain door's and the tab door's counts, and starts nobody claimed.
+      brainSockets: 0, brainInits: 0, brainFramesOther: 0, brainFramesRefused: 0, tabSockets: 0, tabHellos: 0, tabHellosRefused: 0, startsUnclaimed: 0 },
+    streamKeys: {},
+    memory: { seq: 0, digest12: '000000000000', synced: 0, unsynced: 0, gapFrom: null, adoptedFromHome: false, fork: false },
+    // The provider's saved voice settings; this session's read failed, so none was read.
+    provider: { readAtMs: null, speakingModel: 'not read', voice: 'not read', expressiveMode: 'not read', stability: 'not read', speed: 'not read', listeningModel: 'not read',
+      listeningQuality: 'not read', turnEagerness: 'not read', silenceEndCallSeconds: 'not read', eventWaitSeconds: 'not read',
+      // CHANGED 2026-11-18 (additive): more closed facts of the same read.
+      brainUrl: 'not read', brainHeader: 'not read', overrideFirstMessage: 'not read', authEnabled: 'not read', dailyLimit: 'not read', concurrencyLimit: 'not read',
+      maxDurationSeconds: 'not read', turnTimeoutSeconds: 'not read', initialWaitSeconds: 'not read', updatedAtSeconds: 'not read', updatedFrom: 'not read',
+      waitMatches: 'not read' },
+    // CHANGED 2026-11-18 (additive, the provider side): what the provider says about its own side, read at the status. This
+    // fixture's provider answers 401 to everything, so both reads carry that closed word and nothing else.
+    providerSide: { readAtMs: AT, account: { read: 'status-401' }, conversations: { read: 'status-401', rows: [] } },
+    // Her fast voice's line (no fast key in this fixture): the provider NAME, the model id and the reason.
+    fast: { on: false, provider: 'deepseek', model: 'deepseek-chat', why: 'provider-not-configured' },
   })
   const text = JSON.stringify(body)
   for (const secret of [KEY, SECRET, RESOURCE, LEAK, ACCESS.email]) assert.equal(text.includes(secret), false, secret)

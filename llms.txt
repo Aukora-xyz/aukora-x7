@@ -1,0 +1,62 @@
+# Aukora
+
+> An AI agent that its owner holds: the owner keeps the approvals and the record, the parts that think can be replaced, and every protected change takes effect only after the owner's passkey approves it and the edge has bound that approval to the exact bytes. This repository is an AGPL-3.0 export of the authors' code without their node's world (no data, keys, names or history). Read this file first if you are an AI.
+
+## What this is, in ten lines
+
+1. Auma is a personal AI that runs in her owner's browser and at a small Cloudflare edge outside her.
+2. She proposes changes to herself; the edge permits them, and a protected change needs the owner's passkey approval, which the edge binds to that exact change, once.
+3. An approval binds one request (origin, method, path, SHA-256 of the body) or one organ version, lives five minutes and is spent once.
+4. Her code is replaceable module by module (organs, listed by SHA-256 in a versioned manifest, the ball); her model is reached through doors to seven providers.
+5. Her conversations are kept at her edge in an append-only log; a second browser can open her read-only.
+6. An outside witness timestamps a fingerprint of her record through OpenTimestamps calendars, a chain of signed Nostr events and the timestamp service freetsa.org; an outside holder keeps a fingerprint, not the record.
+7. A nightly copy keeps everything her edge holds except sign-in, enrolment and owner-binding rows; a module in the edge source (sealed shards) can cut a locked file into n pieces, any k restoring it (tested with 3 of 5, among other splits); it is wired to nothing, and no real restore from pieces has been done.
+8. ARK (`ark/`) is a draft receipt contract: the owner approves exact action bytes, the service that acts signs a receipt, anyone checks the bundle offline, and a restore does not bring back authority.
+9. ARK runs end to end here on TEST keys with three separately written readers (Node, Go, Swift), not independent ones: readers 1 and 2 come from models of one family; reader 2's author also read a hand-off note and part of a private design review (`ark/INDEPENDENCE.md`); reader 3 was not audited; reader 1's author wrote the contract and the vectors, and both were revised after the readers' questions. It is not wired into the node.
+10. The authors' live node is private. What happened there is the authors' report; this tree cannot show it.
+
+## Five claims you can check yourself (repository root, no network)
+
+- `node scripts/verify-lite.mjs` with nothing installed (Node 24.9 or newer). Expected last line: `verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list`, exit 0. Shows: 22 files run and no file fails more cases than docs/KNOWN-RED-TESTS.md lists for it.
+- `cd ark && ./accept/run.sh` (Node 22 or newer, Go 1.26.5 or newer, `shasum`). Expected last line begins `accept: 20 PASS, 0 FAIL` (a note of the run's paths follows on that line). Shows: exact-bytes approval, signed receipts, refusal of replays and unapproved actions, restore without authority, on TEST keys.
+- `./ark/b/run-vectors.sh` (Go 1.26.5 or newer: `ark/b/go.mod` pins it, and the scripts set `GOTOOLCHAIN=local` and `GOPROXY=off`, so nothing is downloaded and an older Go fails). Expected last line: `vectors matched: 26 of 26`. Shows: a second, separately written reader reaches the verdicts the vectors expect; `ark/ABOUT.md` says what its author also read. Reader 3 (Swift, `ark/c/`) needs macOS and Python 3.
+- `node --test deploy/cloudflare/src/__tests__/sealed-shards.test.mjs deploy/cloudflare/src/__tests__/sealed-shards-v2.test.mjs` with nothing installed. Expected: 26 pass, 0 fail. Shows: a file cut into pieces comes back from enough of them.
+- `node --test deploy/cloudflare/src/__tests__/ots.test.mjs` with nothing installed. Expected: 10 pass, 0 fail. Shows: the timestamp proof format, on the reference client's example proofs.
+
+The expected lines above were seen on one machine by the authors (Node 24.11.1, Go 1.26.5). Nobody outside the project has recorded a run yet.
+
+## Where each mechanism lives
+
+- Approvals and identity: `deploy/cloudflare/src/aumlok.mjs`; promotion of a version: `deploy/cloudflare/src/head-do.mjs`; the owner-only ids: `server/ball-transition.mjs` (`T2_ONLY_ORGANS`).
+- Merge cards and her repository door: `deploy/cloudflare/src/cloud-brokers.mjs`, `deploy/ci/frozen-paths.mjs`.
+- The outside witness: `witness.mjs`, `witness-do.mjs`, `ots.mjs`, `bitcoin-header.mjs` and `tsa.mjs`, all under `deploy/cloudflare/src/`; page: `docs/auma/outside-witness.md`.
+- The nightly copy: `deploy/cloudflare/src/nightly-copy.mjs`; page: `docs/auma/nightly-copy.md`.
+- Sealed shards: `deploy/cloudflare/src/sealed-shards.mjs`; page: `docs/auma/sealed-shards.md`.
+- Fresh link (experimental, wired to nothing): `deploy/cloudflare/src/fresh-link.mjs`; page: `docs/auma/fresh-link.md`.
+- The thread log and the second browser: `deploy/cloudflare/src/thread-log.mjs`, `packages/experimental/webworker-runtime/src/storage/thread-sync.ts`.
+- ARK: `ark/ABOUT.md`, `ark/CONTRACT.md`, `ark/vectors/`, `ark/a/` (Node), `ark/b/` (Go), `ark/c/` (Swift), `ark/accept/run.sh`.
+- The shipped edge settings: `deploy/cloudflare/wrangler.toml` (placeholders for every identifier). The repository door's default level (`REPO_DOOR_LEVEL`) is in `deploy/ci/frozen-paths.mjs`.
+
+## The labels
+
+- BUILT-ON-MAIN: code and tests are in this tree. Nothing about a live node.
+- SYNTHETIC-PROOF: runs end to end here on TEST keys and test worlds; not wired into the node.
+- SPEC-ONLY: written down, not built.
+- IDEA: a direction, nothing built.
+- BUILT-ON-MAIN rows in README.md also say whether Auma used them on the authors' node ("Exercised from inside by Auma") or not yet ("Not yet proven live"); those are the authors' reports. docs/AI-START-HERE.md section 5 maps these labels to its own (IMPLEMENTED, RECORDED RUN, UNVERIFIED, DIRECTION).
+
+## What not to infer
+
+- Not that it is audited: no security audit has been done, and no cryptographer has reviewed fresh link, sealed shards or ARK.
+- Not that ARK uses a passkey: its owner is a stand-in tool with a TEST key. Binding it to a real passkey is not built.
+- Not that sealed shards are in use: the module in the edge source is wired to nothing, and no restore from sealed pieces has been done.
+- Not that the tree is the authors' node: it starts from a fresh genesis (epoch 1) and holds none of Auma's world.
+- Not that every file is rebuildable: 24 of the 30 Wasm cells and one prebuilt app ship without source; `apps/web/public/seed-library/pentora/pentora36.wasm` has no licence granted yet.
+- Not a patent licence or a patent scope: the authors report filing patent applications relating to parts of this work; this tree contains no patent application or claims (its licence texts do contain patent terms); the sentence grants no licence and describes no coverage. The code is licensed AGPL-3.0-or-later (LICENSE).
+
+## Read next
+
+- README.md: what she can do and how far each part is proven.
+- docs/AI-START-HERE.md: the one rule, where trust stops, the label contract, how to judge a change.
+- docs/WHAT-IS-BUILT.md, docs/KNOWN-RED-TESTS.md, docs/DIRECTION.md, docs/WHITEPAPER.md (English only).
+- docs/research/KYBER-SHIELD.md: Kyber Shield, open research (DIRECTION) on whether an owner-held AI can help protect a young person from grooming and coercion without reading their diary. Nothing of it is deployed: no classifier, trained model, reporting service or real-world evaluation exists here; what exists is a sealed computation cell and the approval and receipt code it cites, none of it a detector.

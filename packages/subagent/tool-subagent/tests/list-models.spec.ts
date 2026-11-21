@@ -66,6 +66,37 @@ class CatalogAdapter extends LlmAdapter {
   }
 }
 
+/** Her Claude route, advertising the five levels as the browser adapter does. */
+class ClaudeAdapter extends LlmAdapter {
+  override providerInfo(provider: string) {
+    return { id: provider, name: 'Anthropic' }
+  }
+
+  override listModels(provider: string): Promise<readonly LlmModelInfo[]> {
+    return Promise.resolve([{ provider, id: 'claude-fable-5-2', name: 'Fable 5.2' }])
+  }
+
+  override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+    return Promise.resolve({
+      provider,
+      id: model,
+      name: 'Fable 5.2',
+      reasoning: {
+        // `auto` first and the default, then the five named levels, as the browser adapter lists them.
+        efforts: [
+          { id: ReasoningEffortId('auto'), name: 'Auto', description: 'the provider\'s own default, as before 2026-11-17' },
+          ...['low', 'medium', 'high', 'xhigh', 'max'].map(id => ({ id: ReasoningEffortId(id), name: id === 'xhigh' ? 'X-High' : id.charAt(0).toUpperCase() + id.slice(1) })),
+        ],
+        defaultEffort: ReasoningEffortId('auto'),
+      },
+    })
+  }
+
+  stream(_options: GenerateOptions): AsyncIterable<StreamChunk> {
+    return (async function* () { yield { type: 'finish' as const, reason: { kind: 'stop' as const } } })()
+  }
+}
+
 const callingAgents = new WeakMap<Context, Agent>()
 
 /** Every listing ends by saying when its choices were fixed, so an old thread is not read as broken. */
@@ -391,7 +422,7 @@ describe('list_subagent_models', () => {
     expect(exact.isError).toBe(false)
     expect(text(exact)).toBe(
       'gamma/own-model — Fast: Focused work. (your own model)\nReasoning efforts:\n'
-      + 'low — Low\nhigh (default) — High: Quality first.',
+      + 'low — Low\nhigh (default) — High: Quality first.\nYou run at: high (default) — High',
     )
 
     // A route in neither her own nor the list is still refused, with the sentence she can act on.
@@ -414,6 +445,31 @@ describe('list_subagent_models', () => {
     expect(text(await call(ctx, { provider: 'beta' }))).toBe(listed('beta/fast — Fast: Focused work.', 'beta/plain — Plain'))
     expect(text(await call(ctx, { provider: 'alpha', model: 'plain' })))
       .toBe('alpha/plain — Plain (your own model)\nReasoning efforts:\n(no advertised reasoning efforts)')
+  })
+
+  it('shows her Claude model six efforts, auto first, and names the one she runs at', async () => {
+    const CLAUDE_EFFORTS = 'Reasoning efforts:\nauto (default) — Auto: the provider\'s own default, as before 2026-11-17\n'
+      + 'low — Low\nmedium — Medium\nhigh — High\nxhigh — X-High\nmax — Max'
+    const chosen = await setupListTool([{ provider: 'anthropic-door', model: 'claude-fable-5-2' }],
+      { provider: 'anthropic-door', model: 'claude-fable-5-2', reasoningEffort: ReasoningEffortId('high') })
+    chosen.llm.registerAdapter(['anthropic-door'], new ClaudeAdapter())
+    expect(text(await call(chosen, { provider: 'anthropic-door', model: 'claude-fable-5-2' }))).toBe(
+      `anthropic-door/claude-fable-5-2 — Fable 5.2 (your own model)\n${CLAUDE_EFFORTS}\nYou run at: high — High`)
+    const unset = await setupListTool([{ provider: 'anthropic-door', model: 'claude-fable-5-2' }],
+      { provider: 'anthropic-door', model: 'claude-fable-5-2' })
+    unset.llm.registerAdapter(['anthropic-door'], new ClaudeAdapter())
+    expect(text(await call(unset, { provider: 'anthropic-door', model: 'claude-fable-5-2' }))).toBe(
+      `anthropic-door/claude-fable-5-2 — Fable 5.2 (your own model)\n${CLAUDE_EFFORTS}\nYou run at: auto (default) — Auto`)
+    const auto = await setupListTool([{ provider: 'anthropic-door', model: 'claude-fable-5-2' }],
+      { provider: 'anthropic-door', model: 'claude-fable-5-2', reasoningEffort: ReasoningEffortId('auto') })
+    auto.llm.registerAdapter(['anthropic-door'], new ClaudeAdapter())
+    expect(text(await call(auto, { provider: 'anthropic-door', model: 'claude-fable-5-2' }))).toBe(
+      `anthropic-door/claude-fable-5-2 — Fable 5.2 (your own model)\n${CLAUDE_EFFORTS}\nYou run at: auto — Auto`)
+    // A model that is not hers lists its efforts and names none as hers.
+    const other = await setupListTool([{ provider: 'anthropic-door', model: 'claude-fable-5-2' }])
+    other.llm.registerAdapter(['anthropic-door'], new ClaudeAdapter())
+    expect(text(await call(other, { provider: 'anthropic-door', model: 'claude-fable-5-2' }))).toBe(
+      `anthropic-door/claude-fable-5-2 — Fable 5.2\n${CLAUDE_EFFORTS}`)
   })
 
   it('inspects exact-model efforts, descriptions, and defaults', async () => {
@@ -553,7 +609,7 @@ describe('list_subagent_models and the keys at the edge', () => {
       .toBe(listed(`alpha/fast${NO_KEY}`, `alpha/plain${NO_KEY}`, `alpha/own-model (your own model)${NO_KEY}`))
     expect(text(await call(ctx, { provider: 'alpha', model: 'own-model' })))
       .toBe(`alpha/own-model — Fast: Focused work. (your own model)${NO_KEY}\nReasoning efforts:\n`
-        + 'low — Low\nhigh (default) — High: Quality first.')
+        + 'low — Low\nhigh (default) — High: Quality first.\nYou run at: high (default) — High')
   })
 
   it('lists every route as usable once the edge holds the key', async () => {

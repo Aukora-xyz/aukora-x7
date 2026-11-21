@@ -590,6 +590,31 @@ describe('provider profile lifecycle', () => {
       .resolves.toMatchObject({ reasoning: { defaultEffort: ReasoningEffortId('off') } })
   })
 
+  it('auto: a route that offers auto lists it first, defaults to it, and sends no effort for it', async () => {
+    const server = await mockServer([{ events: textEvents }, { events: textEvents }])
+    const ctx = await harness(server.url, { reasoning: 'auto', autoEffort: 'the provider\'s own default' })
+    const info = await ctx.llm.resolveModelInfo('deepseek', 'deepseek-v4-pro')
+    expect(info.reasoning?.efforts[0]).toEqual({ id: 'auto', name: 'Auto', description: 'the provider\'s own default' })
+    expect(info.reasoning?.efforts.slice(1).map(effort => effort.id)).not.toContain('auto')
+    expect(info.reasoning?.defaultEffort).toBe('auto')
+    // The default and an explicit `auto` both send exactly what naming no effort sends.
+    await assemble(ctx, { model: 'deepseek-v4-pro', messages: [] })
+    await assemble(ctx, { model: 'deepseek-v4-pro', messages: [], reasoningEffort: ReasoningEffortId('auto') })
+    expect(server.requests[1]).toEqual(server.requests[0])
+    expect(server.requests[0]).not.toHaveProperty('reasoning_effort')
+
+    // A route that does not offer auto neither lists nor accepts it, and nothing leaves.
+    const plain = await mockServer([{ events: textEvents }])
+    const without = await harness(plain.url, { reasoning: 'auto' })
+    const described = await without.llm.resolveModelInfo('deepseek', 'deepseek-v4-pro')
+    expect(described.reasoning?.efforts.map(effort => effort.id)).not.toContain('auto')
+    expect(described.reasoning?.defaultEffort).toBeUndefined()
+    await expect(assemble(without, { model: 'deepseek-v4-pro', messages: [] })).resolves.toMatchObject({
+      finish: { kind: 'error', failure: { code: 'UNSUPPORTED_REASONING_EFFORT' } },
+    })
+    expect(plain.requests).toEqual([])
+  })
+
   it('serves declared reasoning efforts to selectors and honours the profile default', async () => {
     const ctx = new Context()
     await ctx.plugin(LlmRuntime)

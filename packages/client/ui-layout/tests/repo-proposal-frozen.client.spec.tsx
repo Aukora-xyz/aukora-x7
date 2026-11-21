@@ -42,7 +42,7 @@ describe('the page keeps the same frozen list as the edge and CI', () => {
       'FROZEN_TEST_FILES', 'OPEN_PATHS', 'OPEN_NEW_PATHS', 'CLOSED_INSIDE_OPEN', 'OPEN_INSIDE_CLOSED', 'CLOSED_NAMES', 'CLOSED_SEGMENTS'] as const) {
       expect([...page[name]], name).toEqual([...edge[name]])
     }
-    expect(page.FROZEN_ORGAN_IDS).toHaveLength(15)
+    expect(page.FROZEN_ORGAN_IDS).toHaveLength(16)
     // The one level line: the page's copy equals the edge's (read unmocked), and so do the levels kept built.
     const actual = await vi.importActual<typeof page>('../src/client/spatial/aumlok/frozen-paths.ts')
     expect(actual.REPO_DOOR_LEVEL).toBe((deploy as { REPO_DOOR_LEVEL: string }).REPO_DOOR_LEVEL)

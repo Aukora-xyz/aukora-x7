@@ -399,7 +399,8 @@ describe('on her mounted runtime', () => {
 
     const state = await m.tool('x6_self_state').execute({}) as J
     // Her kept forged cells follow the journal summary (forged-cells.spec.ts).
-    expect(Object.keys(state).slice(-6)).toEqual(['cellCount', 'cells', 'cellJournal', 'forgedCells', 'skills', 'unknown'])
+    // `spend` (her model steps by route, this page life) sits between `skills` and `unknown`.
+    expect(Object.keys(state).slice(-7)).toEqual(['cellCount', 'cells', 'cellJournal', 'forgedCells', 'skills', 'spend', 'unknown'])
     expect(state.forgedCells).toEqual({ count: 0, cells: [] })
     expect(state.cellCount).toBe(30)
     expect(state.cellJournal).toEqual({ calls: 2, rootSha256: read.rootSha256 })

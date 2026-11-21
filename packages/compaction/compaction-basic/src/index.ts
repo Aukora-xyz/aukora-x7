@@ -35,6 +35,9 @@ import type {
   ResolvedConfig,
 } from './types.ts'
 
+/** The longest rest, in steps, between automatic attempts after repeated step-compaction failures. */
+const STEP_BACKOFF_MAX_REST = 31
+
 export type {
   BasicCompactionConfig,
   CompactionPolicyConfig,
@@ -130,6 +133,13 @@ export class BasicCompactionEngine extends CompactionEngine {
   readonly config: ResolvedConfig
 
   private readonly warnedPressureConfigTargets = new Set<string>()
+  /**
+   * Consecutive failed step compactions per session. Each attempt is a model call over the
+   * whole range, so a summary that keeps failing was paid for on every step of a turn. After k failures in a row the
+   * automatic check rests 2^k - 1 steps (1, 3, 7, 15, at most STEP_BACKOFF_MAX_REST); an attempt that does not throw
+   * clears it. In memory only. Manual, overflow and model-switch compaction are not held back.
+   */
+  private readonly stepBackoff = new WeakMap<object, { failures: number; rest: number }>()
   private readonly overflowRetries = new WeakMap<Agent, number>()
   private readonly overflowAgents = new WeakMap<Session, Agent>()
 
@@ -159,8 +169,14 @@ export class BasicCompactionEngine extends CompactionEngine {
       next,
     ): Promise<PreStepDecision> => {
       if (!signal.aborted) {
+        const backoff = this.stepBackoff.get(agent.session)
+        if (backoff !== undefined && backoff.rest > 0) {
+          backoff.rest -= 1
+          return next()
+        }
         try {
           const result = await this.compactIfNeeded(agent, 'pressure', signal)
+          this.stepBackoff.delete(agent.session)
           if (result !== null) logResult(result, 'step pressure')
         } catch (error: unknown) {
           if (error instanceof TargetPressureConfigError) {
@@ -168,7 +184,18 @@ export class BasicCompactionEngine extends CompactionEngine {
             this.warnedPressureConfigTargets.add(error.targetKey)
           }
           const message = error instanceof Error ? error.message : String(error)
-          ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`)
+          // A step the caller aborted is not a failed summary, and a configuration fault has its own once-only rule.
+          if (signal.aborted || error instanceof TargetPressureConfigError) {
+            ctx.logger.warn(`step compaction failed: ${message}; continuing the turn`)
+          } else {
+            const failures = (backoff?.failures ?? 0) + 1
+            const rest = Math.min(2 ** failures - 1, STEP_BACKOFF_MAX_REST)
+            this.stepBackoff.set(agent.session, { failures, rest })
+            ctx.logger.warn(
+              `step compaction failed: ${message}; continuing the turn. The automatic check rests for ${rest} `
+              + `step${rest === 1 ? '' : 's'} (failure ${failures} in a row); /compact still runs when asked`,
+            )
+          }
         }
       }
       return next()

@@ -151,7 +151,12 @@ async function listSubagentModels(
     + (effort.description === undefined ? '' : `: ${effort.description}`)
   )).join('\n') || '(no advertised reasoning efforts)'
   const unavailable = doors.state(provider.id)?.kind === 'no-key' ? noKeySuffix(provider.name) : ''
-  return `${modelLine(provider.id, model)}${ownMark(provider.id, model.id)}${unavailable}\nReasoning efforts:\n${efforts}`
+  // On her own model she reads the level she runs at, by name: the one her conversation chose, else the default.
+  const runningId = isOwn(provider.id, model.id) ? parent.reasoningEffort ?? model.reasoning?.defaultEffort : undefined
+  const running = runningId === undefined ? undefined : model.reasoning?.efforts.find(effort => effort.id === runningId)
+  const runsAt = running === undefined ? ''
+    : `\nYou run at: ${running.id}${parent.reasoningEffort === undefined ? ' (default)' : ''} — ${running.name}`
+  return `${modelLine(provider.id, model)}${ownMark(provider.id, model.id)}${unavailable}\nReasoning efforts:\n${efforts}${runsAt}`
 }
 
 /**

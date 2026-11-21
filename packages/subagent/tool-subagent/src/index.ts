@@ -312,13 +312,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           }
         }
         exec.signal.throwIfAborted()
+        // A host that declares `max_tokens` on this tool's schema (the Aukora worker body does) caps the child's model
+        // requests; the shipped schema does not declare it, so models elsewhere never send it.
+        const childMaxTokens = childOutputCap(args)
+        const childAgentOptions = childMaxTokens === undefined
+          ? requestedChildAgentOptions
+          : { ...requestedChildAgentOptions, maxTokens: childMaxTokens }
         const maxDepth = ctx.subagents.resolveMaxDepth(config.maxDepth)
         const request = {
           ...args.cwd === undefined ? {} : { cwd: args.cwd },
           prompt: [{ type: 'text', text: args.prompt }] as ContentBlock[],
           parent,
           ...agentPreset === undefined ? {} : { agentPreset },
-          ...requestedChildAgentOptions !== undefined ? { agentOptions: requestedChildAgentOptions } : {},
+          ...childAgentOptions !== undefined ? { agentOptions: childAgentOptions } : {},
           ...maxDepth !== undefined ? { maxDepth } : {},
         }
 
@@ -388,4 +394,19 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         + ` Do not call \`${toolName}\` at this depth; carry out the work directly.`
     },
   })
+}
+
+/**
+ * The per-child output cap a host-extended schema may carry as `max_tokens`.
+ * @param args - The validated tool arguments.
+ * @returns The cap, or undefined when the call names none.
+ * @throws When the value is not a positive whole number.
+ */
+function childOutputCap(args: unknown): number | undefined {
+  const value = (args as { max_tokens?: unknown }).max_tokens
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error('max_tokens must be a positive whole number')
+  }
+  return value
 }

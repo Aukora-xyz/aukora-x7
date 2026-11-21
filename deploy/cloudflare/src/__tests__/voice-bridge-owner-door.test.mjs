@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { ADMISSION_KEY } from '../voice-bridge-do.mjs'
+import { ADMISSION_KEY, HISTORY_KEY } from '../voice-bridge-do.mjs'
 import { MANAGED_SESSION_REFUSALS, VOICE_BRIDGE_SETTINGS } from '../voice-bridge.mjs'
 import { VOICE_SESSION_LIMITS } from '../voice-session-policy.mjs'
 import { ACCESS, AT, KEY, RESOURCE, SECRET, TOKEN, fixture } from './voice-bridge-fakes.mjs'
@@ -95,39 +95,48 @@ test('VOICE_NOT_CONFIGURED names nothing and calls nothing when a setting or the
   assert.equal(unbound.calls.provider.length, 0)
 })
 
-test('admission ceilings: two live at once (VOICE_BUSY), 21,600 s a day and 180,000 s a month (VOICE_QUOTA); refusals call no provider', async () => {
-  assert.deepEqual([VOICE_SESSION_LIMITS.seconds, VOICE_SESSION_LIMITS.daySeconds, VOICE_SESSION_LIMITS.monthSeconds, VOICE_SESSION_LIMITS.silenceSeconds], [1200, 21600, 180000, 180])
+// 2026-11-18: the day has no ceiling of its own (it equals the month's 5,356,800 s).
+test('admission ceilings: sixteen at once (VOICE_BUSY), 5,356,800 s a month and no smaller day (VOICE_QUOTA); refusals call no provider', async () => {
+  assert.deepEqual([VOICE_SESSION_LIMITS.seconds, VOICE_SESSION_LIMITS.daySeconds, VOICE_SESSION_LIMITS.monthSeconds, VOICE_SESSION_LIMITS.silenceSeconds], [1200, 5356800, 5356800, 180])
   assert.deepEqual(MANAGED_SESSION_REFUSALS, { VOICE_NOT_CONFIGURED: 503, VOICE_QUOTA: 429, VOICE_PROVIDER_UNAVAILABLE: 503, VOICE_BUSY: 409 })
+  // 2026-11-18 (CHANGED: the place count was 2): sixteen starts may be held or in flight at once; the next is refused.
+  const PLACES = VOICE_SESSION_LIMITS.liveConversations
+  assert.equal(PLACES, 16)
   const fx = fixture()
-  assert.equal((await fx.ownerDoor()).status, 200)
-  assert.equal((await fx.ownerDoor()).status, 200)
+  for (let index = 1; index <= PLACES; index++) assert.equal((await fx.ownerDoor()).status, 200, String(index))
   await refused(await fx.ownerDoor(), 409, 'VOICE_BUSY')
-  assert.equal(mints(fx), 2)
-  // A minted conversation nobody claims lapses after its connect window (its seconds stay reserved).
-  for (let index = 3; index <= 18; index++) {
+  assert.equal(mints(fx), PLACES)
+  // A minted conversation nobody claims lapses after its connect window (its seconds stay reserved): further starts in
+  // the same day are all admitted.
+  for (let index = PLACES + 1; index <= 19; index++) {
     fx.clock.advance(61000)
     assert.equal((await fx.ownerDoor()).status, 200, String(index))
   }
-  fx.clock.advance(61000)
-  await refused(await fx.ownerDoor(), 429, 'VOICE_QUOTA')
-  assert.equal(mints(fx), 18)
-  assert.equal((await admission(fx)).daySeconds, 21600)
+  assert.equal(mints(fx), 19)
+  assert.equal((await admission(fx)).daySeconds, 19 * 1200)
+  // The ceiling that is left: with one call's room in the day and the month, one start is admitted and the next refused.
+  const last = fixture()
+  await last.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5355600, month: '2026-11', monthSeconds: 5355600, slots: {} })
+  assert.equal((await last.ownerDoor()).status, 200)
+  last.clock.advance(61000)
+  await refused(await last.ownerDoor(), 429, 'VOICE_QUOTA')
+  assert.equal((await admission(last)).daySeconds, 5356800)
   // The next UTC day starts at zero; the month ceiling still counts.
   const month = fixture()
-  await month.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-12', daySeconds: 21600, month: '2026-11', monthSeconds: 178800, slots: {} })
+  await month.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-12', daySeconds: 21600, month: '2026-11', monthSeconds: 5355600, slots: {} })
   assert.equal((await month.ownerDoor()).status, 200)
   month.clock.advance(61000)
   await refused(await month.ownerDoor(), 429, 'VOICE_QUOTA')
-  assert.deepEqual([(await admission(month)).daySeconds, (await admission(month)).monthSeconds], [1200, 180000])
+  assert.deepEqual([(await admission(month)).daySeconds, (await admission(month)).monthSeconds], [1200, 5356800])
 })
 
 test('two requests racing for the last allocation: exactly one wins, exactly one mint', async () => {
   const fx = fixture()
-  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 20400, month: '2026-11', monthSeconds: 20400, slots: {} })
+  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5355600, month: '2026-11', monthSeconds: 5355600, slots: {} })
   const answers = await Promise.all([fx.ownerDoor(), fx.ownerDoor()])
   assert.deepEqual(answers.map(response => response.status).sort(), [200, 429])
   assert.equal(mints(fx), 1)
-  assert.equal((await admission(fx)).daySeconds, 21600)
+  assert.equal((await admission(fx)).daySeconds, 5356800)
 })
 
 test('a shorter saved provider duration is returned AND reserved; a longer or invalid one means the reserved seconds (job 2 item 1)', async () => {
@@ -212,4 +221,65 @@ test('a broken provider read never locks the owner out: the session starts anywa
   const response = await fx.ownerDoor()
   assert.deepEqual([response.status, await response.json()], [200, { token: TOKEN, maxDurationSeconds: 1200 }])
   assert.deepEqual([(await admission(fx)).daySeconds, (await admission(fx)).monthSeconds], [1200, 1200])
+})
+
+// The edge restarted under live calls four times that day
+// (deploys). Each call's slot stayed in storage for up to 20 minutes with nothing live behind it.
+const lostSlot = (fx, conv, helloAgoMs) => {
+  const now = fx.clock.now()
+  return { seconds: 1200, day: '2026-11-13', month: '2026-11', conv, owner: 'owner-fixture', seedId: 'a'.repeat(64),
+    mintedAt: now - helloAgoMs - 2000, helloAt: now - helloAgoMs, until: now - helloAgoMs + 1200000, deadline: now - helloAgoMs + 1228000 }
+}
+test('calls the edge lost in a restart do not hold their slots: the next start is admitted at once, their time is trimmed and recorded', async () => {
+  const fx = fixture()
+  assert.equal(new Date(fx.clock.now()).toISOString().slice(0, 10), '2026-11-13')
+  // Every place is taken by a call that was claimed and live when the edge restarted: the slots are in storage, this
+  // object holds none of them. (Two of them: 90 s and 30.5 s old; the rest 10 s old.)
+  const PLACES = VOICE_SESSION_LIMITS.liveConversations
+  // The two older ones come last, so their rows are among the few the call history keeps.
+  const ages = Array.from({ length: PLACES }, (_, index) => index === PLACES - 2 ? 90000 : index === PLACES - 1 ? 30500 : 10000)
+  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: PLACES * 1200, month: '2026-11', monthSeconds: PLACES * 1200,
+    slots: Object.fromEntries(ages.map((age, index) => [`slot-lost-${String(index).padStart(2, '0')}`, lostSlot(fx, `conv_lost_${index}`, age)])) })
+  const response = await fx.ownerDoor()
+  assert.equal(response.status, 200, 'not VOICE_BUSY: nothing was live')
+  assert.deepEqual(await response.json(), { token: TOKEN, maxDurationSeconds: 1200 })
+  const record = await admission(fx)
+  assert.deepEqual(Object.keys(record.slots).filter(id => id.startsWith('slot-lost')), [])
+  assert.equal(Object.keys(record.slots).length, 1)
+  // Each lost call keeps only the whole seconds since its hello (90, 31, and 10 each); plus the new call's 1,200.
+  const used = 90 + 31 + (PLACES - 2) * 10
+  assert.deepEqual([record.daySeconds, record.monthSeconds], [used + 1200, used + 1200])
+  const calls = (await fx.bridgeStorage.get(HISTORY_KEY)).calls
+  assert.equal(calls.every(call => call.ended === 'error' && call.grantedSeconds === 1200), true)
+  assert.deepEqual(calls.map(call => call.lastedSeconds).sort((a, b) => b - a).slice(0, 3), [90, 31, 10])
+})
+
+test('a start that is not refused touches nothing; slots still waiting for their mint or their tab are never let go early', async () => {
+  // One lost claimed slot and room for one more: the start is admitted WITHOUT letting anything go (nothing was full).
+  const roomy = fixture()
+  await roomy.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 1200, month: '2026-11', monthSeconds: 1200, slots: { 'slot-lost-a': lostSlot(roomy, 'conv_lost_a', 60000) } })
+  assert.equal((await roomy.ownerDoor()).status, 200)
+  assert.equal(Object.keys((await admission(roomy)).slots).includes('slot-lost-a'), true)
+  // Every place taken by a start in flight (minted, no tab yet): the next is still VOICE_BUSY, and none is let go early.
+  const waiting = fixture()
+  for (let index = 0; index < VOICE_SESSION_LIMITS.liveConversations; index++) assert.equal((await waiting.ownerDoor()).status, 200)
+  await refused(await waiting.ownerDoor(), 409, 'VOICE_BUSY')
+  assert.equal(Object.keys((await admission(waiting)).slots).length, VOICE_SESSION_LIMITS.liveConversations)
+})
+
+test('calls this object really holds are never let go: with every place held a start is VOICE_BUSY, and no call is touched', async () => {
+  const fx = fixture()
+  const held = []
+  for (let index = 0; index < VOICE_SESSION_LIMITS.liveConversations; index++) held.push(await fx.connect())
+  const [first, second] = held
+  const before = await admission(fx)
+  assert.equal(Object.values(before.slots).filter(slot => Number.isSafeInteger(slot.helloAt)).length, VOICE_SESSION_LIMITS.liveConversations, 'every call was claimed by a tab')
+  await refused(await fx.ownerDoor(), 409, 'VOICE_BUSY')
+  assert.deepEqual(await admission(fx), before)
+  for (const call of held) assert.equal(call.provider.closedCode ?? null, null)
+  // One of the two is a lost call (the object forgot it, as a restart does): the next start is admitted, the live call stays.
+  fx.bridge.convs.delete(first.conv)
+  assert.equal((await fx.ownerDoor()).status, 200)
+  const after = await admission(fx)
+  assert.deepEqual(Object.values(after.slots).map(slot => slot.conv).filter(conv => conv === first.conv || conv === second.conv), [second.conv])
 })

@@ -69,6 +69,8 @@ const seen = {
   ended: 0,
   voiceAsks: 0,
   hidden: false,
+  /** Every capture the page asked the browser for (the microphone, the screen). */
+  captures: [] as string[],
 }
 const fakeSession: Session = {
   endSession: async () => { seen.ended += 1 },
@@ -138,7 +140,10 @@ beforeAll(async () => {
   Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', { configurable: true, value: () => null })
   Object.defineProperty(navigator, 'mediaDevices', {
     configurable: true,
-    value: { getUserMedia: () => new Promise<MediaStream>(() => {}) },
+    value: {
+      getUserMedia: () => { seen.captures.push('user'); return new Promise<MediaStream>(() => {}) },
+      getDisplayMedia: () => { seen.captures.push('display'); return new Promise<MediaStream>(() => {}) },
+    },
   })
   Object.defineProperty(document, 'hidden', { configurable: true, get: () => seen.hidden })
 
@@ -155,7 +160,7 @@ afterAll(() => {
 })
 
 beforeEach(() => {
-  seen.configs = []; seen.muteCalls = []; seen.typed = []; seen.ended = 0; seen.voiceAsks = 0; seen.hidden = false
+  seen.configs = []; seen.muteCalls = []; seen.typed = []; seen.ended = 0; seen.voiceAsks = 0; seen.hidden = false; seen.captures = []
   FakeSocket.all = []
   localStorage.clear()
 })
@@ -250,7 +255,30 @@ describe('the seam on the mounted page', () => {
     expect(seen.voiceAsks).toBe(1)
   })
 
-  it('a live call takes typing into the same conversation, and hiding the page ends it', async () => {
+  it('2026-11-18: a call dropped as it opened says so once; the next press on the same page sends no first-message override', async () => {
+    seen.answer = () => json({ token: PASS, maxDurationSeconds: 600 })
+    const p = mount()
+    p.orb.click()
+    await waitFor(() => FakeSocket.all.length === 1, 'the tab door')
+    expect(Object.hasOwn(seen.configs[0] as object, 'overrides')).toBe(true)
+    // The provider ends it before any sign of life (over WebRTC its words never arrive: only the end).
+    ;(seen.configs[0]?.onDisconnect as (details: unknown) => void)({ reason: 'agent' })
+    const line = 'Voice dropped as it opened. Tap the orb to try once more, or keep typing.'
+    await waitFor(() => p.status.textContent === line, line)
+    expect(p.orb.getAttribute('aria-label')).toBe('Start Voice')
+    p.orb.click()
+    await waitFor(() => FakeSocket.all.length === 2, 'the second tab door')
+    expect(seen.configs).toHaveLength(2)
+    expect(seen.configs[1]).not.toHaveProperty('overrides')
+    expect(seen.voiceAsks).toBe(2)
+    // Stop: no call is left up for the next case's mount to end.
+    p.orb.click()
+    await waitFor(() => p.orb.getAttribute('aria-label') === 'Start Voice', 'the orb at rest')
+  })
+
+  // CHANGED: hiding the page no longer
+  // hangs up. The call ends on Stop, on page unload, or when the provider ends it.
+  it('a live call takes typing into the same conversation, and survives the page being hidden and shown again', async () => {
     seen.answer = () => json({ token: PASS, maxDurationSeconds: 600 })
     const p = mount()
     p.orb.click()
@@ -260,9 +288,87 @@ describe('the seam on the mounted page', () => {
     expect(seen.typed).toEqual(['typed into the call'])
     seen.hidden = true
     document.dispatchEvent(new Event('visibilitychange'))
+    expect(seen.ended).toBe(0)
+    expect((FakeSocket.all[0] as FakeSocket).readyState).not.toBe(3)
+    seen.hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    // The same call, shown: no second call, no second tab door, no microphone of the page's own.
+    expect(p.orb.getAttribute('aria-label')).toBe('Stop Voice')
+    expect(p.orb.className).toContain('live')
+    expect(seen.configs).toHaveLength(1)
+    expect(FakeSocket.all).toHaveLength(1)
+    p.type('still the same call')
+    expect(seen.typed).toEqual(['typed into the call', 'still the same call'])
+    expect(seen.captures).toEqual([])
+    expect(p.lines).not.toContain(TODAY)
+  })
+
+  const shell = (active: boolean) => window.dispatchEvent(new MessageEvent('message', {
+    data: { source: 'aukora-shell', type: 'surface-active', app: 'auma-live', active }, origin: location.origin, source: window,
+  }))
+
+  it('selecting another app keeps the call; coming back shows the same call, with no second call or microphone', async () => {
+    seen.answer = () => json({ token: PASS, maxDurationSeconds: 600 })
+    const p = mount()
+    // Mounting cleaned up the page before it, which ends a call the earlier case left up (an unmount ends the call).
+    seen.ended = 0
+    p.orb.click()
+    await waitFor(() => FakeSocket.all.length === 1, 'the tab door')
+    const socket = FakeSocket.all[0] as FakeSocket
+    socket.open()
+    socket.deliver({ t: 'ready', conv: CONV, maxDurationSeconds: 600 })
+    shell(false)
+    expect(seen.ended).toBe(0)
+    expect(socket.readyState).toBe(1)
+    expect(socket.frames('bye')).toEqual([])
+    // Hidden as well (the owner switched apps, then tabs): still the call.
+    seen.hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    seen.hidden = false
+    document.dispatchEvent(new Event('visibilitychange'))
+    shell(true)
+    expect(seen.ended).toBe(0)
+    expect(p.orb.getAttribute('aria-label')).toBe('Stop Voice')
+    expect(p.orb.className).toContain('live')
+    expect(seen.configs).toHaveLength(1)
+    expect(FakeSocket.all).toHaveLength(1)
+    // The same session is still the call: her turn still reaches it through the same tab door.
+    p.type('back again')
+    expect(seen.typed).toEqual(['back again'])
+    expect(seen.captures).toEqual([])
+  })
+
+  it('page unload (pagehide) ends the call, and so does Stop', async () => {
+    seen.answer = () => json({ token: PASS, maxDurationSeconds: 600 })
+    const p = mount()
+    seen.ended = 0
+    p.orb.click()
+    await waitFor(() => FakeSocket.all.length === 1, 'the tab door')
+    window.dispatchEvent(new Event('pagehide'))
     expect(seen.ended).toBe(1)
     expect(p.orb.getAttribute('aria-label')).toBe('Start Voice')
+    const q = mount()
+    seen.ended = 1
+    q.orb.click()
+    await waitFor(() => FakeSocket.all.length === 2, 'the second tab door')
+    shell(false)
+    q.orb.click()
+    expect(seen.ended).toBe(2)
+    expect(q.orb.getAttribute('aria-label')).toBe('Start Voice')
+  })
+
+  it('a hidden or inactive page shares nothing: it holds no screen or microphone capture of its own', async () => {
+    seen.answer = () => json({ token: PASS, maxDurationSeconds: 600 })
+    const p = mount()
+    p.orb.click()
+    await waitFor(() => FakeSocket.all.length === 1, 'the tab door')
+    seen.hidden = true
+    document.dispatchEvent(new Event('visibilitychange'))
+    shell(false)
+    // The only capture is the provider SDK's own (faked here); the page asks for none, and the old voice never starts.
+    expect(seen.captures).toEqual([])
     expect(p.lines).not.toContain(TODAY)
+    expect(readFileSync(join(appDir, 'aumalive.js'), 'utf8')).not.toContain('getDisplayMedia')
   })
 
   it('a sentence the page says for a turn ends in done; a correction for another response leaves her lines alone', async () => {

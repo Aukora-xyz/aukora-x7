@@ -592,8 +592,14 @@ describe('aukora.skill.v1: a skill she can keep', () => {
       [`${RUNTIME}x6/self-state.ts`]: { blocks: [[KYBERSKILL, 1]] },
       // Attribution only: the write-set inventory lists the kept-skill store so every write to it is classified.
       [`${RUNTIME}x6/write-set-inventory.ts`]: { blocks: [[KYBERSKILL, 1], [CORDECHO, 1]] },
-      // A refusal only: the voice record lists the tool as refused from a look-only voice turn.
-      [`${RUNTIME}x6/voice-read-only.ts`]: { blocks: [[KYBERSKILL, 1], [CORDECHO, 1]] },
+      // The voice record names them in three marked places and nowhere else: the tool as refused from a look-only voice
+      // turn; its one action that calls cells (the `check` field); and the wave run's action word, named once for the
+      // fast voice's read row, its not-a-pure-read list and its tick bound. Rows and words only: nothing here reads a
+      // skill or a cell to decide anything.
+      [`${RUNTIME}x6/voice-read-only.ts`]: { blocks: [[KYBERSKILL, 2], [CORDECHO, 1], [MENGERHIVE, 1]] },
+      // The fast voice's tool description names the pinned CPU cell in ONE marked line, so she can run it when he asks
+      // (the spoken cell run, owner 2026-11-16). A description: her worker's own rows decide whether the call runs.
+      'deploy/cloudflare/src/voice-fast.mjs': { blocks: [[KYBERCPU, 1]] },
       // Build scripts, run by hand or in a gate, never by her body: they write the shipped cell and skill files.
       'server/kyber-cpu-cell.build.mjs': { whole: true },
       'server/kyber-skills.build.mjs': { whole: true },

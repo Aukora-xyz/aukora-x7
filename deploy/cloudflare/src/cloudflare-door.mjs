@@ -63,6 +63,8 @@ export const CLOUDFLARE_LIVE_HOME = Object.freeze({
     Object.freeze({ binding: 'MIRROR', kind: 'durable_object_class', name: 'MirrorDO' }),
     // The managed voice's bridge (admission counters, live conversations): her live home's storage like the two above.
     Object.freeze({ binding: 'VOICE_BRIDGE', kind: 'durable_object_class', name: 'VoiceBridgeDO' }),
+    // The outside witness (her record's fingerprints, proofs, signed events, relay answers): her live home's storage too.
+    Object.freeze({ binding: 'WITNESS', kind: 'durable_object_class', name: 'WitnessDO' }),
     Object.freeze({ binding: 'ARCHIVE_BUCKET', kind: 'r2_bucket', name: 'your-node-archive' }),
   ]),
 })
@@ -121,7 +123,7 @@ export const CLOUDFLARE_DOOR_LEVEL_TABLE = Object.freeze([
   { reason: 'keys', family: 'P2', core: 'C3', asks: BOTH },
   { reason: 'members', family: 'P2', core: 'C3', asks: BOTH },
   { reason: 'access', family: 'P2', core: 'C3', asks: BOTH },
-  // The account record carries `settings.enforce_twofactor`, which decides who may sign in to it (lead's reading: C3).
+  // The account record carries `settings.enforce_twofactor`, which decides who may sign in to it (reading C3).
   { reason: 'account', family: 'P2', core: 'C3', asks: BOTH },
   { reason: 'zone-deletion', family: 'P3', core: 'C4', asks: BOTH },
   { reason: 'account-deletion', family: 'P3', core: 'C4', asks: BOTH },

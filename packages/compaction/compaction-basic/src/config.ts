@@ -22,6 +22,38 @@ const DEFAULT_THRESHOLD_RATIO = 0.8
 /** Default verbatim-tail fraction for every routed model. */
 const DEFAULT_RETAIN_RATIO = 0.16
 
+/**
+ * Routes priced so that the service default (0.8 of a 1,000,000-token window) costs dollars a
+ * step. Used ONLY when the mounted configuration names no policy for the exact route, so a preset entry for a route
+ * always wins whole, and never when the configuration's own default threshold is already lower. The bundle presets
+ * carry the same three entries; this table covers a preset mounted from elsewhere (a home patch) that names none.
+ * The numbers: compact near 200,000 tokens, keep about the newest 40,000 verbatim (4% of the message budget).
+ *
+ * The tail is a RATIO on purpose. A fixed token tail can reach the threshold when a route declares a small window, and
+ * then the route fails where the service default would have served it (step compaction is skipped, a switch to the
+ * model is refused). With 0.2 and 0.04 against the defaults 0.8 and 0.16, wherever the default resolves, this resolves
+ * too: its tail is a quarter of the default tail, and its threshold is the default one or a fifth of the window.
+ */
+const BUILT_IN_ROUTE_POLICIES: readonly Readonly<ModelCompactPolicyConfig>[] = deepFreeze([
+  { provider: 'anthropic-door', model: 'claude-fable-5-2', thresholdRatio: 0.2, retainRatio: 0.04 },
+  { provider: 'anthropic-door', model: 'claude-opus-5-5', thresholdRatio: 0.2, retainRatio: 0.04 },
+  { provider: 'anthropic-door', model: 'claude-sonnet-5-5', thresholdRatio: 0.2, retainRatio: 0.04 },
+])
+
+/**
+ * The built-in policy for a route the mounted configuration does not name.
+ * @param config - validated service defaults.
+ * @param target - exact durable provider/model route to match.
+ * @returns the built-in entry, or undefined when there is none or it would raise the configured threshold.
+ */
+function builtInRoutePolicy(
+  config: ResolvedConfig,
+  target: Pick<LlmCallConfig, 'provider' | 'model'>,
+): Readonly<ModelCompactPolicyConfig> | undefined {
+  const policy = BUILT_IN_ROUTE_POLICIES.find(entry => entry.provider === target.provider && entry.model === target.model)
+  return policy?.thresholdRatio !== undefined && policy.thresholdRatio < config.thresholdRatio ? policy : undefined
+}
+
 /** Fields shared by top-level defaults and exact-target overrides. */
 const POLICY_CONFIG_KEYS = [
   'thresholdRatio',
@@ -121,7 +153,7 @@ export function resolveTargetPolicy(
 ): ResolvedTargetPolicy {
   const override = config.modelPolicies.find(policy => (
     policy.provider === target.provider && policy.model === target.model
-  ))
+  )) ?? builtInRoutePolicy(config, target)
   const inheritedRetention: ResolvedRetention = config.retainTokens === undefined
     ? { retainRatio: config.retainRatio }
     : { retainTokens: config.retainTokens }

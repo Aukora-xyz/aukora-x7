@@ -59,11 +59,15 @@ export const VOICE_LEVEL: VoiceLevel = 'open'
  * The page-side stages a voice turn can fail at before the worker is asked (closed; reported by the page, best effort).
  * The `home-*` stages after `prompt-failed` are the level-open home chain (genesis-live.js findOpenHome): each failed
  * create, a rename that failed, a fallback taken (the stored id used unlisted, her most recent thread), an exception, and
- * `home-none` when no thread could be found or made and nothing was sent.
+ * `home-none` when no thread could be found or made and nothing was sent. The stored id proven
+ * NOT her voice conversation (`home-stored-not-voice`), one whose title could not be read (`home-stored-unproven`), and a
+ * spoken prompt held back because its conversation was never proven (`home-unproven`). `home-fallback-recent` is kept for
+ * pages from before (a page on this build never takes that fallback).
  */
 export const VOICE_NOTE_STAGES = Object.freeze(['home-list-failed', 'home-create-failed', 'home-missing', 'mark-unreachable', 'mark-refused',
   'journal-refused', 'prompt-failed', 'home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed',
-  'home-creates-spent', 'home-rename-failed', 'home-stored-unlisted', 'home-fallback-recent', 'home-exception', 'home-none'] as const)
+  'home-creates-spent', 'home-rename-failed', 'home-stored-unlisted', 'home-fallback-recent', 'home-exception', 'home-none',
+  'home-stored-not-voice', 'home-stored-unproven', 'home-unproven'] as const)
 export type VoiceNoteStage = typeof VOICE_NOTE_STAGES[number]
 
 /** The worker's IndexedDB store, or null where IndexedDB does not exist (then nothing can be marked: voice fails closed). */

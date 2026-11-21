@@ -17,6 +17,7 @@
 
 import { ELEVEN_SPEECH_ACTIONS, handleElevenSpeech, herVoiceField } from './eleven-speech.mjs' // VOICE hook
 import { handleManagedSession, handleManagedStatus, voiceManagedOn } from './voice-bridge.mjs' // The managed voice's owner door and its status read
+import { handleProviderLimits } from './voice-provider-limits.mjs' // VOICELIMITS hook: her own hand on her voice agent's call limits (owner only, the key stays at the edge)
 export const VOICE_DIRECTOR_PROTOCOL = 'aukora.voice-director.v1'
 export const VOICE_CLAUSE_SCHEMA = 'aukora.voice-clause.v1'
 export const VOICE_STATE_SLOT_SCHEMA = 'aukora.voice-state-slot.v1'
@@ -33,7 +34,15 @@ export const PERSONAPLEX_VOICES = Object.freeze([
 
 const VOICE_SET = new Set(PERSONAPLEX_VOICES)
 const DEFAULT_VOICE = 'NATF1'
-const ALLOWED_BACKCHANNELS = Object.freeze(['mm-hm', 'right', 'one sec'])
+// The edge's work cues while her fast voice looks (voice-bridge-do.mjs WORK_CUES) come from this list too.
+// The edge's cues say what she is
+// doing (voice-bridge-do.mjs STATE_CUES, PRESENCE_CUES, FIRST_CUES); every word of them is on this list.
+const ALLOWED_BACKCHANNELS = Object.freeze(['mm-hm', 'right', 'one sec', 'still looking', 'almost there',
+  'hmm', 'let me think', 'thinking it through', 'one sec, looking', 'putting it together', 'my working self is on it',
+  "I'm here, thinking", "I'm here, still looking", "I'm here, almost there", "I'm here; my working self is on it",
+  // The effort lane's deep cues and the hand-off echo cue, unchanged words, now read from this list too.
+  'let me think that through properly', 'give me a moment, I want to think about that properly', 'still thinking',
+  'that took longer than I can hold here; I am finishing it in my working thread', 'It is with my working self now'])
 const TURN_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const CLAUSE_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/
 const HEX_64 = /^[0-9a-f]{64}$/
@@ -440,7 +449,8 @@ export async function handleEdgeVoiceRequest({ request, url, env, seedId, access
 
   if (ELEVEN_SPEECH_ACTIONS.includes(input.action)) return await handleElevenSpeech({ request, url, env, seedId, access, networkFetch, now, input }) // VOICE hook
   if (input.action === 'managed_session' && voiceManagedOn(env)) return await handleManagedSession({ request, url, env, seedId, access, networkFetch, now, input }) // Switch off = an unknown action
-  if (input.action === 'managed_status') return await handleManagedStatus({ request, url, env, access, now, input }) // Owner-only read of names and stages, switch on or off
+  if (input.action === 'managed_status') return await handleManagedStatus({ request, url, env, access, networkFetch, now, input }) // Owner-only read of names and stages, switch on or off
+  if (input.action === 'provider_limits') return await handleProviderLimits({ request, env, access, networkFetch, now }) // VOICELIMITS hook: owner-only; the one write the edge makes to the provider
   if (input.action === 'speech_pass') {
     const at = now()
     if (access?.type !== 'owner' || typeof access.email !== 'string' || access.email.length > 254

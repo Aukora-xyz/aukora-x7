@@ -79,6 +79,7 @@ export const LINEAR_NEXT = Object.freeze({
   tooLarge: 'ask for less: a smaller `first`, or one item by its id',
   withheld: 'the answer carried something shaped like a key or secret, so none of it is shown',
   outcome: 'the write left and its answer was lost: read Linear before trying again with a NEW requestId',
+  documentParent: 'Linear keeps a document inside a project: pass projectId (read `projects` for the ids), then send it again with a NEW requestId',
 })
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -283,7 +284,13 @@ const reply = (value, status = 200) => new Response(JSON.stringify(value), {
 
 // Only an error this module made leaves as its own code, status and fixed extra words; anything else is LINEAR_DOOR_FAILED.
 const DOOR_ERRORS = new WeakSet()
-const EXTRA_KEYS = ['field', 'family', 'reason', 'level', 'missing', 'retryAfterSeconds', 'limit', 'next', 'outcome', 'requestId']
+const EXTRA_KEYS = ['field', 'family', 'reason', 'level', 'missing', 'retryAfterSeconds', 'limit', 'next', 'outcome', 'requestId', 'kind']
+/** Linear's own class for an error, when it gives one as an upper-snake code (INPUT_ERROR, FORBIDDEN): a closed shape, never its words. */
+const UPSTREAM_KIND = /^[A-Z][A-Z_]{2,39}$/
+const upstreamKind = errors => {
+  const kind = errors.map(item => item?.extensions?.code).find(code => typeof code === 'string' && UPSTREAM_KIND.test(code))
+  return kind ? { kind } : {}
+}
 function coded(code, status, extra = {}) {
   const error = new Error(code)
   error.code = code
@@ -391,7 +398,7 @@ async function callLinear(send, timeoutMs, key, query, variables) {
     if (errors.some(item => item?.extensions?.code === 'RATELIMITED')) throw coded('LINEAR_UPSTREAM_RATE_LIMITED', 429)
     // An id Linear does not know (another workspace's, or none) is "not found": read from its answer, never repeated.
     if (errors.length && errors.every(item => typeof item?.message === 'string' && /\bnot found\b/i.test(item.message))) throw coded('LINEAR_NOT_FOUND', 404)
-    if (!response.ok || errors.length) throw coded('LINEAR_UPSTREAM_ERROR', 502)
+    if (!response.ok || errors.length) throw coded('LINEAR_UPSTREAM_ERROR', 502, upstreamKind(errors))
     if (!record(payload.data)) throw coded('LINEAR_UPSTREAM_MALFORMED', 502)
     return payload.data
   } finally {
@@ -607,7 +614,14 @@ export function createLinearDoor({ fetchImpl, now = Date.now, upstreamTimeoutMs 
       const variables = spec.variables(input, issueId)
       // From here the write may happen: whatever comes back is the answer to this requestId, never sent again.
       state.dispatched = { requestId: input.requestId, entry: mine }
-      const data = await linear(env, spec.query, variables)
+      let data
+      try {
+        data = await linear(env, spec.query, variables)
+      } catch (error) {
+        // Her report of 2026-11-16: a document with no project came back as a bare upstream error. Say what to pass.
+        if (DOOR_ERRORS.has(error) && error.code === 'LINEAR_UPSTREAM_ERROR' && name === 'document_create' && input.projectId === undefined) error.extra = { ...error.extra, next: LINEAR_NEXT.documentParent }
+        throw error
+      }
       const result = data?.[spec.root]
       if (!record(result) || result.success !== true) throw coded('LINEAR_WRITE_REFUSED', 502)
       const { success: _success, ...rest } = result
@@ -651,7 +665,7 @@ export function createLinearDoor({ fetchImpl, now = Date.now, upstreamTimeoutMs 
 }
 
 // ---- WAKE block begin ----
-/** The cloud wake's Linear reader (lead's word, 2026-11-14). An internal principal, never an owner access: only
+/** The cloud wake's Linear reader. An internal principal, never an owner access: only
  * HEAD imports it, no request or JSON body can produce it, and the owner handler above never accepts it. What it may
  * do is exactly two reads (her issues: assigned to her or labelled `auma:go`; one such issue with its newest comments);
  * no write is reachable from it. Every answer is bounded, screened whole and marked untrusted; HEAD counts the reads per

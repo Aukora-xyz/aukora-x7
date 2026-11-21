@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryVfs } from '../../src/storage/memory.ts'
 import { eyesWithPageFallback } from '../../src/x6/page-eyes-bridge.ts'
 import { createLiveWriteSetRecorder, liveWriteSet, type LiveWriteSetSnapshot } from '../../src/x6/write-set-inventory.ts'
+import { createHeardFeed, createTimelineCapture, createTimelineStore, HEARD_CURSOR, TIMELINE_CHAIN, TIMELINE_WORDS } from '../../src/storage/memory-timeline.ts'
 import { FakeSocket, mountE4 } from './e4-fixture.ts'
 
 afterEach(() => { FakeSocket.instances.length = 0; vi.restoreAllMocks(); vi.unstubAllGlobals() })
@@ -43,6 +44,43 @@ describe('live write-set recorder (unit)', () => {
     const before = recorder.snapshot().counters.writes
     expect(() => vfs.writeFileSync('/no/such/dir/file', 'z')).toThrow()
     expect(recorder.snapshot().counters.writes).toBe(before)
+  })
+})
+
+describe('review (landing): her timeline\'s real writes are inventoried continuity writes', () => {
+  it('a captured turn, written by her real timeline store through the recorder, is never flagged (both files)', async () => {
+    const recorder = createLiveWriteSetRecorder(16)
+    const vfs = recorder.wrap(new MemoryVfs(), 'unit')
+    const store = createTimelineStore(vfs)
+    const capture = createTimelineCapture({ store, nowMs: () => 1_763_294_400_000, screen: text => text, isSpoken: () => false, titleOf: () => 'Garden' })
+    const session = { id: 'thread-a', header: { version: 4, id: 'thread-a', createdAt: 1, isSeeded: false, cwd: '/dsh/home/auma' } }
+    capture.observe(session, { type: 'turn/start', data: { turn: 1 } })
+    capture.observe(session, { type: 'user/message', data: { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'plan the beds' }] } })
+    capture.observe(session, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+    await capture.idle()
+    expect(capture.failures().count).toBe(0)
+    const writes = recorder.snapshot().recent
+    expect(writes.map(item => item.path).sort()).toEqual([TIMELINE_CHAIN, TIMELINE_WORDS])
+    for (const item of writes) expect([item.path, item.entryId, item.class, item.flagged]).toEqual([item.path, 'memory-timeline', 'continuity', false])
+    expect(recorder.snapshot().flagged).toEqual([])
+  })
+
+  it('the heard cursor, written by her real feed through the store when a block is logged, is never flagged', async () => {
+    const recorder = createLiveWriteSetRecorder(16)
+    const vfs = recorder.wrap(new MemoryVfs(), 'unit')
+    const store = createTimelineStore(vfs)
+    expect(await store.append({ v: 1, at: 1_763_294_400_000, kind: 'turn', conv: 'thread-b', title: 'Garden', turn: '1', ended: 'completed', steps: 1, tools: [] },
+      { his: 'plan the beds', hers: 'Done.' })).toMatchObject({ ok: true })
+    const feed = createHeardFeed({ vfs, store, nowMs: () => 1_763_294_460_000, screen: text => text, newId: () => 'm-heard', isVoice: () => false })
+    const hello = { id: 'm-hello', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'hello' }] }
+    const decision = await feed.preStep({ agent: { id: 'thread-a', session: { id: 'thread-a', header: {} } }, messages: [hello], turn: 1, step: 1 },
+      () => Promise.resolve({ kind: 'enter', messages: [hello] as unknown[] }))
+    for (const message of decision.messages) feed.logged('thread-a', { type: 'user/message', data: message })
+    await feed.idle()
+    expect(feed.cursorFailures().count).toBe(0)
+    const cursor = recorder.snapshot().recent.filter(item => item.path === HEARD_CURSOR)
+    expect(cursor.map(item => [item.op, item.entryId, item.class, item.flagged])).toEqual([['write', 'memory-heard-cursor', 'continuity', false]])
+    expect(recorder.snapshot().flagged).toEqual([])
   })
 })
 

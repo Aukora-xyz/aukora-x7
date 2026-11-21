@@ -52,12 +52,15 @@ const FACTS = {
 const ZONE_LIST = { 'example.invalid': { id: LIVE, name: 'example.invalid' }, 'example.org': { id: OTHER, name: 'example.org' } }
 
 // Job 3: the Durable Object namespaces the fake Cloudflare lists. Made-up ids only.
-const HEAD_NS = '5ead0000000000000000000000000a01', MIRROR_NS = '5ead0000000000000000000000000a02', VOICE_NS = '5ead0000000000000000000000000a04', OTHER_NS = '0123456789abcdef0123456789aaaa03'
-const NAMESPACES = { success: true, errors: [], messages: [], result_info: { page: 1, per_page: 1000, count: 4, total_count: 4, total_pages: 1 }, result: [
+const HEAD_NS = '5ead0000000000000000000000000a01', MIRROR_NS = '5ead0000000000000000000000000a02', VOICE_NS = '5ead0000000000000000000000000a04'
+const WITNESS_NS = '5ead0000000000000000000000000a05', OTHER_NS = '0123456789abcdef0123456789aaaa03'
+const NAMESPACES = { success: true, errors: [], messages: [], result_info: { page: 1, per_page: 1000, count: 5, total_count: 5, total_pages: 1 }, result: [
   { id: HEAD_NS, name: 'your-node_X61HeadDurableObject', script: 'your-node', class: 'X61HeadDurableObject', use_sqlite: true },
   { id: MIRROR_NS, name: 'your-node_MirrorDO', script: 'your-node', class: 'MirrorDO', use_sqlite: true },
   // The managed voice's bridge is the live Worker's third Durable Object class (wrangler.toml, migration x61-v2-voice-bridge).
   { id: VOICE_NS, name: 'your-node_VoiceBridgeDO', script: 'your-node', class: 'VoiceBridgeDO', use_sqlite: true },
+  // The outside witness is the fourth (wrangler.toml, migration x61-v3-witness).
+  { id: WITNESS_NS, name: 'your-node_WitnessDO', script: 'your-node', class: 'WitnessDO', use_sqlite: true },
   { id: OTHER_NS, name: 'helper_Counter', script: 'helper', class: 'Counter', use_sqlite: true },
 ] }
 const NAMESPACE_PATH = /^\/accounts\/[0-9a-f]{32}\/workers\/durable_objects\/namespaces$/
@@ -571,7 +574,7 @@ test('every storage object wrangler.toml binds is on the protected list; a new b
   for (const table of new Set(storageTables)) assert.ok(Object.hasOwn(CLOUDFLARE_BOUND_KINDS, table), `wrangler.toml binds [${table}]: say in CLOUDFLARE_BOUND_KINDS how a write that addresses it by id is caught`)
   assert.deepEqual(Object.keys(CLOUDFLARE_BOUND_KINDS).sort(), [...new Set(storageTables)].sort(), 'CLOUDFLARE_BOUND_KINDS names exactly the storage kinds wrangler.toml binds')
   const liveIds = boundStorageIds(NAMESPACES)
-  assert.deepEqual(liveIds, [HEAD_NS, MIRROR_NS, VOICE_NS])
+  assert.deepEqual(liveIds, [HEAD_NS, MIRROR_NS, VOICE_NS, WITNESS_NS])
   for (const id of liveIds) {
     const byId = classifyCloudflareRequest(api('POST', '/accounts/{account}/workers/workers/9f8e7d/versions', { body: { bindings: [{ type: 'durable_object_namespace', name: 'B', namespace_id: id }] } }), { accountId: ACCOUNT, facts: { workers: { [`${ACCOUNT}/9f8e7d`]: 'hello-world' }, boundIds: liveIds } })
     assert.deepEqual([id, byId.verdict, byId.family, byId.reason], [id, 'protected', 'P1', 'bound-storage'])

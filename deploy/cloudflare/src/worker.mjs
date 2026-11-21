@@ -1,4 +1,5 @@
 /** Private edge host. No operation connects to the owner's computer. */
+import { latestNightly, nightlyStatus, runNightlyCopy } from './nightly-copy.mjs'
 import { OWNER_JWT_UNVERIFIED, createAccessVerifier, createOwnerLoginVerifier, ownerAccessConfigured } from './access.mjs'
 import { handleCloudBroker, approveConsumedRepoPublication } from './cloud-brokers.mjs'
 import { bootstrapPackage, readBoundedBootstrapJson } from './head-do.mjs'
@@ -28,6 +29,8 @@ import { PASSKEY_DEVICE_SIGNIN_LINK, PASSKEY_DEVICE_SIGNIN_LINK_STYLE, PASSKEY_D
 export { X61HeadDurableObject } from './head-do.mjs'
 export { MirrorDO } from './mirror-do.mjs'
 export { VoiceBridgeDO } from './voice-bridge-do.mjs' // The managed voice's one bridge object
+export { WitnessDO } from './witness-do.mjs' // WITNESS hook: her outside witness's one object (binding WITNESS)
+import { WITNESS_OWNER_ROUTE, WITNESS_PUBLIC_ROUTES, createWitnessReadDoor, witnessCall, witnessOwnerRecord, witnessRecordPublic, witnessTick } from './witness-do.mjs' // WITNESS hook
 import { VOICE_BRIDGE_ROUTES, voiceBridgeProviderDoor, voiceBridgeTabDoor, voiceManagedOn } from './voice-bridge.mjs'
 import { bootstrapResetPaths, validateMirrorEntries, MIRROR_LIMITS, mirrorSnapshotPrefixBytes, mirrorSnapshotEntryBytes } from './mirror-do.mjs'
 import { mirrorChangesQuery } from './mirror-do.mjs' // The changes route's one query check
@@ -1716,6 +1719,8 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
   const shield = { guest: createIsolateShield({ ...ISOLATE_SHIELD.guest, shareWaitMs, shareMaxWaits }), ownerLogin: createIsolateShield({ ...ISOLATE_SHIELD.ownerLogin, shareWaitMs, shareMaxWaits }), bootstrap: { value: null, until: 0 } }
   // NOSTR hook: one 60 s cache and its own shield rows (per network, apart from the guest door's) for the signed-out Nostr reads.
   const nostrReadDoor = createNostrReadDoor({ now, shareWaitMs, shareMaxWaits, shield: createIsolateShield(ISOLATE_SHIELD.guest), subjectOf: request => 'nostr-read:' + guestNetwork(request.headers.get('cf-connecting-ip')) })
+  // WITNESS hook: the signed-out witness door's own 60 s cache and shield rows (per network, apart from the others).
+  const witnessReadDoor = createWitnessReadDoor({ now, shareWaitMs, shareMaxWaits, shield: createIsolateShield(ISOLATE_SHIELD.guest), subjectOf: request => 'witness-read:' + guestNetwork(request.headers.get('cf-connecting-ip')) })
   // DEVICES hook: an owner JWT whose check reached no verdict answers OWNER_JWT_UNVERIFIED (not null).
   verifyAccess ??= createAccessVerifier({ now, unverified: OWNER_JWT_UNVERIFIED })
   const threadMount = createThreadMount() // ANYBROWSER hook: one per isolate; it holds the one-import-at-a-time slot
@@ -1731,10 +1736,16 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
           return new Response(null, { status: 308, headers: { location: `https://${env.PUBLIC_HOST}${url.pathname}${url.search}` } })
         }
         if (url.protocol !== 'https:' || !env.PUBLIC_HOST || url.host !== env.PUBLIC_HOST) return json({ ok: false, code: 'HOST_REFUSED' }, 403)
+        if (url.pathname === '/_nightly' || url.pathname.startsWith('/_nightly/')) return json({ ok: false, code: 'NOT_FOUND' }, 404)
         if (url.pathname === BUILD_ROUTE) return buildRevision(incoming, url, env)
         // NOSTR hook: signed out, read-only, cached; HEAD is asked at most once per isolate per minute while its reads settle
         // (while they do not: at most one new read per `shareWaitMs`, see createNostrReadDoor).
         if (NOSTR_PUBLIC_ROUTES.has(url.pathname)) return await nostrReadDoor.serve(incoming, url, signal => bootstrapCall(env, 'HEAD', NOSTR_ANCHOR_LATEST_PATH, undefined, signal))
+        // WITNESS hook: the witness object's routes are internal only: no outside caller is ever forwarded to /_witness/*.
+        if (url.pathname === '/_witness' || url.pathname.startsWith('/_witness/')) return json({ ok: false, code: 'NOT_FOUND' }, 404) // WITNESS hook
+        // WITNESS hook: signed out, read-only, cached 60 s, shielded per network on misses: fingerprints, links and states only.
+        // WITNESS hook: /api/witness/record is served only while WITNESS_RECORD_PUBLIC is exactly "on" (shipped off).
+        if (WITNESS_PUBLIC_ROUTES.has(url.pathname)) return await witnessReadDoor.serve(incoming, url, (path, signal) => witnessCall(env, path, { signal }), { recordPublic: witnessRecordPublic(env) }) // WITNESS hook
         // The provider's brain socket, only with VOICE_MANAGED exactly "1" and only with its JWT AND the
         // bridge secret. A refused request that carries a JWT records one closed stage, at most once per stage per minute
         // per isolate (one object call); with no JWT nothing is recorded. Anything short of that falls through and is
@@ -1867,6 +1878,16 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         // here, before any bootstrap read: it reads and writes no storage and calls no object, lease, receipt or HEAD.
         if (url.pathname === '/_host/cell-run') return await (await import('./kyber-cell.mjs')).cellRunDoor(incoming, url, origin, access)
         // ---- KYBERHAND hook end ----
+        // WITNESS hook: the owner's read of one whole witness record (its facts too): owner only (his email, a live session),
+        // WITNESS hook: a same-origin GET with no body and exactly `?seq=n`; answered by the witness object, before any bootstrap read.
+        if (url.pathname === WITNESS_OWNER_ROUTE) { // WITNESS hook
+          if (url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404) // WITNESS hook
+          if (incoming.method !== 'GET') return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405) // WITNESS hook
+          if ((origin !== url.origin && origin !== null) || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403) // WITNESS hook
+          if (access.type !== 'owner' || typeof access.email !== 'string' || typeof env.OWNER_EMAIL !== 'string' || access.email.toLowerCase() !== env.OWNER_EMAIL.toLowerCase() || !Number.isFinite(access.expires) || access.expires <= now() / 1000) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403) // WITNESS hook
+          if (incoming.body !== null || incoming.headers.has('transfer-encoding') || (incoming.headers.has('content-length') && incoming.headers.get('content-length') !== '0')) return json({ ok: false, code: 'WITNESS_REQUEST_INVALID' }, 400) // WITNESS hook
+          return await witnessOwnerRecord(env, url, incoming.signal) // WITNESS hook
+        } // WITNESS hook
         const estateRoute = url.pathname === '/_host/estate'
         // DEVICES hook: the devices list is an owner-only GET read, judged exactly as the invites list.
         const aumlokInvitesRoute = url.pathname === '/_host/aumlok/invites' || url.pathname === PASSKEY_DEVICE_ROUTES.list
@@ -1912,6 +1933,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         }
         const wakeRoute = url.pathname === '/_host/wake'
         const archiveRoute = url.pathname === '/_host/archive'
+        const nightlyRoute = url.pathname === '/_host/nightly'
         const cloudBodyRoute = url.pathname === '/_host/cloud-body' || url.pathname === '/api/body/run'
         const turnJournalRoute = url.pathname === '/_host/turn-journal'
         const voiceControlRoute = url.pathname === '/_host/voice'
@@ -1925,14 +1947,15 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
         const browserReadRoute = selftestRoute || url.pathname === '/_host/diagnostics'
         const brokerRoute = browserReadRoute || ['/_host/repo', '/_host/github', '/_host/cloudflare', '/_host/web-eyes'].includes(url.pathname)
         const aumlokRoute = /^\/_host\/aumlok\/(?:status|invites|redeem|challenge|bind|refresh|invite|approve|unseal|devices|device-code|device-remove|device-confirm|device-decline)$/.test(url.pathname) // DEVICES hook: the last five
-        if (archiveRoute || cloudBodyRoute || turnJournalRoute) {
+        if (archiveRoute || nightlyRoute || cloudBodyRoute || turnJournalRoute) {
           if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
-          const allowedMethods = turnJournalRoute ? ['GET'] : ['GET', 'POST']
+          const allowedMethods = turnJournalRoute || nightlyRoute ? ['GET'] : ['GET', 'POST']
           if (!allowedMethods.includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
           if ((origin !== url.origin && !(incoming.method === 'GET' && origin === null)) || incoming.headers.get('sec-fetch-site') !== 'same-origin') return json({ ok: false, code: 'SAME_ORIGIN_BROWSER_REQUIRED' }, 403)
           if (incoming.method === 'POST' && access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
-          if (archiveRoute && access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403) // status builds the live bundle and names his credential; owner only
+          if ((archiveRoute || nightlyRoute) && access.type !== 'owner') return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403) // status builds the live bundle and names his credential; owner only
         }
+        if (nightlyRoute) return json(await nightlyStatus(env.ARCHIVE_BUCKET))
         if (voiceControlRoute) {
           if (url.href.includes('?') || url.hash) return json({ ok: false, code: 'NOT_FOUND' }, 404)
           if (!['GET', 'POST'].includes(incoming.method)) return json({ ok: false, code: 'METHOD_UNAVAILABLE' }, 405)
@@ -2058,6 +2081,7 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
             voiceDuplex,
             providerUsage: telemetry?.providerUsage ?? null,
             lastArchive: telemetry?.lastArchive ?? null,
+            lastNightly: await latestNightly(env.ARCHIVE_BUCKET).then(value => value ? { set: value.set, complete: value.complete, finishedAt: value.finishedAt } : null).catch(() => null),
             lastGithubSync: telemetry?.lastGithubSync ?? null,
             capabilities: {
               head: Boolean(env.HEAD),
@@ -2191,6 +2215,11 @@ export function createWorker({ verifyAccess, networkFetch = edgeNetworkFetch, ap
       }
       })
     },
+    // WITNESS hook: each hour (wrangler.toml [triggers] crons) one bounded tick of her witness object. Never throws.
+    async scheduled(_controller, env, _ctx) { // WITNESS hook
+      try { await witnessTick(env) } catch (_error) { console.warn('WITNESS_TICK_FAILED') }
+      try { await runNightlyCopy(env, { now }) } catch (_error) { console.warn('NIGHTLY_FAILED') }
+    }, // WITNESS hook
   }
 }
 

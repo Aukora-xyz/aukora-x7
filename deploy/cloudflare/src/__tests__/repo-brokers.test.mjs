@@ -677,7 +677,8 @@ test('private file and commit byte caps stay finite across assembled edits and e
   const commit = await broker.request({ action: 'commit', branch: BRANCH, message: 'Two bounded files', changes: [{ path, content }, { path: 'deploy/cloudflare/src/auma/second.mjs', content }] })
   assert.equal(commit.status, 200)
   const over = await broker.request({ action: 'write', branch: BRANCH, path, content: content + 'x' })
-  assert.equal(over.value.code, 'BROKER_CONTENT_INVALID')
+  assert.equal(over.value.code, 'REPO_FILE_TOO_LARGE') // An oversized file says so (was BROKER_CONTENT_INVALID)
+  assert.equal(over.status, 413)
   // A private commit holds 4 MiB (was 1 MiB): eight full files fit exactly; one byte more is refused.
   const plain = 'y'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes), eight = Array.from({ length: 8 }, (_v, i) => ({ path: `deploy/cloudflare/src/auma/part-${i}.mjs`, content: plain }))
   assert.equal(CLOUD_REPO_BRANCH_LIMITS.publicationBytes, 8 * CLOUD_REPO_BRANCH_LIMITS.fileBytes)
@@ -685,7 +686,7 @@ test('private file and commit byte caps stay finite across assembled edits and e
   const aggregate = await broker.request({ action: 'commit', branch: BRANCH, message: 'Too many bytes', changes: [...eight, { path: 'deploy/cloudflare/src/auma/third.mjs', content: 'x' }] })
   assert.equal(aggregate.value.code, 'REPO_CHANGE_INVALID')
   const assembled = fixture({ after: { [path]: 'x'.repeat(CLOUD_REPO_BRANCH_LIMITS.fileBytes - 6) + 'TARGET' } })
-  assert.equal((await assembled.request({ action: 'edit', branch: BRANCH, path, oldString: 'TARGET', newString: 'TOO-LONG' })).value.code, 'BROKER_CONTENT_INVALID')
+  assert.equal((await assembled.request({ action: 'edit', branch: BRANCH, path, oldString: 'TARGET', newString: 'TOO-LONG' })).value.code, 'REPO_FILE_TOO_LARGE')
   const legacy = fixture()
   assert.equal((await legacy.request({ action: 'write', path: 'README.md', content })).value.code, 'BROKER_BODY_TOO_LARGE')
 })

@@ -44,6 +44,8 @@ export interface ChildStartRequest {
   provider?: string
   /** The per-child model override, if the call passed one. */
   model?: string
+  /** The per-child output cap (each model request), if the call passed one. */
+  maxTokens?: number
 }
 
 /**

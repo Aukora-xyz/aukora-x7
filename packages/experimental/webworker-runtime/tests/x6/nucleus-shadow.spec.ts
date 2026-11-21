@@ -359,7 +359,7 @@ describe('x6_self_state shows the tally', () => {
         facts: { changedOrgans: 1, protected: 0, missing: 0, moduleUpdated: 1, disabledClean: 1, configSame: 0, canonicalId: 1 },
         nucleus: { decision: 64, reasons: ['ORGAN_CONFIG_CHANGED'], escalate: 1 }, edge: { tier: 'T1', reasons: ['T1'] } }] })
     expect(Object.keys(answer)).toEqual(['schema', 'runtime', 'edge', 'head', 'organs', 'staged', 'tools', 'doors', 'nucleusShadow',
-      'cellCount', 'cells', 'cellJournal', 'forgedCells', 'skills', 'unknown'])
+      'cellCount', 'cells', 'cellJournal', 'forgedCells', 'skills', 'spend', 'unknown'])
     expect(answer.unknown).not.toContainEqual(expect.objectContaining({ field: 'nucleusShadow' }))
     // Each consult is one journal line on her cell host, labelled as the nucleus shadow's call.
     const journal = await host.journal()

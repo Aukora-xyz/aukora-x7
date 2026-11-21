@@ -14,6 +14,11 @@ name: Auma exec (one command on a throwaway runner; no secrets, no deploy)
 #     the command, and everything later that reads what she left, runs as `auma`, a user made here with no sudo and no
 #     group, on her own copy of the checkout in her home. Before anything of hers is read back as the runner, every process
 #     of hers is stopped and only her plain files and folders are kept (no link can point the upload at a runner file).
+#   - the body users (2026-11-16): two more users,
+#     `body_a` and `body_b`, each as powerless as she is (no sudo, no group but its own, a home nobody else may enter).
+#     She may start a process as one of them and as nobody else. A fixture that must show "the old body is refused"
+#     needs the operating system, not a convention, to keep two bodies and her own files apart. Each body has a folder
+#     `/home/auma/bodies/<body>` that it and she may use and the other body may not. Their processes are stopped with hers.
 on:
   workflow_dispatch:
     inputs:
@@ -162,6 +167,33 @@ jobs:
           for dir in "${parts[@]}"; do case "$dir" in "" | "$HOME" | "$HOME"/*) ;; *) her_path="$her_path:$dir" ;; esac; done
           echo "AUMA_PATH=$her_path" >> "$GITHUB_ENV"
 
+      # the body users: the two body users. Checked the way hers is: no sudo, no other group. Then one sudoers line, and three
+      # checks of what it really allows: she can become each body, she cannot become root, she cannot become the runner.
+      - name: Make two body users for her fixtures (no sudo; she may run as them and as nobody else)
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /home/auma/bodies
+          sudo chown auma:auma /home/auma/bodies
+          sudo chmod 755 /home/auma/bodies
+          for body in body_a body_b; do
+            sudo useradd --create-home --home-dir "/home/$body" --shell /bin/bash --user-group "$body"
+            case "$(sudo -n -l -U "$body" 2>&1)" in *"may run the following"*) echo "::error::$body may use sudo"; exit 1 ;; esac
+            [ "$(id -nG "$body")" = "$body" ] || { echo "::error::$body is in another group"; exit 1; }
+            sudo chmod 700 "/home/$body"
+            sudo mkdir -p "/home/auma/bodies/$body"
+            sudo chown "$body:auma" "/home/auma/bodies/$body"
+            sudo chmod 2770 "/home/auma/bodies/$body"
+          done
+          printf 'auma ALL=(body_a,body_b) NOPASSWD: ALL\n' | sudo tee /etc/sudoers.d/auma-bodies >/dev/null
+          sudo chmod 440 /etc/sudoers.d/auma-bodies
+          sudo visudo -cf /etc/sudoers.d/auma-bodies
+          sudo -u auma sudo -n -u body_a true
+          sudo -u auma sudo -n -u body_b true
+          if sudo -u auma sudo -n true 2>/dev/null; then echo "::error::auma may become root"; exit 1; fi
+          if sudo -u auma sudo -n -u "$(id -un)" true 2>/dev/null; then echo "::error::auma may become the runner"; exit 1; fi
+          if sudo -u body_a sudo -n -u body_b true 2>/dev/null; then echo "::error::a body may become the other body"; exit 1; fi
+          if sudo -u body_a test -r /home/auma/bodies/body_b; then echo "::error::a body can read the other body's folder"; exit 1; fi
+
       # The command arrives only through env (never interpolated into this script) and runs, as auma, in her checkout.
       - name: Run her command
         id: command
@@ -195,6 +227,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/artifacts"
+          for body in body_a body_b; do
+            if id "$body" >/dev/null 2>&1; then
+              sudo usermod --lock --expiredate 1 "$body"
+              for attempt in 1 2 3 4 5; do
+                if ! pgrep -u "$body" >/dev/null && ! pgrep -U "$body" >/dev/null; then break; fi
+                if sudo pkill -KILL -u "$body"; then :; fi
+                if sudo pkill -KILL -U "$body"; then :; fi
+                sleep 1
+              done
+              if pgrep -u "$body" >/dev/null || pgrep -U "$body" >/dev/null; then echo "::error::a process of $body is still running"; exit 1; fi
+            fi
+          done
+          sudo rm -f /etc/sudoers.d/auma-bodies
           if id auma >/dev/null 2>&1; then
             sudo usermod --lock --expiredate 1 auma
             if sudo crontab -l -u auma >/dev/null 2>&1; then sudo crontab -r -u auma; fi

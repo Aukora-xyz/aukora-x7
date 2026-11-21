@@ -18,9 +18,10 @@
 | `deploy/cloudflare/src/__tests__/world-holder.test.mjs` | 59 个中 6 个 | 需要私有的提交历史；公开的树只随附一份快照。这六个用例用 `git show` 与两个较早的提交比较，而这些提交不在本仓库中。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/ci/frozen-paths.test.mjs` | 26 个中 8 个，在没有 `.git` 文件夹时运行（直接下载的副本） | 一个用例断言冻结清单上的每个文件都在树中；清单列出了她在 `mirror/home/auma/seed/` 下的收据文件，而本仓库不随附它（只提交了 genesis 种子）。一个用例断言 `proposal-checks.yml` 的自动触发器，而它在这里和其他工作流一样被注释掉了。六个用例调用 `git ls-files`，需要 git 检出；在这棵树的 git 检出中的失败数，本清单没有测量。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/cloudflare/src/__tests__/rescue-thread-join.test.mjs` | 64 个中 1 个 | 这个用例运行 `git grep`，而直接下载的这棵树没有 `.git` 文件夹。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `deploy/cloudflare/src/__tests__/fresh-link.test.mjs` | 14 个中 1 个，在没有 `.git` 文件夹时运行 | 用例“wired to nothing”运行 `git ls-files`，而直接下载的这棵树没有 `.git` 文件夹。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `deploy/cloudflare/src/__tests__/wake4-mirror-reads.test.mjs` | 1（文件无法加载） | 它在加载时读取她的交接笔记 `mirror/home/auma/HANDOFF.md`。那份笔记属于她的世界，本仓库不随附它。 | 在记录的运行（属于较早的一棵树）之后加入 |
-| `deploy/cloudflare/src/__tests__/capsule-act-shapes.test.mjs` | 18 个中 2 个 | 两个用例读取 `docs/capsule/` 下的胶囊契约页面，本仓库不随附它们。 | 在记录的运行（属于较早的一棵树）之后加入 |
-| `deploy/cloudflare/src/__tests__/capsule-envelope.test.mjs` | 17 个中 2 个 | 同样的原因：两个用例读取 `docs/capsule/` 下的胶囊契约页面。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `deploy/cloudflare/src/__tests__/capsule-act-shapes.test.mjs` | 18 个中 1 个 | 一个用例读取胶囊契约 `docs/capsule/CONTRACT.md`，本仓库不随附它（它的模式页面 `docs/capsule/SCHEMA.md` 随附，读取它的用例通过）。 | 在记录的运行（属于较早的一棵树）之后加入 |
+| `deploy/cloudflare/src/__tests__/capsule-envelope.test.mjs` | 17 个中 1 个 | 同样的原因：一个用例读取 `docs/capsule/CONTRACT.md`。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `packages/experimental/webworker-runtime/tests/x6/self-check.spec.ts` | 56 个中 1 个 | 一个用例读取她的页面 `docs/auma/self-check.md`，本仓库不随附它。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `packages/experimental/webworker-runtime/tests/x6/retention-real-head.spec.ts` | 14 个中 2 个 | 它们测试一个长期运行节点的 head 的 organ 模块。本仓库把那个 head 换成由通用种子集合构建的替身，所以这些模块在这里是另外的字节。 | 在记录的运行（属于较早的一棵树）之后加入 |
 | `packages/experimental/webworker-runtime/tests/x6/retention-infrastructure.spec.ts` | 21 个中 1 个 | 与上一行原因相同。 | 在记录的运行（属于较早的一棵树）之后加入 |
@@ -34,7 +35,8 @@
 
 | 文件 | 失败 | 原因 |
 | --- | --- | --- |
-| `deploy/cloudflare/src/__tests__/wake3-mandate-acts.test.mjs` | 17 个中 1 个 | 一个用例期望路由对一份格式错误的已存 mandate 透传 503；它回答的是 403。没有进一步调查。 |
+| `deploy/cloudflare/src/__tests__/voice-bridge-fast-claude.test.mjs` | 24 个中 1 个 | 一个用例期望随附配置把 Claude 列为快速语音的提供方；源码已把那一行改为 DeepSeek（`deploy/cloudflare/wrangler.toml` 中的 `VOICE_FAST_PROVIDER = "deepseek"`），而这个用例没有随之更改。 |
+| `deploy/cloudflare/src/__tests__/voice-provider-limits.test.mjs` | 1（文件加载失败） | 它在加载时因 TypeError 停止，在源码中也一样。未进一步调查。 |
 | `apps/web/tests/auma-live-managed-voice-bundle.spec.ts` | 7 个中 1 个 | 这个用例重建托管语音的包，需要安装语音提供方的包（`@elevenlabs/client`）；没有检查对这棵树执行 `pnpm install` 是否会提供它。 |
 | `apps/web/tests/pentora-live-bundle.spec.ts` | 1（构建步骤失败，所以它的 4 个用例被跳过） | 同样的原因：它的构建步骤打包 Auma Live 的模块，而这些模块导入那个包。 |
 

@@ -210,13 +210,21 @@ export function providerRequestReservation(bytes, limits, pathname, { assistantR
   try { input = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) } catch (_error) { fail('PROVIDER_BUDGET_REQUEST_INVALID', 400) }
   const outputFields = wire === 'responses' ? ['max_output_tokens'] : wire === 'messages' ? ['max_tokens'] : ['max_tokens', 'max_completion_tokens']
   const fields = new Set(['model', 'temperature', 'top_p', 'stream', 'tools', 'tool_choice', ...outputFields,
-    ...(wire === 'chat' ? ['messages', 'stop', 'n', 'parallel_tool_calls'] : wire === 'messages' ? ['messages', 'system', 'stop_sequences', 'thinking', 'output_config', 'metadata', 'top_k'] : ['input', 'instructions', 'parallel_tool_calls', 'store'])])
+    ...(wire === 'chat' ? ['messages', 'stop', 'n', 'parallel_tool_calls'] : wire === 'messages' ? ['messages', 'system', 'stop_sequences', 'thinking', 'output_config', 'metadata', 'top_k', 'fallbacks'] : ['input', 'instructions', 'parallel_tool_calls', 'store'])])
   if (!record(input) || Object.keys(input).some(key => !fields.has(key))) fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
   if (typeof input.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:/@+ -]{0,199}$/.test(input.model) || (input.n !== undefined && input.n !== 1)) fail('PROVIDER_BUDGET_REQUEST_INVALID', 400)
   if (input.thinking !== undefined && !(record(input.thinking) && only(input.thinking, ['type', 'budget_tokens']) && ['enabled', 'disabled'].includes(input.thinking.type) && (input.thinking.budget_tokens === undefined || (Number.isSafeInteger(input.thinking.budget_tokens) && input.thinking.budget_tokens >= 1)))) fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
-  if (input.output_config !== undefined && !(only(input.output_config, ['effort']) && ['low', 'medium', 'high', 'max'].includes(input.output_config.effort))) fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
+  // The five documented effort levels (claude-api shared/model-migration.md, "Choosing an effort level").
+  if (input.output_config !== undefined && !(only(input.output_config, ['effort']) && ['low', 'medium', 'high', 'xhigh', 'max'].includes(input.output_config.effort))) fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
+  // Server-side refusal fallbacks, only in the `"default"` scalar form (claude-api curl/examples.md, "Refusal
+  // Fallbacks"); the array form, which names models, is refused here.
+  if (input.fallbacks !== undefined && input.fallbacks !== 'default') fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
+  // A cache mark is exactly `{ type: 'ephemeral' }` (5 minutes) or the same with ttl '1h' (claude-api
+  // shared/prompt-caching.md, "API reference", lines 122-124), or with ttl '5m', the default's own name (the same file,
+  // line 208, counts it as `ephemeral_5m`), wherever this check accepts one; nothing else.
+  const cacheMark = value => value === undefined || (only(value, ['type', 'ttl']) && value.type === 'ephemeral' && (value.ttl === undefined || ['5m', '1h'].includes(value.ttl)))
   const functionDefinition = (value, anthropic = false) => only(value, anthropic ? ['name', 'description', 'input_schema', 'defer_loading', 'cache_control'] : ['name', 'description', 'parameters', 'strict'])
-    && identifier(value.name) && (value.description === undefined || typeof value.description === 'string') && (value.strict === undefined || typeof value.strict === 'boolean')
+    && cacheMark(value.cache_control) && identifier(value.name) && (value.description === undefined || typeof value.description === 'string') && (value.strict === undefined || typeof value.strict === 'boolean')
     && (value.defer_loading === undefined || typeof value.defer_loading === 'boolean')
     && record(anthropic ? value.input_schema : value.parameters) && selfContained(anthropic ? value.input_schema : value.parameters)
   if (input.tools !== undefined && !(Array.isArray(input.tools) && input.tools.length <= 512 && input.tools.every(tool => wire === 'chat'
@@ -232,14 +240,20 @@ export function providerRequestReservation(bytes, limits, pathname, { assistantR
           && (choice.type === 'tool' ? identifier(choice.name) : choice.name === undefined) && (choice.disable_parallel_tool_use === undefined || typeof choice.disable_parallel_tool_use === 'boolean'))
     if (!valid) fail('PROVIDER_REQUEST_SHAPE_UNSUPPORTED', 400)
   }
-  const textBlock = block => only(block, ['type', 'text', 'cache_control']) && ['text', 'input_text', 'output_text'].includes(block.type) && typeof block.text === 'string'
+  const textBlock = block => only(block, ['type', 'text', 'cache_control']) && ['text', 'input_text', 'output_text'].includes(block.type) && typeof block.text === 'string' && cacheMark(block.cache_control)
   const wireInput = block => textBlock(block) || (only(block, ['type', 'source']) && block.type === 'image' && record(block.source) && only(block.source, ['type', 'media_type', 'data']) && block.source.type === 'base64' && typeof block.source.media_type === 'string' && typeof block.source.data === 'string')
   const chatCall = call => only(call, ['id', 'type', 'function']) && identifier(call.id) && call.type === 'function' && only(call.function, ['name', 'arguments']) && identifier(call.function.name) && typeof call.function.arguments === 'string'
   const anthropicBlock = block => wireInput(block)
     || (only(block, ['type', 'thinking', 'signature']) && block.type === 'thinking' && typeof block.thinking === 'string' && (block.signature === undefined || typeof block.signature === 'string'))
+    // A server-side fallback switch point, echoed back in place (claude-api shared/model-migration.md,
+    // "`refusal` stop reason" -> "Echoing fallback turns back"; its shape `{type, from: {model}, to: {model}}` is the one
+    // that section gives).
+    || (only(block, ['type', 'from', 'to']) && block.type === 'fallback' && only(block.from, ['model']) && identifier(block.from.model) && only(block.to, ['model']) && identifier(block.to.model))
     || (only(block, ['type', 'tool']) && ['tool_addition', 'tool_removal'].includes(block.type) && record(block.tool) && only(block.tool, ['type', 'name']) && block.tool.type === 'tool_reference' && identifier(block.tool.name))
-    || (only(block, ['type', 'id', 'name', 'input']) && block.type === 'tool_use' && identifier(block.id) && identifier(block.name) && record(block.input) && selfContained(block.input))
-    || (only(block, ['type', 'tool_use_id', 'content', 'is_error']) && block.type === 'tool_result' && identifier(block.tool_use_id) && (typeof block.content === 'string' || boundedOptionalList(block.content, wireInput)) && (block.is_error === undefined || typeof block.is_error === 'boolean'))
+    // tool_use and tool_result blocks may carry a cache mark (prompt-caching.md line 128): the block that ends
+    // every agent step is a tool_result, so the growing conversation can be read back from the cache.
+    || (only(block, ['type', 'id', 'name', 'input', 'cache_control']) && block.type === 'tool_use' && identifier(block.id) && identifier(block.name) && record(block.input) && selfContained(block.input) && cacheMark(block.cache_control))
+    || (only(block, ['type', 'tool_use_id', 'content', 'is_error', 'cache_control']) && block.type === 'tool_result' && identifier(block.tool_use_id) && (typeof block.content === 'string' || boundedOptionalList(block.content, wireInput)) && (block.is_error === undefined || typeof block.is_error === 'boolean') && cacheMark(block.cache_control))
   // ONLY on the wake's own path (assistantReasoning) may an assistant turn carry the thinking
   // model's `reasoning_content` (a string) back to it; every browser provider door refuses the field as before.
   const chatMessage = message => only(message, ['role', 'content', 'tool_calls', 'tool_call_id', 'name', ...(assistantReasoning === true ? ['reasoning_content'] : [])]) && ['system', 'developer', 'user', 'assistant', 'tool'].includes(message.role)

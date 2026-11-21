@@ -311,12 +311,14 @@ describe('VOICE LEVEL open: a spoken turn in her voice home is an ordinary turn 
     expect(await host.mark('bad id')).toMatchObject({ ok: false, code: 'VOICE_SESSION_INVALID' })
   })
 
-  it('review: a key in HANDOFF.md straddling the 1500-character cut is screened whole, never cut to a short fragment', async () => {
+  // voicelane1: the cut her note rides under is now VOICE_MAP_NOW_CHARS (2,000); the key straddles that cut.
+  it('review: a key in HANDOFF.md straddling the 2000-character cut is screened whole, never cut to a short fragment', async () => {
     const host = await boot(head(), undefined, 'open')
     const key = '0123456789abcdef'.repeat(4)
-    host.vfs.writeFileSync(`${HOME}/HANDOFF.md`, `${'word '.repeat(294)}${key} after\n`)
+    host.vfs.writeFileSync(`${HOME}/HANDOFF.md`, `${'word '.repeat(394)}${key} after\n`)
     const map = String((await host.mark(VOICE)).map)
-    expect(map).toContain('HANDOFF.md, first 1500 characters')
+    expect(map).toContain('her hand-off note, top (HANDOFF.md, read at this turn):')
+    expect(map).toContain('word word')
     expect(map).not.toContain('0123456789abcdef01')
   })
 
@@ -362,6 +364,41 @@ describe('VOICE LEVEL open: a spoken turn in her voice home is an ordinary turn 
     expect(await closed.runtime.handleControlRequest('GET', '/__x6__/voice-level', '')).toEqual({ status: 200, body: { ok: true, level: 'look-only' } })
   })
 
+  // The edge's managed_status answer reaches her WHOLE, names and numbers as the edge wrote
+  // them (the per-turn outcome, reason and step times, the tool rounds, the counts and the stream key names); the worker
+  // only adds `runtime` beside it and never picks fields.
+  it('x6_voice_status passes the edge\'s managed_status through unchanged: per-turn fields, counts and streamKeys', async () => {
+    const edgeStatus = {
+      switch: 'on', live: 1, failures: [],
+      turns: [{
+        outcome: 'cancelled', reason: 'barge_in', journalMs: 41, modelFirstMs: 2310, firstSpeechMs: 2650, endMs: 6100,
+        calls: 2, merged: 1, cues: 1,
+        toolRounds: [{ tool: 'x6_voice_status', sentMs: 2400, backMs: 3150, result: 'ok' }, { tool: 'x6_linear', sentMs: 3300, backMs: 6100, result: 'cancelled' }],
+      }, { outcome: 'answered', reason: null, journalMs: 30, modelFirstMs: 1900, firstSpeechMs: 2100, endMs: 4000, calls: 1, merged: 0, cues: 0, toolRounds: [] }],
+      counts: { backchannelsKept: 3, wordsMerged: 1, stops: 0, presenceCues: 1, handoffsKept: 2, handoffEchoes: 0, fastFallbacks: 0,
+        toolTimeouts: 1, awareFrames: 9, awareStoredLoads: 1, blocksTrimmed: 0 },
+      streamKeys: { text: ['type', 'text'], thinking: ['type', 'thinking', 'signature'], tool_use: ['type', 'id', 'name', 'input'] },
+    }
+    const host = await boot(head(), (method, pathname) => pathname === '/_host/voice' && method === 'POST' ? Response.json(edgeStatus) : null, 'open')
+    await host.mark(OPEN_HOME)
+    const status = JSON.parse(await host.call(OPEN_HOME, 'x6_voice_status')) as Record<string, unknown>
+    const { runtime, ...rest } = status
+    expect(rest).toEqual(edgeStatus)
+    expect(runtime).toMatchObject({ level: 'open' })
+  })
+
+  // The description she reads names the status contract's fields, not the old 8-turn shape.
+  it('x6_voice_status\'s description names the status contract (24 turns, reason, step milliseconds, tool rounds, counts, stream key names)', () => {
+    const source = readFileSync(path.join(REPO_ROOT, 'packages/experimental/webworker-runtime/src/x6/ball-loader.ts'), 'utf8')
+    const start = source.indexOf("name: 'x6_voice_status'")
+    const block = source.slice(start, source.indexOf('parameters:', start))
+    expect(start).toBeGreaterThan(0)
+    expect(block).not.toContain('last 8 turns')
+    for (const name of ['last 24 turns', 'reason', 'journalMs', 'modelFirstMs', 'firstSpeechMs', 'endMs', 'toolRounds', 'counts', 'streamKeys', 'docs/auma/voice-bridge.md']) {
+      expect(block).toContain(name)
+    }
+  })
+
   it('every stage of the level-open home chain is a closed stage the worker keeps, and x6_voice_status shows the newest', async () => {
     const host = await boot(head(), (method, pathname) => pathname === '/_host/voice' && method === 'POST'
       ? Response.json({ switch: 'on', live: 0, failures: [] }) : null, 'open')
@@ -372,6 +409,14 @@ describe('VOICE LEVEL open: a spoken turn in her voice home is an ordinary turn 
       expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage })))?.status).toBe(200)
     }
     expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage: 'home-made-up' })))?.status).toBe(400)
+    // A stored id proven not her voice conversation, one that could not be proven, and the last guard.
+    for (const stage of ['home-stored-not-voice', 'home-stored-unproven', 'home-unproven']) {
+      expect(VOICE_NOTE_STAGES).toContain(stage)
+      expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage })))?.status).toBe(200)
+    }
+    for (const stage of chain) {
+      expect((await host.runtime.handleControlRequest('POST', '/__x6__/voice-note', JSON.stringify({ stage })))?.status).toBe(200)
+    }
     const status = JSON.parse(await host.call(OPEN_HOME, 'x6_voice_status')) as { runtime: { recent: Array<{ code: string }> } }
     expect(status.runtime.recent.map(row => row.code)).toEqual(chain.slice(-8).reverse().map(stage => `page:${stage}`))
   })

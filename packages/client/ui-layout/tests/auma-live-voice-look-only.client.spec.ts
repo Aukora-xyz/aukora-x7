@@ -19,9 +19,19 @@ const live = await import(pathToFileURL(livePath ?? 'apps/web/public/app/genesis
     arrivalTurn: (input: Record<string, unknown>) => Promise<TurnResult>
   }
   threadRoster: (items: unknown[], options?: { exclude?: string[]; now?: number }) => string
+  titleOf: (item: unknown) => string
+  awareThreads: (items: unknown[], options?: { exclude?: string[]; now?: number }) => Array<{ title: string }>
+  workingNow: (items: unknown[], options?: { exclude?: string[]; now?: number }) => string
+  WORKING_HEAD: string
+  WORKING_MAX_BYTES: number
+  WORKING_MAX_THREADS: number
   rosterClock: (ms: number, now: number) => string
   AUMA_LIVE_ALIEN_VOICE_DIRECTIVE: string
   AUMA_LIVE_VOICE_MEDIUM: string
+  VOICE_CHANNEL_GUIDANCE: string
+  VOICE_BUSY_SAY: string
+  VOICE_BUSY_AFTER_MS: number
+  VOICE_EFFORT: string
   VOICE_ARRIVAL: string
   VOICE_HOME_UNAVAILABLE: string
   VOICE_UNREACHABLE_SAY: string
@@ -63,6 +73,24 @@ type Item = {
   blank?: boolean
   origin?: string
   cwd?: string
+  /** session/list's own field: this thread's Agent is mid-turn (session-controller list.ts). */
+  running?: boolean
+  /** This row reaches the page with no `projections` block (a cold row with no cache record): its title is
+   * then known only to `session/projections`. */
+  rowWithoutTitle?: boolean
+}
+
+/**
+ * A row exactly as `session/list` sends it (session-controller types.ts SessionSummary, list.ts): no top-level
+ * `title` or `displayTitle`; the title lives in `projections.values.title` (a cold row's `cached` block).
+ */
+function wireRow(item: Item): Record<string, unknown> {
+  const title = item.title ?? item.displayTitle
+  return {
+    sessionId: item.sessionId, updatedAt: item.updatedAt, running: item.running === true, blank: item.blank === true, agentAvailable: false,
+    ...(item.origin === undefined ? {} : { origin: item.origin }), ...(item.cwd === undefined ? {} : { cwd: item.cwd }),
+    ...(title === undefined || item.rowWithoutTitle === true ? {} : { projections: { kind: 'cached', asOfSeq: 3, values: { title } } }),
+  }
 }
 type Stream = { args: unknown; push: (frame: unknown) => void; end: () => void }
 
@@ -83,6 +111,10 @@ function world(options: {
   create?: (request: Record<string, unknown>) => Response | null
   /** The page's DSH transport itself fails: at once ('now'), or only after the level probe's bound ('late'). */
   transportDown?: 'now' | 'late'
+  /** One `session/projections` answer (the exact read of one conversation's title), or null for the usual. */
+  projectionsRead?: (sessionId: string) => Response | null
+  /** One `session/rename` answer, or null for the usual rename. */
+  rename?: (request: Record<string, unknown>) => Response | null
 } = {}) {
   const log: Call[] = []
   const items: Item[] = options.items ?? [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 1000 }]
@@ -111,20 +143,29 @@ function world(options: {
       const method = path.replace('/api/', '')
       const args = (body as { payload: { args: Record<string, unknown> } }).payload.args
       log.push({ kind: 'rpc', name: method, body: args })
-      if (method === 'session/list') return options.list ? options.list() : json({ result: { ok: true, value: { items } } })
+      if (method === 'session/list') return options.list ? options.list() : json({ result: { ok: true, value: { items: items.map(wireRow) } } })
+      if (method === 'session/projections') {
+        const sessionId = (args.request as { sessionId: string }).sessionId
+        const own = options.projectionsRead?.(sessionId) ?? null
+        if (own) return own
+        const target = items.find(item => item.sessionId === sessionId)
+        return json({ result: { ok: true, value: target ? { kind: 'sequenced', asOfSeq: 5, values: { title: target.title ?? target.displayTitle ?? null } } : null } })
+      }
       if (method === 'session/create') {
         const own = options.create?.(args.request as Record<string, unknown>) ?? null
         if (own) return own
         if (options.createFails) return json({ result: { ok: false, error: { message: 'agent-preset/not-found' } } })
         creates += 1
         const sessionId = `session-fresh-${creates}`
-        items.push({ sessionId, displayTitle: 'auma', updatedAt: NOW })
+        items.push({ sessionId, updatedAt: NOW })
         return json({ result: { ok: true, value: { sessionId, agentPreset: 'auma-alien' } } })
       }
       if (method === 'session/rename') {
+        const own = options.rename?.(args.request as Record<string, unknown>) ?? null
+        if (own) return own
         const request = args.request as { sessionId: string; title: string }
         const target = items.find(item => item.sessionId === request.sessionId)
-        if (target) { target.title = request.title; target.displayTitle = request.title }
+        if (target) target.title = request.title
         return json({ result: { ok: true, value: { title: request.title, seq: 1 } } })
       }
       if (method === 'session/prompt' && options.manual !== true) {
@@ -289,13 +330,16 @@ describe('VOICE LEVEL open: the worker says "open" and her voice home is an ordi
     const w = world({ mark: OPEN() })
     const read = collect(await presence(w.g, { sessionId: HOME, text: 'what is on main right now', spoken: true, visual: true }))
     await settle()
-    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 4)).toEqual(['rpc:session/list', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 5)).toEqual(['rpc:session/list', 'rpc:session/projections', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
     expect(w.prompts()[0]?.sessionId).toBe(HOME)
     expect(w.prompts()[0]?.content).toEqual([
       { type: 'text', text: live.VOICE_PROVENANCE_OPEN },
       { type: 'text', text: emptyRoster() },
       { type: 'text', text: MAP },
       { type: 'text', text: live.AUMA_LIVE_VOICE_MEDIUM },
+      { type: 'text', text: live.VOICE_CHANNEL_GUIDANCE },
       { type: 'text', text: 'what is on main right now' },
     ])
     expect(w.notes).toEqual([])
@@ -351,7 +395,7 @@ describe('VOICE LEVEL open: the worker says "open" and her voice home is an ordi
       const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
       await settle()
       expect(w.prompts()[0]?.content.map(part => part.text))
-        .toEqual([live.VOICE_PROVENANCE_OPEN, emptyRoster(), live.AUMA_LIVE_VOICE_MEDIUM, 'hello'])
+        .toEqual([live.VOICE_PROVENANCE_OPEN, emptyRoster(), live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_CHANNEL_GUIDANCE, 'hello'])
       await read.done
     }
   })
@@ -394,7 +438,6 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
   const LIST_FAILS = () => json({ result: { ok: false, error: { message: 'session/list failed' } } })
   const CREATE_FAILS = () => json({ result: { ok: false, error: { message: 'agent-preset/not-found' } } })
   const WORK: Item = { sessionId: 'session-work', title: 'Garden map', updatedAt: NOW - 60_000 }
-  const OLDER: Item = { sessionId: 'session-older', title: 'Older', updatedAt: NOW - 600_000 }
   const POISON = { sessionId: 'session-poison', updatedAt: NOW, get title(): string { throw new Error('a broken row') } }
   const POISONED_LIST = () =>
     ({ ok: true, status: 200, json: async () => ({ result: { ok: true, value: { items: [POISON] } } }) }) as unknown as Response
@@ -411,43 +454,38 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
     const w = world({ level: 'open', mark: OPEN_MARK })
     const frames = await spokenTurn(w, 'what is on main right now')
     expect(w.levelAsks()).toBe(1)
-    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 4)).toEqual(['rpc:session/list', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(w.log.map(call => `${call.kind}:${call.name}`).slice(0, 5)).toEqual(['rpc:session/list', 'rpc:session/projections', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
     expect(w.prompts()[0]?.sessionId).toBe(HOME)
     expect(w.prompts()[0]?.content.map(part => part.text)).toEqual([
-      live.VOICE_PROVENANCE_OPEN, live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, 'what is on main right now',
+      live.VOICE_PROVENANCE_OPEN, live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_CHANNEL_GUIDANCE, 'what is on main right now',
     ])
     expect(said(frames)).toBe('Done.')
     expect(w.notes).toEqual([])
   })
 
-  it('the stored voice thread is used whatever its title, when the list has it', async () => {
+  // CHANGED: the stored id is used only when its
+  // title proves it is her voice conversation; a stored working thread is noted and passed over.
+  it('the stored id is used only when proven her voice conversation: a stored working thread is noted and passed over', async () => {
     const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5 }] })
     w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-work')
     await spokenTurn(w)
-    expect(w.prompts()[0]?.sessionId).toBe('session-work')
+    expect(w.prompts()[0]?.sessionId).toBe(HOME)
     expect(creates(w)).toEqual([])
+    expect(w.notes).toEqual(['home-stored-not-voice'])
   })
 
   // Each failure the old sentence covered: the turn is sent whenever any thread exists, and the sentence is never said.
   const failures: Array<[string, Parameters<typeof world>[0], (w: ReturnType<typeof world>) => void, string, string[]]> = [
     ['the list fails: a fresh home is made with her preset and folder, renamed, and used', { list: LIST_FAILS },
       () => {}, 'session-fresh-1', ['home-list-failed']],
-    ['the list fails and every create fails: the stored id is used as it is', { list: LIST_FAILS, createFails: true },
-      (w) => { w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored') }, 'session-stored',
-      ['home-list-failed', 'home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed', 'home-stored-unlisted']],
     ['no voice home and agent-preset/not-found: made with her folder only', { items: [WORK], create: request => (request.agentPreset ? CREATE_FAILS() : null) },
       () => {}, 'session-fresh-1', ['home-create-preset-failed']],
-    ['no voice home and every create fails: her most recently active top-level thread', { items: [OLDER, WORK, { sessionId: 'session-sub', origin: 'subagent', updatedAt: NOW }], createFails: true },
-      () => {}, 'session-work', ['home-create-preset-failed', 'home-create-folder-failed', 'home-create-bare-failed', 'home-fallback-recent']],
     ['the mark is unreachable: sent without the map', { mark: () => Promise.reject(new Error('tunnel closed')) }, () => {}, HOME, ['mark-unreachable']],
     ['the mark answers 404: sent', { mark: () => json({ error: 'Unknown X6 control route' }, 404) }, () => {}, HOME, ['mark-refused']],
     ['the mark answers 400 VOICE_SESSION_INVALID: sent', { mark: () => json({ ok: false, code: 'VOICE_SESSION_INVALID' }, 400) }, () => {}, HOME, ['mark-refused']],
     ['the mark answers 503: sent', { mark: () => json({ ok: false, code: 'VOICE_MARK_NOT_SAVED', say: 'not saved' }, 503) }, () => {}, HOME, ['mark-refused']],
-    ['an exception inside the block: the stored id is used', {
-      // A row that throws when read (a Response is the only way past JSON, which would read it in the fixture instead).
-      list: () => POISONED_LIST(),
-    }, (w) => { w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored') }, 'session-stored',
-    ['home-exception', 'home-stored-unlisted']],
   ]
   for (const [name, options, before, sentTo, stages] of failures) {
     it(name, async () => {
@@ -465,6 +503,45 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
       expect(content.includes(MAP)).toBe(!stages.some(stage => stage.startsWith('mark-')))
     })
   }
+
+  // CHANGED: a stored id is used "as it is" when the list fails
+  // ONLY when this page proved it earlier in this page life. A fresh page cannot prove it: a new voice thread is made.
+  it('the list fails on a fresh page with a stored id: not proven, so it is not used; a new voice thread is made instead', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored')
+    const frames = await spokenTurn(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-1'])
+    expect(w.notes).toEqual(['home-list-failed'])
+    expect(said(frames)).toBe('Done.')
+    // Every create would fail too: nothing is posted anywhere, and she says so.
+    const none = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS, createFails: true })
+    none.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored')
+    const refused = await spokenTurn(none)
+    expect(none.prompts()).toEqual([])
+    expect(said(refused)).toBe('My voice thread would not open (list failed, create failed). Try me again.')
+  })
+
+  it('the list fails after this page proved its voice thread: that thread is used as it is, and nothing is made', async () => {
+    let failing = false
+    const w = world({ level: 'open', mark: OPEN_MARK, list: () => (failing ? LIST_FAILS() : json({ result: { ok: true, value: { items: [wireRow({ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5 })] } } })) })
+    await spokenTurn(w, 'one')
+    failing = true
+    await spokenTurn(w, 'two')
+    expect(creates(w)).toEqual([])
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+    expect(w.notes).toEqual(['home-list-failed', 'home-stored-unlisted'])
+  })
+
+  // CHANGED: an exception while the home is found no longer falls back to an unproven stored id.
+  it('an exception inside the block: nothing is posted, and she says so', async () => {
+    // A row that throws when read (a Response is the only way past JSON, which would read it in the fixture instead).
+    const w = world({ level: 'open', mark: OPEN_MARK, list: () => POISONED_LIST() })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-stored')
+    const frames = await spokenTurn(w)
+    expect(w.prompts()).toEqual([])
+    expect(said(frames)).toBe('My voice thread would not open (an error). Try me again.')
+    expect(w.notes).toEqual(['home-exception', 'home-none'])
+  })
 
   it('the made home is created in order (preset and folder, folder, nothing) and each new thread is renamed to the voice title', async () => {
     const w = world({ level: 'open', mark: OPEN_MARK, items: [], create: request => (Object.keys(request).length > 0 ? CREATE_FAILS() : null) })
@@ -488,13 +565,16 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
     expect(live.voiceHomeNoneSay([])).toBe('My voice thread would not open (no thread found). Try me again.')
   })
 
-  it('the one-fresh-home limit does not apply at open: at most three creates per page, then the last fallback', async () => {
+  // CHANGED: the last-resort fallback to her most recently active thread is gone: she says so in words.
+  it('the one-fresh-home limit does not apply at open: at most three creates per page, then she says so; no fallback thread', async () => {
     const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK], createFails: true })
-    await spokenTurn(w, 'one')
-    await spokenTurn(w, 'two')
+    const first = await spokenTurn(w, 'one')
+    const second = await spokenTurn(w, 'two')
     expect(creates(w)).toHaveLength(live.VOICE_OPEN_CREATES_MAX)
-    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work', 'session-work'])
-    expect(w.notes.slice(-2)).toEqual(['home-creates-spent', 'home-fallback-recent'])
+    expect(w.prompts()).toEqual([])
+    expect(said(first)).toBe('My voice thread would not open (create failed). Try me again.')
+    expect(said(second)).toBe('My voice thread would not open (no more new threads on this page). Try me again.')
+    expect(w.notes.slice(-2)).toEqual(['home-creates-spent', 'home-none'])
     // A page whose first fresh home works makes a second one when that thread is gone from the list (look-only never would).
     const v = world({ level: 'open', mark: OPEN_MARK, items: [] })
     await spokenTurn(v, 'one')
@@ -546,27 +626,49 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
     expect(w.levelAsks()).toBe(1)
   })
 
-  it('her own mind: an effort a previous build lowered goes back to the model default, once; any other effort is left as it is', async () => {
+  it('a fast default for spoken turns only (2026-11-16): spoken turns in her voice thread think at low, "deep" asks for her own effort back', async () => {
     const projections = (effort?: string) => ({ asOfSeq: 2, values: { modelSelection: { lastUsed: null, next: { provider: 'deepseek', model: 'deepseek-v4', ...(effort ? { reasoningEffort: effort } : {}) } } } })
+    expect(live.VOICE_EFFORT).toBe('low')
+    for (const effort of ['max', 'high']) {
+      const w = world({ level: 'open', mark: OPEN_MARK, projections: projections(effort) })
+      await spokenTurn(w, 'one')
+      const deep = collect(await presence(w.g, { sessionId: HOME, text: 'two', spoken: true, mind: 'deep' }))
+      await deep.done
+      // Through the session-only route (it saves no default), the model the thread already uses; never the session-wide RPC.
+      expect(w.log.filter(call => call.name === 'session-model').map(call => call.body)).toEqual([
+        { sessionId: HOME, provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'low' },
+        { sessionId: HOME, provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: effort },
+      ])
+      expect(w.log.some(call => /selectModel|modelCatalog/.test(call.name))).toBe(false)
+    }
+    // A thread already at low is not asked again for a spoken turn.
     const low = world({ level: 'open', mark: OPEN_MARK, projections: projections('low') })
     await spokenTurn(low, 'one')
     await spokenTurn(low, 'two', HOME)
-    expect(low.log.filter(call => call.name === 'session-model').map(call => call.body)).toEqual([{ sessionId: HOME, provider: 'deepseek', model: 'deepseek-v4' }])
-    for (const effort of ['max', 'high', undefined]) {
-      const kept = world({ level: 'open', mark: OPEN_MARK, projections: projections(effort) })
-      await spokenTurn(kept, 'one')
-      const deep = collect(await presence(kept.g, { sessionId: HOME, text: 'two', spoken: true, mind: 'deep' }))
-      await deep.done
-      expect(kept.log.some(call => call.name === 'session-model')).toBe(false)
-    }
+    expect(low.log.some(call => call.name === 'session-model')).toBe(false)
   })
 
-  it('the last fallback never picks a thread working in her private folder; with only such a thread, nothing is sent', async () => {
+  it('her own mind for typed turns: a typed turn into her voice thread puts back an effort this page lowered; it carries no voice guidance', async () => {
+    const projections = { asOfSeq: 2, values: { modelSelection: { lastUsed: null, next: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'low' } } } }
+    const w = world({ level: 'open', mark: OPEN_MARK, projections })
+    const typed = collect(await presence(w.g, { sessionId: HOME, text: 'typed here' }))
+    await typed.done
+    expect(w.log.filter(call => call.name === 'session-model').map(call => call.body)).toEqual([{ sessionId: HOME, provider: 'deepseek', model: 'deepseek-v4' }])
+    expect(w.prompts()[0]?.content.map(part => part.text)).not.toContain(live.VOICE_CHANNEL_GUIDANCE)
+    // CHANGED: her ordinary thread is never a spoken turn's target any more, so nothing touches its mind.
+    const fallback = world({ level: 'open', mark: OPEN_MARK, items: [WORK], createFails: true, projections: { asOfSeq: 2, values: { modelSelection: { lastUsed: null, next: { provider: 'deepseek', model: 'deepseek-v4', reasoningEffort: 'max' } } } } })
+    await spokenTurn(fallback, 'hello')
+    expect(fallback.prompts()).toEqual([])
+    expect(fallback.log.some(call => call.name === 'session-model')).toBe(false)
+  })
+
+  // CHANGED: no last fallback at all: with only ordinary threads and no voice thread, nothing is sent.
+  it('no fallback thread: with her ordinary and private threads listed and no voice thread made, nothing is sent', async () => {
     const PRIVATE: Item = { sessionId: 'session-private', title: 'Kira notes', updatedAt: NOW, cwd: '/dsh/home/auma/private/kira' }
     const w = world({ level: 'open', mark: OPEN_MARK, items: [PRIVATE, WORK], createFails: true })
     const frames = await spokenTurn(w)
-    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work'])
-    expect(said(frames)).toBe('Done.')
+    expect(w.prompts()).toEqual([])
+    expect(said(frames)).toBe('My voice thread would not open (create failed). Try me again.')
     const only = world({ level: 'open', mark: OPEN_MARK, items: [{ ...PRIVATE, cwd: '/dsh/home/auma/private' }], createFails: true })
     const none = await spokenTurn(only)
     expect(only.prompts()).toEqual([])
@@ -574,16 +676,16 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
     expect(only.notes.at(-1)).toBe('home-none')
   })
 
-  it('her most recent ordinary thread carries spoken turns only: the page is never given it as her home', async () => {
+  // CHANGED: her ordinary thread carries no spoken turn either.
+  it('her most recent ordinary thread is never her home: not for the page, and not for a spoken turn', async () => {
     const w = world({ level: 'open', mark: OPEN_MARK, items: [WORK], createFails: true })
     const minds = await (await w.g.fetch('http://localhost/api/auma-live/minds')).json() as { homeSession?: string }
     expect(minds).not.toHaveProperty('homeSession')
     const grant = await presence(w.g, { action: 'start-voice', sessionId: 'session-work', recipient: live.GENESIS_PROVIDER, classes: live.GENESIS_VOICE_CLASSES })
     expect(grant.status).toBe(404)
     expect(await grant.json()).toEqual({ refusal: 'session-not-found' })
-    // A spoken turn still reaches her, in that thread.
     await spokenTurn(w)
-    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-work'])
+    expect(w.prompts()).toEqual([])
     // A made voice home is still the page's home.
     const v = world({ level: 'open', mark: OPEN_MARK, items: [WORK] })
     const made = await (await v.g.fetch('http://localhost/api/auma-live/minds')).json() as { homeSession?: string }
@@ -621,7 +723,7 @@ describe('VOICE LEVEL asked first (2026-11-14): at level open the look-only sent
     expect(heard.join('')).toBe('Done.')
     expect(w.prompts()[0]?.sessionId).toBe(HOME)
     expect(w.prompts()[0]?.content.map(part => part.text))
-      .toEqual([live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_ARRIVAL])
+      .toEqual([live.threadRoster([], { now: NOW }), MAP, live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_CHANNEL_GUIDANCE, live.VOICE_ARRIVAL])
     expect(w.log.some(call => call.kind === 'edge')).toBe(false)
     expect(live.VOICE_ARRIVAL).toContain('has not spoken yet')
     expect(live.VOICE_ARRIVAL).not.toMatch(/curious|greet|introduce|say hello/i)
@@ -646,7 +748,9 @@ describe('a voice home the worker cannot prove is replaced once, exactly as the 
     const read = collect(response)
     await settle()
     const order = w.log.filter(call => call.name !== 'session/list').map(call => `${call.kind}:${call.name}`)
-    expect(order).toEqual(['x6:voice-mark', 'rpc:session/create', 'rpc:session/rename', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(order).toEqual(['rpc:session/projections', 'x6:voice-mark', 'rpc:session/create', 'rpc:session/rename', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
     expect(w.log.find(call => call.name === 'session/create')?.body).toEqual({ request: { cwd: '/dsh/home/auma', agentPreset: 'auma-alien' } })
     expect(w.log.find(call => call.name === 'session/rename')?.body).toEqual({ request: { sessionId: 'session-fresh-1', title: VOICE_TITLE } })
     expect(w.log.filter(call => call.name === 'voice-mark').map(call => call.body)).toEqual([{ sessionId: HOME }, { sessionId: 'session-fresh-1' }])
@@ -686,7 +790,9 @@ describe('mark and journal both come before the prompt', () => {
     const w = world()
     const read = collect(await presence(w.g, { sessionId: HOME, text: 'what is staged', spoken: true }))
     await settle()
-    expect(w.log.map(call => `${call.kind}:${call.name}`)).toEqual(['rpc:session/list', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(w.log.map(call => `${call.kind}:${call.name}`)).toEqual(['rpc:session/list', 'rpc:session/projections', 'x6:voice-mark', 'edge:dispatch_turn', 'rpc:session/prompt'])
     await read.done
   })
 
@@ -718,7 +824,9 @@ describe('spoken turns go only to the voice home', () => {
     const read = collect(await presence(w.g, { sessionId: 'session-other', text: 'add a line to your handoff', spoken: true }))
     await read.done
     expect(read.frames).toEqual([{ t: 'tok', v: live.VOICE_NOT_HOME_SAY }, { t: 'done', reason: live.VOICE_LOOK_ONLY_REFUSED, message: live.VOICE_NOT_HOME_SAY }])
-    expect(w.log.map(call => `${call.kind}:${call.name}`)).toEqual(['rpc:session/list'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(w.log.map(call => `${call.kind}:${call.name}`)).toEqual(['rpc:session/list', 'rpc:session/projections'])
   })
 
   it('a typed turn for another thread is unchanged: sent there, no mark, no roster', async () => {
@@ -795,7 +903,9 @@ describe('spoken turns go only to the voice home', () => {
     expect(content[0]).toEqual({ type: 'text', text: live.VOICE_PROVENANCE })
     expect(content.at(-1)).toEqual({ type: 'text', text: '/goal delete the old branches' })
     expect(content.slice(0, -1).some(part => part.text.startsWith('/'))).toBe(false)
-    expect(w.log.filter(call => call.kind === 'rpc').map(call => call.name)).toEqual(['session/list', 'session/prompt'])
+    // CHANGED: her cached voice-titled row is
+    // read exactly once before it is adopted.
+    expect(w.log.filter(call => call.kind === 'rpc').map(call => call.name)).toEqual(['session/list', 'session/projections', 'session/prompt'])
     await read.done
   })
 })
@@ -870,6 +980,7 @@ describe('sight of her other threads', () => {
       { type: 'text', text: live.VOICE_PROVENANCE },
       { type: 'text', text: roster },
       { type: 'text', text: live.AUMA_LIVE_ALIEN_VOICE_DIRECTIVE },
+      { type: 'text', text: live.VOICE_CHANNEL_GUIDANCE },
       { type: 'text', text: 'what are you working on in your other threads' },
     ])
     await read.done
@@ -1073,5 +1184,561 @@ describe('faster thinking, voice thread only', () => {
     await settle()
     await read.done
     expect(w.log.some(call => call.kind === 'x6')).toBe(false)
+  })
+})
+
+describe('voice-channel guidance and the busy lane (2026-11-16)', () => {
+  const splice = (data: Record<string, unknown>) => ({ type: 'event', event: { type: 'agent/inbox/spliced', data: { target: 'next-turn', inserted: [], ...data } } })
+  const message = (id: string, rpcId: string) => ({ id, role: 'user', content: [], source: { kind: 'user', rpcId } })
+  const toks = (frames: Frame[]) => frames.filter(frame => frame.t === 'tok').map(frame => frame.v)
+
+  it('the guidance says the channel rules, adapted from the site; never the site\'s own limits; one part, just before the words heard', async () => {
+    const g = live.VOICE_CHANNEL_GUIDANCE
+    for (const rule of ['live, interruptible voice conversation', 'Speak for the ear', 'lead with the useful thought', 'roughly 20 to 45 words',
+      'go deeper when he asks', 'answer his new point', 'one brief, true line', 'Never say a thing is done before its result exists',
+      'Voice does not replace approvals']) expect(g).toContain(rule)
+    expect(g).not.toMatch(/no general tools|private memory|cannot|website/i)
+    const w = world()
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+    await read.done
+    const parts = w.prompts()[0]?.content.map(part => part.text) ?? []
+    expect(parts[0]).toBe(live.VOICE_PROVENANCE)
+    expect(parts.slice(-2)).toEqual([live.VOICE_CHANNEL_GUIDANCE, 'hello'])
+    expect(parts.filter(text => text === live.VOICE_CHANNEL_GUIDANCE)).toHaveLength(1)
+  })
+
+  it('a spoken request still waiting in her inbox behind running work: one true line after VOICE_BUSY_AFTER_MS, then her answer in the same turn', async () => {
+    expect(live.VOICE_BUSY_AFTER_MS).toBe(1000)
+    const w = world({ manual: true })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'which threads', spoken: true }))
+    await settle()
+    const requestId = String(w.prompts()[0]?.requestId)
+    const stream = w.streams[0]
+    stream?.push(splice({ start: 0, inserted: [message('m-own', requestId)] }))
+    await settle()
+    expect(toks(read.frames)).toEqual([])
+    await new Promise((r) => { setTimeout(r, live.VOICE_BUSY_AFTER_MS + 50) })
+    await settle()
+    expect(toks(read.frames)).toEqual([live.VOICE_BUSY_SAY])
+    await new Promise((r) => { setTimeout(r, live.VOICE_BUSY_AFTER_MS + 50) })
+    stream?.push(splice({ start: 0, removedCount: 1 }))
+    answer(stream, requestId)
+    await read.done
+    expect(toks(read.frames)).toEqual([live.VOICE_BUSY_SAY, 'I read two threads.', ' [field hue=teal]'])
+    expect(read.frames.at(-1)).toEqual({ t: 'done', reason: 'completed' })
+    // Nothing is fenced, cancelled or asked twice for it.
+    expect(w.log.some(call => call.name === 'session/state' || call.name === 'session/cancel' || call.name === 'session/updateQueue')).toBe(false)
+  }, 10_000)
+
+  it('no busy line when her thread claims the request at once, for a typed turn, or for a turn that was cut', async () => {
+    const claimed = world({ manual: true })
+    const quick = collect(await presence(claimed.g, { sessionId: HOME, text: 'hi', spoken: true }))
+    await settle()
+    const id = String(claimed.prompts()[0]?.requestId)
+    claimed.streams[0]?.push(splice({ start: 0, inserted: [message('m-own', id)] }))
+    claimed.streams[0]?.push(splice({ start: 0, removedCount: 1 }))
+    answer(claimed.streams[0], id)
+    await quick.done
+    await new Promise((r) => { setTimeout(r, live.VOICE_BUSY_AFTER_MS + 50) })
+    expect(toks(quick.frames)).not.toContain(live.VOICE_BUSY_SAY)
+    const typed = world({ manual: true })
+    const t = collect(await presence(typed.g, { sessionId: HOME, text: 'typed' }))
+    await settle()
+    const tid = String(typed.prompts()[0]?.requestId)
+    typed.streams[0]?.push(splice({ start: 0, inserted: [message('m-own', tid)] }))
+    await new Promise((r) => { setTimeout(r, live.VOICE_BUSY_AFTER_MS + 50) })
+    await settle()
+    expect(toks(t.frames)).toEqual([])
+    answer(typed.streams[0], tid)
+    await t.done
+    const cut = world({ manual: true })
+    const controller = new AbortController()
+    const c = collect(await cut.g.fetch('http://localhost/api/auma-live/presence/stream', {
+      method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visual: true, sessionId: HOME, text: 'wait', spoken: true }),
+    }))
+    await settle()
+    const cid = String(cut.prompts()[0]?.requestId)
+    cut.streams[0]?.push(splice({ start: 0, inserted: [message('m-own', cid)] }))
+    await settle()
+    controller.abort()
+    await c.done
+    await new Promise((r) => { setTimeout(r, live.VOICE_BUSY_AFTER_MS + 50) })
+    expect(toks(c.frames)).toEqual([])
+  }, 15_000)
+})
+
+describe('she answers by voice while she works in another thread, and knows what is mid-turn (2026-11-16, voicelane1)', () => {
+  const OPEN_MAP = '[your map for this voice turn, from your own runtime]\nbuild made-up3.'
+  const OPEN = () => json({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open', map: OPEN_MAP })
+  const HOME_ITEM: Item = { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 1000 }
+  const WORKING: Item = { sessionId: 'session-workcard', title: 'Card 4: tracker sweep', updatedAt: NOW - 60_000, running: true }
+  const IDLE: Item = { sessionId: 'session-idle', title: 'Older notes', updatedAt: NOW - 600_000 }
+  const toks = (frames: Frame[]) => frames.filter(frame => frame.t === 'tok').map(frame => frame.v)
+  const splice = (data: Record<string, unknown>) => ({ type: 'event', event: { type: 'agent/inbox/spliced', data: { target: 'next-turn', inserted: [], ...data } } })
+  const message = (id: string, rpcId: string) => ({ id, role: 'user', content: [], source: { kind: 'user', rpcId } })
+
+  it('a spoken turn while another thread is mid-turn goes to her voice thread, which takes it at once: first words, no busy line', async () => {
+    const w = world({ level: 'open', mark: OPEN, items: [WORKING, HOME_ITEM], manual: true })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'what are you doing right now', spoken: true }))
+    await settle()
+    const prompt = w.prompts()[0]
+    expect(prompt?.sessionId).toBe(HOME)
+    const requestId = String(prompt?.requestId)
+    // Her voice thread is idle: the request is claimed at once (no wait behind the working thread's turn).
+    w.streams[0]?.push(splice({ start: 0, inserted: [message('m-own', requestId)] }))
+    w.streams[0]?.push(splice({ start: 0, removedCount: 1 }))
+    answer(w.streams[0], requestId)
+    await read.done
+    expect(toks(read.frames)[0]).toBe('I read two threads.')
+    expect(toks(read.frames)).not.toContain(live.VOICE_BUSY_SAY)
+    // Nothing was asked of the working thread: no prompt, no cancel, no follow.
+    expect(w.log.filter(call => JSON.stringify(call.body).includes('session-workcard'))).toEqual([])
+  })
+
+  it('the spoken turn carries what is mid-turn now: title and last activity, from this turn\'s own list, never its contents', async () => {
+    const w = world({ level: 'open', mark: OPEN, items: [WORKING, HOME_ITEM] })
+    await collect(await presence(w.g, { sessionId: HOME, text: 'what are you doing', spoken: true })).done
+    const parts = w.prompts()[0]?.content.map(part => part.text) ?? []
+    const working = live.workingNow([WORKING, HOME_ITEM], { exclude: [HOME], now: NOW })
+    expect(working).toBe(`${live.WORKING_HEAD}\n- workcard "Card 4: tracker sweep", mid-turn, last activity 14:29`)
+    // Order: provenance, roster, working now, map, medium, guidance, the words heard.
+    expect(parts).toEqual([
+      live.VOICE_PROVENANCE_OPEN, live.threadRoster([WORKING, HOME_ITEM], { exclude: [HOME], now: NOW }), working, OPEN_MAP,
+      live.AUMA_LIVE_VOICE_MEDIUM, live.VOICE_CHANNEL_GUIDANCE, 'what are you doing',
+    ])
+    // Fresh at turn time: when the thread finishes, the next spoken turn no longer names it.
+    WORKING.running = false
+    await collect(await presence(w.g, { sessionId: HOME, text: 'and now', spoken: true })).done
+    expect(w.prompts()[1]?.content.map(part => part.text).some(text => text.startsWith(live.WORKING_HEAD))).toBe(false)
+    WORKING.running = true
+  })
+
+  it('look-only level carries it too; nothing is mid-turn: no part at all', async () => {
+    const w = world({ items: [WORKING, HOME_ITEM] })
+    await collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true })).done
+    expect(w.prompts()[0]?.content.map(part => part.text)).toContain(live.workingNow([WORKING], { now: NOW }))
+    const quiet = world({ items: [IDLE, HOME_ITEM] })
+    await collect(await presence(quiet.g, { sessionId: HOME, text: 'hello', spoken: true })).done
+    expect(quiet.prompts()[0]?.content.map(part => part.text).some(text => text.startsWith(live.WORKING_HEAD))).toBe(false)
+    expect(live.workingNow([IDLE, HOME_ITEM], { now: NOW })).toBe('')
+  })
+
+  it('the working part is capped and filtered: at most three threads and WORKING_MAX_BYTES; never the voice home, a subagent or her private folder', () => {
+    expect(live.WORKING_MAX_THREADS).toBe(3)
+    expect(live.WORKING_MAX_BYTES).toBe(512)
+    const many: Item[] = Array.from({ length: 12 }, (_, i) => ({ sessionId: `session-busy${String(i).padStart(2, '0')}`, title: 'T'.repeat(200), updatedAt: NOW - i * 1000, running: true }))
+    const part = live.workingNow(many, { now: NOW })
+    expect(new TextEncoder().encode(part).byteLength).toBeLessThanOrEqual(live.WORKING_MAX_BYTES)
+    expect(part.split('\n').length - 1).toBeLessThanOrEqual(3)
+    const hidden: Item[] = [
+      { ...HOME_ITEM, running: true },
+      { sessionId: 'session-sub', title: 'a subagent', origin: 'subagent', updatedAt: NOW, running: true },
+      { sessionId: 'session-kira', title: 'Kira notes', cwd: '/dsh/home/auma/private/kira', updatedAt: NOW, running: true },
+    ]
+    expect(live.workingNow(hidden, { now: NOW })).toBe('')
+  })
+
+  // CHANGED (her working narration was spoken): no fallback thread, so a
+  // spoken turn never lands in her idle or her working thread; she says so in words.
+  it('with no voice thread to be had, a spoken turn goes to neither her idle nor her working thread', async () => {
+    const w = world({ level: 'open', mark: OPEN, items: [WORKING, IDLE], createFails: true })
+    const read = collect(await presence(w.g, { sessionId: HOME, text: 'hello', spoken: true }))
+    await read.done
+    expect(w.prompts()).toEqual([])
+    expect(toks(read.frames)).toEqual(['My voice thread would not open (create failed). Try me again.'])
+    expect(w.log.filter(call => JSON.stringify(call.body).includes('session-workcard') || JSON.stringify(call.body).includes('session-idle'))).toEqual([])
+  })
+
+  it('cutting the spoken turn cancels her voice thread only, never the thread that is mid-turn', async () => {
+    const w = world({ level: 'open', mark: OPEN, items: [WORKING, HOME_ITEM], manual: true })
+    const controller = new AbortController()
+    const read = collect(await w.g.fetch('http://localhost/api/auma-live/presence/stream', {
+      method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visual: true, sessionId: HOME, text: 'stop that', spoken: true }),
+    }))
+    await settle()
+    const requestId = String(w.prompts()[0]?.requestId)
+    w.streams[0]?.push({ type: 'event', event: { type: 'turn/start', data: { turn: 9 } } })
+    w.streams[0]?.push({ type: 'event', event: { type: 'user/message', data: { role: 'user', turn: 9, source: { kind: 'user', rpcId: requestId } } } })
+    await settle()
+    controller.abort()
+    await read.done
+    await settle()
+    const cancels = w.log.filter(call => call.name === 'session/cancel').map(call => (call.body.request as { sessionId: string }).sessionId)
+    expect(cancels).toEqual([HOME])
+    expect(w.log.filter(call => JSON.stringify(call.body).includes('session-workcard'))).toEqual([])
+  })
+})
+
+describe('a spoken prompt goes only into her proven voice conversation', () => {
+  const OPEN_MARK = () => json({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open', map: '' })
+  const WORKING: Item = { sessionId: 'session-guided', title: 'GUIDED RECURSION card 1.2', updatedAt: NOW - 1000, running: true }
+  const said = (frames: Frame[]) => frames.filter(frame => frame.t === 'tok').map(frame => frame.v).join('')
+  const spoken = async (w: ReturnType<typeof world>, words = 'what model are you on') => {
+    const read = collect(await presence(w.g, { sessionId: HOME, text: words, spoken: true }))
+    await read.done
+    await settle()
+    return read.frames
+  }
+  const creates = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/create').map(call => call.body.request)
+  const reads = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/projections').map(call => (call.body.request as { sessionId: string }).sessionId)
+  const REAL_ROW = { sessionId: HOME, updatedAt: NOW - 5, running: false, blank: false, agentAvailable: true, projections: { kind: 'cached', asOfSeq: 12, values: { title: VOICE_TITLE } } }
+
+  it('titleOf reads the title where the wire carries it (projections.values.title), then title, then displayTitle', () => {
+    expect(live.titleOf(REAL_ROW)).toBe(VOICE_TITLE)
+    expect(live.titleOf({ sessionId: 's', title: 'top', displayTitle: 'shown', projections: { kind: 'sequenced', asOfSeq: 1, values: { title: 'projected' } } })).toBe('projected')
+    expect(live.titleOf({ sessionId: 's', title: 'top', displayTitle: 'shown', projections: { kind: 'cached', asOfSeq: 1, values: { title: null } } })).toBe('top')
+    expect(live.titleOf({ sessionId: 's', displayTitle: 'shown', projections: { kind: 'cached', asOfSeq: 1, values: { title: '' } } })).toBe('shown')
+    for (const empty of [{ sessionId: 's' }, { sessionId: 's', projections: { kind: 'cached', asOfSeq: 1, values: {} } }, null, 7]) expect(live.titleOf(empty)).toBe('')
+  })
+
+  // CHANGED:
+  // was "adopted, no new thread, no extra read". A `cached` row's title is a possibly stale hint, so it is read
+  // exactly once before it is adopted; once proven, the next turn asks nothing.
+  it('a real (cached) list row with the voice title is her home: one exact read, then adopted; no new thread', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, list: () => json({ result: { ok: true, value: { items: [REAL_ROW] } } }) })
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+    expect(creates(w)).toEqual([])
+    expect(reads(w)).toEqual([HOME])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+  })
+
+  it('the stored id pointing at her working conversation (mid-turn): never prompted; noted; her voice-titled thread is used', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORKING, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 90_000 }] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, WORKING.sessionId)
+    await spoken(w)
+    await spoken(w, 'continue')
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+    expect(w.notes).toEqual(['home-stored-not-voice'])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+    expect(w.log.filter(call => JSON.stringify(call.body).includes(WORKING.sessionId))).toEqual([])
+  })
+
+  it('the stored id pointing at her working conversation and no voice thread listed: a new voice thread is made, never the working one', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORKING] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, WORKING.sessionId)
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-1'])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe('session-fresh-1')
+  })
+
+  it('a stored row that carries no title: ONE exact read of that conversation only, whatever else is untitled; adopted when it proves the voice title', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [
+      { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5, rowWithoutTitle: true },
+      { sessionId: 'session-a', title: 'a', updatedAt: NOW - 6, rowWithoutTitle: true },
+      { sessionId: 'session-b', title: 'b', updatedAt: NOW - 7, rowWithoutTitle: true },
+    ] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+    await spoken(w)
+    await spoken(w, 'again')
+    expect(reads(w)).toEqual([HOME, HOME])
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+  })
+
+  it('a stored row that carries no title and whose exact read shows another title (or none): noted, not used', async () => {
+    for (const title of ['Garden map', undefined]) {
+      const w = world({ level: 'open', mark: OPEN_MARK, items: [{ sessionId: 'session-old', ...(title ? { title } : {}), updatedAt: NOW - 5, rowWithoutTitle: true }] })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-old')
+      await spoken(w)
+      expect(reads(w)).toEqual(['session-old'])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-1'])
+      expect(w.notes).toEqual(['home-stored-not-voice'])
+    }
+  })
+
+  // CHANGED: "a stored row with no title whose exact read fails: unproven, so not used (a voice-titled
+  // thread or a new one is)" moved to the review block below as "nothing is made, the stored id is kept, she says why".
+
+  it('several voice-titled conversations: the most recently updated is used', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [
+      { sessionId: 'session-voice-old', title: VOICE_TITLE, updatedAt: NOW - 90_000 },
+      { sessionId: 'session-voice-new', title: VOICE_TITLE, updatedAt: NOW - 5 },
+    ] })
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-voice-new'])
+  })
+
+  // Several conversations may carry the voice title: one real, the others blank stubs.
+  it('a voice-titled conversation that holds turns is used before an empty stub, however new the stub', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [
+      { sessionId: 'session-voice-real', title: VOICE_TITLE, updatedAt: NOW - 90_000 },
+      { sessionId: 'session-voice-stub', title: VOICE_TITLE, updatedAt: NOW - 5, blank: true },
+    ] })
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-voice-real'])
+    // Only stubs: the newest one is used, as before.
+    const only = world({ level: 'open', mark: OPEN_MARK, items: [
+      { sessionId: 'session-stub-old', title: VOICE_TITLE, updatedAt: NOW - 90_000, blank: true },
+      { sessionId: 'session-stub-new', title: VOICE_TITLE, updatedAt: NOW - 5, blank: true },
+    ] })
+    await spoken(only)
+    expect(only.prompts().map(prompt => prompt.sessionId)).toEqual(['session-stub-new'])
+  })
+
+  it('a failed rename is a failed create: the unnamed thread is never adopted; the next create is tried', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [], rename: request => (request.sessionId === 'session-fresh-1' ? json({ result: { ok: false, error: { message: 'rename refused' } } }) : null) })
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-2'])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe('session-fresh-2')
+    expect(w.notes).toEqual(['home-rename-failed', 'home-create-preset-failed'])
+    const none = world({ level: 'open', mark: OPEN_MARK, items: [WORKING], rename: () => json({ result: { ok: false, error: { message: 'rename refused' } } }) })
+    const frames = await spoken(none)
+    expect(none.prompts()).toEqual([])
+    expect(said(frames)).toBe('My voice thread would not open (rename failed, create failed). Try me again.')
+  })
+
+  it('look-only level: the stored working thread is not adopted, and a stored untitled row is proven by one exact read', async () => {
+    const w = world({ items: [WORKING, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 90_000 }] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, WORKING.sessionId)
+    await spoken(w)
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+    const v = world({ items: [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5, rowWithoutTitle: true }] })
+    v.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+    await spoken(v)
+    expect(reads(v)).toEqual([HOME])
+    expect(v.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+    expect(creates(v)).toEqual([])
+  })
+
+  it('the roster, what is mid-turn and the awareness read the real titles (never "untitled" for a titled row)', () => {
+    const rows = [REAL_ROW, wireRow({ sessionId: 'session-1a2b3c4d', title: 'Garden map', updatedAt: NOW - 60_000, running: true })]
+    expect(live.threadRoster(rows, { now: NOW })).toContain('"Garden map"')
+    expect(live.threadRoster(rows, { now: NOW })).not.toContain(VOICE_TITLE)
+    expect(live.workingNow(rows, { now: NOW })).toContain('"Garden map", mid-turn')
+    expect(live.awareThreads(rows, { now: NOW }).map(thread => thread.title)).toEqual(['Garden map'])
+  })
+
+  it('a spoken prompt given a conversation this page never proved is not posted (the guard under every path)', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORKING] })
+    const heard: string[] = []
+    const result = await w.g.streamTurn({
+      sessionId: WORKING.sessionId, text: 'hello', spoken: true, signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) },
+      lookOnly: { kind: 'ready', sessionId: WORKING.sessionId, level: 'open', map: '', roster: '', working: '' },
+    })
+    expect(w.prompts()).toEqual([])
+    expect(result.reason).toBe(live.VOICE_HOME_UNAVAILABLE)
+    expect(heard.join('')).toBe(result.text)
+    expect(w.log.some(call => call.kind === 'edge')).toBe(false)
+  })
+
+  it('THE INVARIANT: across every way a home is found or not, each spoken prompt lands only in a conversation proven to be her voice conversation', async () => {
+    const LIST_FAILS = () => json({ result: { ok: false, error: { message: 'session/list failed' } } })
+    const CREATE_FAILS = () => json({ result: { ok: false, error: { message: 'agent-preset/not-found' } } })
+    const scenarios: Array<[string, Parameters<typeof world>[0], string]> = [
+      ['stored = working thread', { items: [WORKING] }, WORKING.sessionId],
+      ['stored = working thread, creates fail', { items: [WORKING], createFails: true }, WORKING.sessionId],
+      ['stored untitled row, read fails', { items: [{ ...WORKING, rowWithoutTitle: true }], projectionsRead: () => CREATE_FAILS() }, WORKING.sessionId],
+      ['list fails, stored never proven', { list: LIST_FAILS }, WORKING.sessionId],
+      ['list fails, creates fail', { list: LIST_FAILS, createFails: true }, WORKING.sessionId],
+      ['renames fail', { items: [WORKING], rename: () => CREATE_FAILS() }, ''],
+      ['voice-titled and working listed', { items: [WORKING, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 90_000 }] }, WORKING.sessionId],
+    ]
+    for (const level of ['open', 'look-only'] as const) {
+      for (const [name, options, stored] of scenarios) {
+        const w = world({ level, mark: level === 'open' ? OPEN_MARK : MARK_OK, ...options })
+        if (stored) w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, stored)
+        for (const words of ['one', 'continue', 'hand it to your working self']) await spoken(w, words)
+        const spokenPrompts = w.prompts().filter(prompt => prompt.content[0]?.text.startsWith('[spoken to Auma Live;'))
+        for (const prompt of spokenPrompts) {
+          const target = w.items.find(item => item.sessionId === prompt.sessionId)
+          expect(`${level} / ${name}: ${String(target?.title)}`).toBe(`${level} / ${name}: ${VOICE_TITLE}`)
+        }
+      }
+    }
+  })
+
+  // An unread title is unknown, never "not her voice conversation"; an unproven stored id is never
+  // overwritten; a stored id proven not voice is one of his conversations.
+  const READ_FAILS = () => json({ result: { ok: false, error: { message: 'session/projections-unavailable' } } })
+  const LIST_FAILS = () => json({ result: { ok: false, error: { message: 'session/list failed' } } })
+  const made = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/create')
+  type HandOff = { turnId: string; transcript: string; conversation: string }
+  type Extra = {
+    voiceAwareness: (facts?: { opened?: string }) => Promise<{ threads: Array<{ title: string }> }>
+    handOffTo: (turn: HandOff) => Promise<{ ok: boolean; reason?: string; sessionId?: string }>
+  }
+
+  // Finding 1: a `migration-required` answer (values from a cache that may be empty) or any answer with no own `title` key
+  // does not say what the title is.
+  for (const [name, answer] of [
+    ['migration-required with no cached title', { kind: 'migration-required', values: {} }],
+    ['a sequenced answer with no title key', { kind: 'sequenced', asOfSeq: 4, values: {} }],
+  ] as const) {
+    it(`the stored row has no title and its exact read is ${name}: unproven (not "not voice"), the stored id is kept, nothing is made or posted`, async () => {
+      const w = world({
+        level: 'open', mark: OPEN_MARK, items: [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5, rowWithoutTitle: true }],
+        projectionsRead: () => json({ result: { ok: true, value: answer } }),
+      })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+      const frames = await spoken(w)
+      expect(w.notes).not.toContain('home-stored-not-voice')
+      expect(w.notes).toContain('home-stored-unproven')
+      expect(made(w)).toEqual([])
+      expect(w.prompts()).toEqual([])
+      expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+      expect(said(frames)).toBe(live.voiceHomeNoneSay(['home-stored-unproven']))
+      // Once the read answers, the same stored id is her home.
+      const again = world({ level: 'open', mark: OPEN_MARK, items: [{ sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 5, rowWithoutTitle: true }] })
+      again.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+      await spoken(again)
+      expect(again.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+    })
+  }
+
+  // CHANGED: it replaces "a stored row with no
+  // title whose exact read fails: unproven, so not used (a voice-titled thread or a new one is)": a new thread made here
+  // would take the stored id over for good, so the turn is refused in words and the stored id kept.
+  it('a stored row with no title whose exact read fails: nothing is made, the stored id is kept, she says why', async () => {
+    const w = world({
+      level: 'open', mark: OPEN_MARK, items: [{ sessionId: 'session-old', title: VOICE_TITLE, updatedAt: NOW - 5, rowWithoutTitle: true }],
+      projectionsRead: () => READ_FAILS(),
+    })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-old')
+    const frames = await spoken(w)
+    expect(made(w)).toEqual([])
+    expect(w.prompts()).toEqual([])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe('session-old')
+    expect(w.notes).toEqual(['home-stored-unproven', 'home-none'])
+    expect(said(frames)).toBe(live.voiceHomeNoneSay(['home-stored-unproven']))
+  })
+
+  // Finding 2: when the list fails, the stored id gets its ONE exact read before anything is made.
+  it('the list fails on a fresh page and the stored id reads as her voice conversation: it is used, nothing is made', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+    await spoken(w)
+    await spoken(w, 'again')
+    expect(made(w)).toEqual([])
+    expect(reads(w)).toEqual([HOME])
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+  })
+
+  it('the list fails and the stored id\'s exact read fails too: nothing is made or posted, the stored id is kept', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS, projectionsRead: () => READ_FAILS() })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+    const frames = await spoken(w)
+    expect(made(w)).toEqual([])
+    expect(w.prompts()).toEqual([])
+    expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+    expect(said(frames)).toBe(live.voiceHomeNoneSay(['home-list-failed', 'home-stored-unproven']))
+  })
+
+  it('the list fails and the stored id reads as another title: noted not-voice, a new voice thread is made', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, list: LIST_FAILS, items: [WORKING] })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, WORKING.sessionId)
+    await spoken(w)
+    expect(reads(w)).toEqual([WORKING.sessionId])
+    expect(w.prompts().map(prompt => prompt.sessionId)).toEqual(['session-fresh-1'])
+    expect(w.notes).toEqual(['home-list-failed', 'home-stored-not-voice'])
+  })
+
+  // Finding 5: a stored id proven NOT her voice conversation is one of her other conversations, seen and reachable.
+  it('a stored working thread proven not voice, with no voice home made: it is in her awareness and a hand-off can reach it', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, items: [WORKING], createFails: true })
+    w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, WORKING.sessionId)
+    await spoken(w)
+    expect(w.notes).toContain('home-stored-not-voice')
+    const g = w.g as unknown as Extra
+    const frame = await g.voiceAwareness()
+    expect(frame.threads.map(thread => thread.title)).toEqual([WORKING.title])
+    const handed = await g.handOffTo({ turnId: 'eleven:conv_1:7', transcript: 'carry on with the card', conversation: String(WORKING.title) })
+    expect(handed).toEqual({ ok: true, sessionId: WORKING.sessionId })
+  })
+})
+
+// the voice memory (review item "home 6"):
+// a `cached` row's title is a possibly stale hint, so the ONE conversation about to be adopted is read exactly
+// once first; the exact answer wins; an exact read that does not say lets the cached title stand for this turn only.
+describe('a cached title is confirmed once before her voice conversation is adopted', () => {
+  const OPEN_MARK = () => json({ ok: true, code: 'VOICE_OPEN', lookOnly: false, level: 'open', map: '' })
+  const READ_FAILS = () => json({ result: { ok: false, error: { message: 'session/projections-unavailable' } } })
+  const exact = (title: string | null) => json({ result: { ok: true, value: { kind: 'sequenced', asOfSeq: 9, values: { title } } } })
+  const spoken = async (w: ReturnType<typeof world>, words = 'what model are you on') => {
+    const { frames, done } = collect(await presence(w.g, { sessionId: HOME, text: words, spoken: true }))
+    await done
+    await settle()
+    return frames
+  }
+  const reads = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/projections').map(call => (call.body.request as { sessionId: string }).sessionId)
+  const creates = (w: ReturnType<typeof world>) => w.log.filter(call => call.name === 'session/create')
+
+  for (const level of ['open', 'look-only'] as const) {
+    const mark = level === 'open' ? OPEN_MARK : MARK_OK
+
+    it(`${level}: the stored id's cached voice title is read exactly once; proven, the next turn asks nothing`, async () => {
+      const w = world({ level, mark })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+      await spoken(w)
+      await spoken(w, 'and again')
+      expect(reads(w)).toEqual([HOME])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+    })
+
+    it(`${level}: a listed cached voice-titled row (nothing stored) is read exactly once before it is adopted`, async () => {
+      const w = world({ level, mark })
+      await spoken(w)
+      await spoken(w, 'and again')
+      expect(reads(w)).toEqual([HOME])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+    })
+
+    it(`${level}: the exact read shows another title: the stored id is noted not-voice, the next cached candidate is read, and it is used`, async () => {
+      const w = world({
+        level, mark,
+        items: [{ sessionId: 'session-renamed', title: VOICE_TITLE, updatedAt: NOW - 5 }, { sessionId: HOME, title: VOICE_TITLE, updatedAt: NOW - 90_000 }],
+        projectionsRead: sessionId => (sessionId === 'session-renamed' ? exact('Garden map') : null),
+      })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, 'session-renamed')
+      await spoken(w)
+      expect(reads(w)).toEqual(['session-renamed', HOME])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+      expect(w.notes).toContain('home-stored-not-voice')
+      expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+    })
+
+    it(`${level}: at most two more exact reads a turn after the first; then nothing stale is adopted`, async () => {
+      const stale = ['session-s1', 'session-s2', 'session-s3', 'session-s4']
+      const w = world({
+        level, mark, items: stale.map((sessionId, index) => ({ sessionId, title: VOICE_TITLE, updatedAt: NOW - index })),
+        projectionsRead: sessionId => (stale.includes(sessionId) ? exact('renamed away') : null),
+      })
+      await spoken(w)
+      expect(reads(w)).toEqual(['session-s1', 'session-s2', 'session-s3'])
+      expect(w.prompts().every(prompt => !stale.includes(prompt.sessionId))).toBe(true)
+    })
+
+    it(`${level}: the exact read does not say: the cached title stands for THIS turn only, and the next turn asks again`, async () => {
+      const w = world({ level, mark, projectionsRead: () => READ_FAILS() })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+      await spoken(w)
+      await spoken(w, 'and again')
+      expect(reads(w)).toEqual([HOME, HOME])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME, HOME])
+      expect(creates(w)).toEqual([])
+      expect(w.store.get(live.AUMA_LIVE_VOICE_SESSION_KEY)).toBe(HOME)
+    })
+
+    it(`${level}: a sequenced row needs no extra read`, async () => {
+      const row = { sessionId: HOME, updatedAt: NOW - 5, running: false, blank: false, agentAvailable: true, projections: { kind: 'sequenced', asOfSeq: 12, values: { title: VOICE_TITLE } } }
+      const w = world({ level, mark, list: () => json({ result: { ok: true, value: { items: [row] } } }) })
+      w.store.set(live.AUMA_LIVE_VOICE_SESSION_KEY, HOME)
+      await spoken(w)
+      expect(reads(w)).toEqual([])
+      expect(w.prompts().map(prompt => prompt.sessionId)).toEqual([HOME])
+    })
+  }
+
+  it('a turn given a cached-only home by hand (not this page\'s own search) is still refused: the turn allowance cannot be forged', async () => {
+    const w = world({ level: 'open', mark: OPEN_MARK, projectionsRead: () => READ_FAILS() })
+    const heard: string[] = []
+    const result = await w.g.streamTurn({
+      sessionId: HOME, text: 'hello', spoken: true, signal: new AbortController().signal, onToken: (v: string) => { heard.push(v) },
+      lookOnly: { kind: 'ready', sessionId: HOME, level: 'open', map: '', roster: '', working: '', provisional: true },
+    })
+    expect(w.prompts()).toEqual([])
+    expect(result.reason).toBe(live.VOICE_HOME_UNAVAILABLE)
   })
 })

@@ -1,7 +1,5 @@
 # Open-source readiness
 
-English | [中文](OPEN-SOURCE-READINESS.zh.md)
-
 This repository is published under AGPL-3.0-or-later, but it is **not yet a stack anyone can fully rebuild.** Some of the parts that make decisions ship only as compiled files, one compiled file has no licence at all, and some build inputs live outside the tree. This page lists every known gap in priority order, says who can close it, and says what a reader can and cannot reproduce from this tree.
 
 None of this is solved. A gap leaves this page only when the fix is in the tree.
@@ -14,7 +12,7 @@ Two words used below: an organ is one replaceable module of Auma, the AI in this
 
 ### 1. 24 of the 30 Wasm cells cannot be rebuilt
 
-The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)). They hold identity, keys, judges, the grant ledger, memory policy and Nostr signing. Five of the 15 ids that only the owner's passkey may change are cells (`T2_ONLY_ORGANS` in `server/ball-transition.mjs`).
+The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)). They hold identity, keys, judges, the grant ledger, memory policy and Nostr signing. Five of the 16 ids that only the owner's passkey may change are cells (`T2_ONLY_ORGANS` in `server/ball-transition.mjs`).
 
 - In the tree: 30 compiled files in `apps/web/public/cells/`, each pinned by size and SHA-256 in `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts`. 24 of them (6,488,165 bytes) have no source here. Six have their hand-written WAT source beside them (`aura-focus.wat`, `cord-echo.wat`, `kyber-cpu.wat`, `menger-hive.wat`, `nucleus.wat`, `pentora-codec.wat`), each with a build script in `server/`. Those rebuilds use the pinned `skillsmith` cell as their compiler, and `skillsmith` is one of the 24 without source.
 - Not in the tree: any Rust source. There is no `.rs` file and no `Cargo.toml` (checked with `find`). The shared crate `mv_abi` that most cells use is not on crates.io and its source is not in this tree (`apps/web/public/cells/THIRD-PARTY.md`, lines 10 and 11). In that table, 13 third-party crate rows and the Rust standard library row read "not visible" for their version. The compiler version and target are not stated in the tree.
@@ -63,7 +61,7 @@ The cells are small sealed WebAssembly modules (see [GLOSSARY.md](GLOSSARY.md)).
 
 ### 8. Deployment values are placeholders written into code
 
-- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3014), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
+- `your-node`, `node.example.invalid` and a zero account id sit in `deploy/cloudflare/wrangler.toml`. The same values, and the repository placeholder `your_org_x/your-node`, are also written into code, among them `server/deploy-cloudflare.mjs` (lines 21, 24), `deploy/cloudflare/src/cloud-brokers.mjs` (lines 19, 3269), `server/seed-cloudflare.mjs` (line 14), `server/cloudflare-bootstrap-cli.mjs` (line 6), `deploy/ci/deploy-guard.mjs` (line 44) and `server/owner-grant.mjs` (line 116). `grep -rlE 'your-node|example\.invalid|your_org_x' server deploy` lists them all, with tests and documents.
 - A cloud deployment from this tree into a fresh account is UNVERIFIED.
 - By: the maintainers.
 

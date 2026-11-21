@@ -305,6 +305,21 @@ describe('dsh-tool-subagent', () => {
     expect(seen?.agentOptions).toEqual({ provider: 'alpha', model: 'child-model' })
   })
 
+  it('a host-declared max_tokens caps the child; a bad value is refused before any child starts', async () => {
+    let seen: SubagentStartRequest | undefined
+    let starts = 0
+    const ctx = await setup({ provider: 'mock', maxDepth: 'provider-managed' }, {
+      onStart: (request) => { seen = request; starts += 1 },
+    })
+    const result = await callSubagent(ctx, { description: 'd', prompt: 'p', max_tokens: 4096 })
+    if (result.isError) throw new Error(text(result))
+    expect(seen?.agentOptions).toEqual({ maxTokens: 4096 })
+    const refused = await callSubagent(ctx, { description: 'd', prompt: 'p', max_tokens: 0 })
+    expect(refused.isError).toBe(true)
+    expect(text(refused)).toContain('max_tokens must be a positive whole number')
+    expect(starts).toBe(1)
+  })
+
   it('defaults toolName and omits agentOptions when apply() is called directly (schema bypass)', async () => {
     // `ctx.plugin` validates+defaults config first (toolName→'subagent', the
     // agentOptions object→{}), so the runtime `?? 'subagent'` fallback and the

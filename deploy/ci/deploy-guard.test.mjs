@@ -613,8 +613,11 @@ test('the deployed config carries the managed voice switched off, its object bou
   assert.deepEqual(toml.match(/^VOICE_MANAGED = .*$/gm), ['VOICE_MANAGED = "1"']) // switched on 2026-11-13; "0" is no voice (the orb rests, typing works)
   assert.match(toml, /\[\[durable_objects\.bindings\]\]\nname = "VOICE_BRIDGE"\nclass_name = "VoiceBridgeDO"\n/)
   const migrations = [...toml.matchAll(/\[\[migrations\]\]\ntag = "([^"]+)"\n(new_sqlite_classes|new_classes) = \[([^\]]*)\]/g)].map(match => [match[1], match[2], match[3]])
-  assert.deepEqual(migrations, [['x61-v1', 'new_sqlite_classes', '"X61HeadDurableObject", "MirrorDO"'], ['x61-v2-voice-bridge', 'new_sqlite_classes', '"VoiceBridgeDO"']])
+  // The witness object's binding and its own migration after x61-v2 (docs/auma/outside-witness.md).
+  assert.match(toml, /\[\[durable_objects\.bindings\]\]\nname = "WITNESS"\nclass_name = "WitnessDO"\n/)
+  assert.deepEqual(migrations, [['x61-v1', 'new_sqlite_classes', '"X61HeadDurableObject", "MirrorDO"'], ['x61-v2-voice-bridge', 'new_sqlite_classes', '"VoiceBridgeDO"'], ['x61-v3-witness', 'new_sqlite_classes', '"WitnessDO"']])
   assert.equal((toml.match(/^\[\[migrations\]\]$/gm) ?? []).length, migrations.length)
   const worker = readFileSync(new URL('../cloudflare/src/worker.mjs', import.meta.url), 'utf8')
   assert.match(worker, /^export \{ VoiceBridgeDO \} from '\.\/voice-bridge-do\.mjs'/m)
+  assert.match(worker, /^export \{ WitnessDO \} from '\.\/witness-do\.mjs'/m)
 })

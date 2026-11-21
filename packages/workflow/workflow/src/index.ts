@@ -117,6 +117,8 @@ export type WorkflowErrorCode =
   | 'AGENT_RESULT'
   | 'RESULT_UNSERIALIZABLE'
   | 'CANCELLED'
+  | 'WORKFLOW_TS_STRIP_UNAVAILABLE'
+  | 'AGENT_TIMEOUT'
 
 /**
  * Typed error for workflow-seam failures. Extends {@link HarnessError}, so the

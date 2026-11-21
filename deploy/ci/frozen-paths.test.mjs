@@ -70,7 +70,9 @@ test('every listed file is in the tree; the organ sources missing from main are 
   for (const path of FROZEN_ABSENT_FILES) assert.equal(FROZEN_FILES.includes(path), true, path)
   // RAN `git cat-file -e` at an earlier commit: these five governance organ sources are not in the repo copy of her home.
   // They stay frozen (a proposal may not ADD them either). When one reaches main this test fails: take it off this list.
-  const notOnMain = ['seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys'].map(id => `mirror/home/auma/seed/organs/${id}.js`)
+  // RAN `git ls-files` at an earlier commit: her kernel organ's source is not there either (it joined the list on 2026-11-16).
+  const notOnMain = ['seed-judge', 'gate-judge', 'grant-ledger', 'aumlok-identity', 'aumlok-keys', 'auma-kernel']
+    .map(id => `mirror/home/auma/seed/organs/${id}.js`)
   for (const path of FROZEN_ORGAN_FILES) assert.equal(existsSync(join(ROOT, path)), !notOnMain.includes(path), path)
   for (const path of notOnMain) assert.equal(isFrozenRepoPath(path), true, path)
 })
@@ -84,9 +86,9 @@ test('every vitest setup file the UI suite and the frozen boot test run inside i
   assert.equal(isFrozenRepoPath('scripts/test-new-helper.ts'), false)
 })
 
-test('the 15 organ ids are T2_ONLY_ORGANS, in order', () => {
+test('the 16 organ ids are T2_ONLY_ORGANS, in order', () => {
   assert.deepEqual([...FROZEN_ORGAN_IDS], [...T2_ONLY_ORGANS])
-  assert.equal(FROZEN_ORGAN_IDS.length, 15)
+  assert.equal(FROZEN_ORGAN_IDS.length, 16)
   assert.deepEqual([...FROZEN_ORGAN_FILES], T2_ONLY_ORGANS.map(id => `mirror/home/auma/seed/organs/${id}.js`))
 })
 
@@ -159,10 +161,14 @@ test('only open paths; everything the outside review named is closed and frozen'
     'deploy/cloudflare/src/crew-relay-tool.mjs', 'mirror/home/auma/seed/organs/*.js', 'packages/client/*/README*.md', 'apps/web/README*.md'])
   assert.deepEqual([...OPEN_NEW_PATHS], ['packages/client/*/tests/**/*.spec.ts', 'packages/client/*/tests/**/*.spec.tsx',
     'packages/experimental/webworker-runtime/tests/**/*.spec.ts', 'deploy/cloudflare/src/__tests__/auma-*.test.mjs', 'deploy/cloudflare/src/auma/**'])
-  assert.deepEqual([...CLOSED_INSIDE_OPEN], ['packages/experimental/webworker-runtime/src/x6/ball-loader.ts', 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
+  assert.deepEqual([...CLOSED_INSIDE_OPEN], ['packages/experimental/webworker-runtime/src/x6/checkpoint-verify.ts',
+    'packages/experimental/webworker-runtime/src/x6/checkpoint-verify-tool.ts',
+    'packages/experimental/webworker-runtime/src/x6/ball-loader.ts', 'packages/experimental/webworker-runtime/src/x6/wasm-cells.ts',
     'packages/experimental/webworker-runtime/src/x6/cell-journal.ts', 'packages/experimental/webworker-runtime/src/x6/cell-handoff.ts',
+    'packages/experimental/webworker-runtime/src/x6/workflow-executor.ts',
     'packages/experimental/webworker-runtime/src/x6/cord-run.ts', 'packages/experimental/webworker-runtime/src/x6/tool-registry.ts',
     'packages/experimental/webworker-runtime/src/x6/menger-run.ts', 'packages/experimental/webworker-runtime/src/x6/menger-observe.ts',
+    'packages/experimental/webworker-runtime/src/x6/voice-scratch.ts',
     'packages/client/ui-layout/src/client/spatial/aumlok/mandate.ts', 'packages/client/ui-layout/src/client/spatial/portal/MandateCell.tsx',
     // The judges' passkey and fingerprint-wait imports, the approval cards and the pins.
     'packages/client/ui-layout/src/client/spatial/apps/identity/host.ts', 'packages/client/ui-layout/src/client/spatial/apps/identity/webauthn.ts',
@@ -288,9 +294,11 @@ const resolved = (from, specifier) => join(dirname(from), specifier).split('\\')
 test('her four thread sync files are open to her proposals by exact path; the rest of her storage folder is closed by default', () => {
   const folder = 'packages/experimental/webworker-runtime/src/storage'
   const thread = ['thread-store-types.ts', 'thread-sync-plan.ts', 'thread-sync.ts', 'thread-writer.ts'].map(name => `${folder}/${name}`)
-  const whole = ['active.ts', 'idb-persist.ts', 'image-gzip.ts', 'memory.ts', 'paths.ts', 'tar.ts', 'types.ts'].map(name => `${folder}/${name}`)
-  // Every file the folder has today is one of the four (open) or one of the seven whole-store files (closed); a file that
-  // lands there later is closed by the folder pattern until a person opens it by its exact path.
+  // memory-timeline.ts (2026-11-16, her timeline: one time-ordered chain of every turn and voice exchange) landed closed.
+  const whole = ['active.ts', 'idb-persist.ts', 'image-gzip.ts', 'memory-timeline.ts', 'memory.ts', 'paths.ts', 'tar.ts', 'types.ts', 'voice-memory.ts'].map(name => `${folder}/${name}`)
+  // Every file the folder has today is one of the four (open) or one of the eight whole-store files (closed); a file that
+  // lands there later is closed by the folder pattern until a person opens it by its exact path. voice-memory.ts
+  // (2026-11-16, her voice memory's record and home files) landed closed: nothing is opened by naming it here.
   const today = tracked(folder).sort()
   assert.deepEqual(today, [...thread, ...whole].sort())
   for (const path of thread) {
@@ -950,17 +958,26 @@ test('the CI fence at open (main says open): her change to the workflows, the fe
   } finally { guarded.remove() }
 })
 
-test('proposal-checks.yml at open runs the fence alone and checks needs only it; at guarded every job, as before', () => {
+test('proposal-checks.yml at open runs the fence, plus new-vitest-tests when the diff touches a suite or src/storage, and checks requires that run exactly when it exists; at guarded every job, as before', () => {
   const fenceJob = jobText(WORKFLOW, 'fence')
   assert.match(fenceJob, /outputs:\n {6}main: \$\{\{ steps\.main\.outputs\.sha \}\}\n {6}level: \$\{\{ steps\.level\.outputs\.level \}\}\n/)
   assert.deepEqual(stepNames(fenceJob), ['Checkout the pushed proposal commit', FENCE_STEP, "Main's commit for the other jobs", "Main's door level"])
-  for (const name of ['baseline', 'new-node-tests', 'new-vitest-tests']) {
+  // At the open door level new-vitest-tests also runs when the proposal touches a
+  // suite or src/storage, so its condition carries the fence's own `touched` flag. This was the rule the card was built to
+  // change: the open door level said the fence runs alone at open, and two of her storage cards went green here while their spec was red.
+  for (const name of ['baseline', 'new-node-tests']) {
     assert.match(jobText(WORKFLOW, name), /\n {4}needs: fence\n {4}if: \$\{\{ needs\.fence\.outputs\.level != 'open' \}\}\n/, name)
   }
+  const vitest = jobText(WORKFLOW, 'new-vitest-tests')
+  assert.match(vitest, /\n {4}needs: fence\n(?: {4}#[^\n]*\n)+ {4}if: \$\{\{ needs\.fence\.outputs\.level != 'open' \|\| needs\.fence\.outputs\.touched == '1' \}\}\n/)
+  assert.match(fenceJob, /\n {6}touched: \$\{\{ steps\.level\.outputs\.touched \}\}\n/)
   // edge, ui and boot need the baseline, so they are skipped with it.
   for (const name of ['edge', 'ui', 'boot']) assert.match(jobText(WORKFLOW, name), /\n {4}needs: \[fence, baseline\]\n/, name)
   const checks = jobText(WORKFLOW, 'checks')
   assert.match(checks, /LEVEL: \$\{\{ needs\.fence\.outputs\.level \}\}/)
-  assert.match(checks, /const required = process\.env\.LEVEL === "open" \? \{ fence: "FENCE" \}\n\s+: \{ fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" \}/)
+  // At open the aggregate requires the fence alone, plus new-vitest-tests exactly when that run exists. It reads
+  // the job's own result, not a new fence output, because main holds this job to red and level only.
+  assert.match(checks, /const ran = process\.env\.NEW_VITEST_TESTS !== "skipped" && process\.env\.NEW_VITEST_TESTS !== "missing"\n/)
+  assert.match(checks, /const required = process\.env\.LEVEL === "open"\n\s+\? \(ran \? \{ fence: "FENCE", "new-vitest-tests": "NEW_VITEST_TESTS" \} : \{ fence: "FENCE" \}\)\n\s+: \{ fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" \}/)
   assert.match(stepScript(WORKFLOW, "Main's door level"), /fence\.REPO_DOOR_LEVEL === "open" \? "open" : "guarded"/)
 })

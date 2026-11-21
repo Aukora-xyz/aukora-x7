@@ -4,8 +4,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  renderVoiceMap, seenOf, sinceLines, VOICE_MAP_HEADER, VOICE_MAP_MAX_BYTES, VOICE_MAP_SECTION_BYTES,
-  type VoiceMapFacts,
+  handoffTop, renderVoiceMap, seenOf, sinceLines, VOICE_MAP_HANDOFF_CHARS, VOICE_MAP_HEADER, VOICE_MAP_MAX_BYTES,
+  VOICE_MAP_NOW_CHARS, VOICE_MAP_SECTION_BYTES, type VoiceMapFacts,
 } from '../../src/x6/voice-map.ts'
 
 const bytes = (text: string): number => new TextEncoder().encode(text).byteLength
@@ -159,5 +159,64 @@ describe('since your last voice turn', () => {
     const map = renderVoiceMap(world({ tools: many }), [])
     expect(map).toMatch(/^- and \d+ more: x6_door_/m)
     expect(bytes(map)).toBeLessThanOrEqual(VOICE_MAP_MAX_BYTES)
+  })
+})
+
+describe('voicelane1: the top of her hand-off note rides every open voice turn', () => {
+  const NOTE = [
+    '# HANDOFF',
+    'Old history line one.',
+    '',
+    '## Where I am now',
+    'Mid-card on YOURTEAM-512: wiring the tracker sweep. Waiting on the gate.',
+    '',
+    '### detail',
+    'Sub-point kept with its section.',
+    '',
+    '## Earlier',
+    'Not carried: an older section.',
+  ].join('\n')
+
+  it('her own "Where I am now" section, whole, when the note has one (its subsections with it, the next section not)', () => {
+    const top = handoffTop(NOTE)
+    expect(top.startsWith('## Where I am now')).toBe(true)
+    expect(top).toContain('Mid-card on YOURTEAM-512')
+    expect(top).toContain('Sub-point kept with its section.')
+    expect(top).not.toContain('Not carried')
+    expect(top).not.toContain('Old history line one.')
+    const map = renderVoiceMap(world({ continuity: { handoff: NOTE, awareness: null } }), [])
+    expect(map).toContain('Mid-card on YOURTEAM-512')
+    expect(map).not.toContain('Not carried')
+  })
+
+  it('no such section: the first VOICE_MAP_NOW_CHARS (2,000) characters; a long section is cut to the same', () => {
+    expect(VOICE_MAP_NOW_CHARS).toBe(2000)
+    const plain = 'a'.repeat(1990) + 'b'.repeat(500)
+    expect(handoffTop(plain)).toBe('a'.repeat(1990) + 'b'.repeat(10))
+    const long = `## Where I am now\n${'c'.repeat(5000)}`
+    expect(handoffTop(long).length).toBe(2000)
+    // The worker reads enough of the file to find a section that starts past the first 2,000 characters.
+    expect(VOICE_MAP_HANDOFF_CHARS).toBeGreaterThanOrEqual(8192)
+    const late = `${'x'.repeat(4000)}\n## Where I am now\nlate and found`
+    expect(handoffTop(late)).toBe('## Where I am now\nlate and found')
+  })
+
+  it('the now section sits after where and before body, under its own cap; the total stays under VOICE_MAP_MAX_BYTES', () => {
+    const map = renderVoiceMap(world({ continuity: { handoff: NOTE, awareness: null } }), [])
+    const at = ['where:', 'her hand-off note, top', 'body:', 'continuity (her own files):'].map(h => map.indexOf(h))
+    for (const index of at) expect(index).toBeGreaterThan(0)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const huge = renderVoiceMap(world({ continuity: { handoff: `## Where I am now\n${'word '.repeat(4000)}`, awareness: null } }), [])
+    const section = huge.slice(huge.indexOf('her hand-off note, top'), huge.indexOf('\nbody:'))
+    expect(bytes(section)).toBeLessThanOrEqual(VOICE_MAP_SECTION_BYTES.now)
+    expect(bytes(huge)).toBeLessThanOrEqual(VOICE_MAP_MAX_BYTES)
+    expect(huge).toContain('to look deeper:')
+  })
+
+  it('the section is screened: a secret or a private path in her note never rides the voice turn', () => {
+    const planted = 'sk-' + 'Z'.repeat(30)
+    const map = renderVoiceMap(world({ continuity: { handoff: `## Where I am now\nkey ${planted} in /dsh/home/auma/private/x.md`, awareness: null } }), [])
+    expect(map).not.toContain(planted)
+    expect(map).not.toContain('/dsh/home/auma/private')
   })
 })

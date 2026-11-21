@@ -1,0 +1,46 @@
+# Bilingual-pair consistency record for KYBER-SHIELD.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write docs/research/KYBER-SHIELD.md
+/kyber-shield-open-research-on-child-safety-and-private-communication:
+  en: 143d049b3b0237ae
+  zh: 23732e7b31f65920
+/kyber-shield-open-research-on-child-safety-and-private-communication/summary:
+  en: c2e2301ca8abc126
+  zh: 6c62ff5881b9ea62
+/kyber-shield-open-research-on-child-safety-and-private-communication/contents:
+  en: 171aa53bd24aaeff
+  zh: afdccc3712b27950
+/kyber-shield-open-research-on-child-safety-and-private-communication/what-exists:
+  en: 276bc511f4cdc0f8
+  zh: eb07ee1f429b92b2
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system:
+  en: 2c7a9cb83281901a
+  zh: 6e1a2badceebbb09
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system/contact-permissions-before-contact:
+  en: 1523133e2349b402
+  zh: 49a988847f3862e8
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system/local-help-with-separate-permissions:
+  en: 915a6263ef6d10fe
+  zh: c4e85d15239e1467
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system/context-across-time-without-automatic-accusation:
+  en: 46cd29d7759d7aec
+  zh: ac0bf24ba249188b
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system/reports-selected-by-the-recipient:
+  en: 21029fb4f07cb9a5
+  zh: bbf0bbb3a4cc8881
+/kyber-shield-open-research-on-child-safety-and-private-communication/the-proposed-system/independence-as-the-young-person-grows:
+  en: 66031ad8255c5d76
+  zh: 82b5734e37ec070b
+/kyber-shield-open-research-on-child-safety-and-private-communication/what-must-be-demonstrated:
+  en: b0104bc2fe0b032b
+  zh: 451552e201ffa6be
+/kyber-shield-open-research-on-child-safety-and-private-communication/kyber-kernel-and-the-evidence-limit:
+  en: 69e958779501c97d
+  zh: 3da32b8305f4bc22
+/kyber-shield-open-research-on-child-safety-and-private-communication/sources:
+  en: f60d95c81cc41875
+  zh: f716dfc06c213639
+/kyber-shield-open-research-on-child-safety-and-private-communication/research-notice:
+  en: 449a61a9135982f9
+  zh: 3013992a9f7ae11f

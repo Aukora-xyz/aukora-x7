@@ -1,7 +1,5 @@
 # Architecture map
 
-English | [中文](ARCHITECTURE-MAP.zh.md)
-
 Aukora keeps two things apart: the AI that proposes a change, and the authority that permits it. This page draws both, follows one self-change from proposal to live, and states what each part is trusted with.
 
 Labels: IMPLEMENTED (code and tests in this tree), RECORDED RUN (shown in [RUN-RECORD.md](RUN-RECORD.md), a run of an earlier tree), INDEPENDENTLY VERIFIED (nothing has this label yet), UNVERIFIED (claimed or written, but no test here holds it or no run shows it), DIRECTION (not built). "Green" means a test file ran without failure in the RECORDED RUN (of an earlier tree). Most claims here are listed with their tests in [WHAT-IS-BUILT.md](WHAT-IS-BUILT.md).
@@ -130,4 +128,4 @@ Two side roads skip steps 7 to 9. An owner sign-in session (8 hours at most) alo
 
 ## Where each layer comes from
 
-Most of this tree is inherited. Most of `packages/` is the DeepSeek Harness runtime (MIT, [LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)), and the plugin framework that organs are built on is Cordis, vendored in `vendor/`. Aukora's own layer is concentrated in `deploy/cloudflare/src/` (the edge), `server/`, `mirror/home/auma/seed/` (the organs and Pearl), `packages/experimental/webworker-runtime/src/x6/` (the loader, scion and cell loader), `packages/client/ui-layout/src/client/spatial/` (the app) and `apps/web/public/cells/` (the cells: binaries, six with WAT source beside them). By one count, made once by the project from its own history, which is not public, and not yet repeated by anyone else (UNVERIFIED), 14.9% of the non-vendored text lines and 18.5% of the code lines are Aukora's own. The method, the tables and the files without source are in [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md).
+Most of this tree is inherited. Most of `packages/` is the DeepSeek Harness runtime (MIT, [LICENSES/MIT-DeepSeek-Harness.txt](../LICENSES/MIT-DeepSeek-Harness.txt)), and the plugin framework that organs are built on is Cordis, vendored in `vendor/`. Aukora's own layer is concentrated in `deploy/cloudflare/src/` (the edge), `server/`, `mirror/home/auma/seed/` (the organs and Pearl), `packages/experimental/webworker-runtime/src/x6/` (the loader, scion and cell loader), `packages/client/ui-layout/src/client/spatial/` (the app) and `apps/web/public/cells/` (the cells: binaries, six with WAT source beside them). By one count, made once by the project from its own history, which is not public, and not yet repeated by anyone else (UNVERIFIED), 16.3% of the non-vendored text lines and 20.3% of the code lines are Aukora's own. The method, the tables and the files without source are in [SIZE-AND-ORIGIN.md](SIZE-AND-ORIGIN.md).

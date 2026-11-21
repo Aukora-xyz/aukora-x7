@@ -1475,6 +1475,39 @@ test('cloud mirror checkpoints are append-only and committed hash-addressed DAG 
   await publishFixtureMirror(cloud, [[node, { kind: 'gone' }], [node, fixtureMirrorFile('node')]], 3)
 })
 
+// Her voice memory's chain file only ever grows at the mirror; the words file beside it stays deletable.
+test('cloud mirror keeps the voice memory chain file append-only and the words file free', async t => {
+  const cloud = await fixture(t)
+  await cloud.bootstrap()
+  const chain = '/dsh/home/auma/voice/chain.v1.jsonl', words = '/dsh/home/auma/voice/words.v1.jsonl'
+  await publishFixtureMirror(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n')], [words, fixtureMirrorFile('{"seq":1,"heard":"a"}\n')]])
+  await publishFixtureMirror(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n{"seq":2}\n')], [words, fixtureMirrorFile('{"seq":1,"heard":"a"}\n{"seq":2}\n')]], 2)
+  await rejectedMirrorMutation(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n')]], 3)
+  await rejectedMirrorMutation(cloud, [[chain, fixtureMirrorFile('{"seq":9}\n{"seq":2}\n')]], 3)
+  await rejectedMirrorMutation(cloud, [[chain, { kind: 'gone' }]], 3)
+  // The words file may shrink or go (a deletion of words never touches the chain).
+  await publishFixtureMirror(cloud, [[words, fixtureMirrorFile('{"seq":2}\n')]], 3)
+  await publishFixtureMirror(cloud, [[words, { kind: 'gone' }], [chain, fixtureMirrorFile('{"seq":1}\n{"seq":2}\n{"seq":3}\n')]], 4)
+})
+
+// Her timeline's chain file only ever grows at the mirror, as the voice chain does; its words
+// file beside it stays deletable.
+test('cloud mirror keeps the timeline chain file append-only and the timeline words file free', async t => {
+  const cloud = await fixture(t)
+  await cloud.bootstrap()
+  const chain = '/dsh/home/auma/timeline/chain.v1.jsonl', words = '/dsh/home/auma/timeline/words.v1.jsonl'
+  await publishFixtureMirror(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n')], [words, fixtureMirrorFile('{"seq":1,"his":"a"}\n')]])
+  await publishFixtureMirror(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n{"seq":2}\n')], [words, fixtureMirrorFile('{"seq":1,"his":"a"}\n{"seq":2}\n')]], 2)
+  // Shrink, change and delete are refused with the voice chain's code (rejectedMirrorMutation checks MIRROR_HISTORY_APPEND_ONLY).
+  await rejectedMirrorMutation(cloud, [[chain, fixtureMirrorFile('{"seq":1}\n')]], 3)
+  await rejectedMirrorMutation(cloud, [[chain, fixtureMirrorFile('{"seq":9}\n{"seq":2}\n')]], 3)
+  await rejectedMirrorMutation(cloud, [[chain, { kind: 'gone' }]], 3)
+  await rejectedMirrorMutation(cloud, [['/dsh/home/auma/timeline', { kind: 'gone' }]], 3)
+  // The words file may shrink or go (a deletion of words never touches the chain); the chain still grows.
+  await publishFixtureMirror(cloud, [[words, fixtureMirrorFile('{"seq":2}\n')]], 3)
+  await publishFixtureMirror(cloud, [[words, { kind: 'gone' }], [chain, fixtureMirrorFile('{"seq":1}\n{"seq":2}\n{"seq":3}\n')]], 4)
+})
+
 async function publishFixtureMirror(cloud, entries, seq = 1) {
   const { lineageId, revision } = await body(await cloud.request('/_mirror/status?compact=1'))
   const batch = { clientId: FIXTURE_MIRROR_CLIENT, id: `${FIXTURE_MIRROR_CLIENT}:${seq}`, seq, cloudBase: { lineageId, revision }, entries }

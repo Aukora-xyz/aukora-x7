@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * The Aura Coherence page's Pentora comes alive (owner: "has more dots but do they change properly
- * now?"). Two channels on every cell, never mistaken for each other: the RING (class, data-state, stroke) is health and
+ * The Aura Coherence page's Pentora comes alive (its dots must now change
+ * properly). Two channels on every cell, never mistaken for each other: the RING (class, data-state, stroke) is health and
  * the CORE (data-flow, fill) is the conversation's flow in three colours, fed from the shown Session; lit lines carry a
  * change along the edges. No Session: every core rests. Reduced motion: colours only, no travel, no cube phase.
  */

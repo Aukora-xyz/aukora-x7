@@ -47,6 +47,10 @@ function childRequest(value: unknown): ChildStartRequest {
   const prompt = text(request.prompt, 'prompt')
   const provider = request.provider === undefined ? undefined : text(request.provider, 'provider')
   const model = request.model === undefined ? undefined : text(request.model, 'model')
+  const maxTokens = request.maxTokens
+  if (maxTokens !== undefined && (typeof maxTokens !== 'number' || !Number.isSafeInteger(maxTokens) || maxTokens < 1)) {
+    throw new Error('workflow maxTokens must be a positive whole number')
+  }
   let schema: ObjectJsonSchema | undefined
   if (request.schema !== undefined) {
     const candidate = object(request.schema)
@@ -57,6 +61,7 @@ function childRequest(value: unknown): ChildStartRequest {
     prompt,
     ...provider === undefined ? {} : { provider },
     ...model === undefined ? {} : { model },
+    ...maxTokens === undefined ? {} : { maxTokens },
     ...schema === undefined ? {} : { schema },
   }
 }
@@ -210,10 +215,11 @@ export class PtcWorkflowRun implements WorkflowRun {
         prompt: [{ type: 'text', text: request.prompt }],
         parent: this.parent,
         ...request.schema === undefined ? {} : { outputSchema: request.schema },
-        ...request.provider === undefined && request.model === undefined ? {} : {
+        ...request.provider === undefined && request.model === undefined && request.maxTokens === undefined ? {} : {
           agentOptions: {
             ...request.provider === undefined ? {} : { provider: request.provider },
             ...request.model === undefined ? {} : { model: request.model },
+            ...request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens },
           },
         },
       },

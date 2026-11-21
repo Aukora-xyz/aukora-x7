@@ -43,6 +43,15 @@ import type {
 } from './catalog.ts'
 import { buildProvider, supportedProtocols } from './provider.ts'
 
+/**
+ * The effort id that names no effort: the provider's own default, offered only on a route that sets `autoEffort`
+ * (her Claude door's default, the chat wire she ran before the effort build).
+ */
+export const AUTO_EFFORT = 'auto'
+
+/** A route's default effort: a pi-ai level, or `auto`. */
+const REASONING_CHOICES: readonly (ModelThinkingLevel | typeof AUTO_EFFORT)[] = [...THINKING_LEVELS, AUTO_EFFORT]
+
 /** Default maximum idle interval while an adapter stream read is outstanding. */
 export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 
@@ -150,8 +159,17 @@ export interface PiAiProviderProfile {
   defaultInput?: PiAiModality[]
   /** Provider request headers, validated against Fetch when the profile resolves; Harness attribution wins reserved names. */
   headers?: Record<string, string>
-  /** Provider-neutral pi-ai reasoning level. */
-  reasoning?: ModelThinkingLevel
+  /**
+   * Provider-neutral pi-ai reasoning level, or `auto` (the provider's own default: no effort is sent) on a route that
+   * sets {@link autoEffort}.
+   */
+  reasoning?: ModelThinkingLevel | typeof AUTO_EFFORT
+  /**
+   * When set, every reasoning model on this route offers the effort `auto` first: the request names no effort, so the
+   * provider's own default applies, exactly as for a request that names none. The value is the description selectors
+   * and diagnostics show for it. A route without it neither lists nor accepts `auto`.
+   */
+  autoEffort?: string
   /** Token budgets used by reasoning providers that support them. */
   thinkingBudgets?: ThinkingBudgets
   /** Prompt-cache retention preference. */
@@ -335,7 +353,8 @@ const profile = z.object({
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
-  reasoning: z.union(THINKING_LEVELS),
+  reasoning: z.union(REASONING_CHOICES),
+  autoEffort: z.string(),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),
   transport: z.union(['sse', 'websocket', 'websocket-cached', 'auto']),

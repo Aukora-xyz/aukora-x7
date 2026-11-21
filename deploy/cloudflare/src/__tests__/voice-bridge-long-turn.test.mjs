@@ -3,8 +3,8 @@
  * Real Worker, real VoiceBridgeDO, the real turn journal; fake provider and tab sockets, a manual clock. */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { ADMISSION_KEY, BACKCHANNEL, BYE_ENDS, FAIL_LINES, HISTORY_KEY, LOST_PLACE, parseTabFrame } from '../voice-bridge-do.mjs'
-import { VOICE_CALL_ENDS, VOICE_TURN_OUTCOMES } from '../voice-bridge.mjs'
+import { ADMISSION_KEY, BACKCHANNEL, BYE_ENDS, EARLY_CUE, FAIL_LINES, HISTORY_KEY, LOST_PLACE, parseTabFrame } from '../voice-bridge-do.mjs'
+import { VOICE_CALL_ENDS, VOICE_SDK_KINDS, VOICE_STATUS_CALLS, VOICE_STATUS_TURNS, VOICE_TURN_OUTCOMES } from '../voice-bridge.mjs'
 import { VOICE_SESSION_LIMITS } from '../voice-session-policy.mjs'
 import { AT, OWNER, agentFrames, fixture, transcript } from './voice-bridge-fakes.mjs'
 
@@ -53,12 +53,12 @@ test('the lookup case at the edge: her turn stays open through 90 s of quiet; on
   await fx.settle()
   fx.clock.advance(13_500)
   await fx.settle()
-  assert.deepEqual(spoken(provider, 1), [BACKCHANNEL])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, BACKCHANNEL])
   // The provider asks again for the same event while she works: re-attached, nothing new starts, nothing repeated.
   provider.json(transcript(1, 'what is the weather in Ubud'))
   fx.clock.advance(76_500)
   await fx.settle()
-  assert.deepEqual(spoken(provider, 1), [BACKCHANNEL])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, BACKCHANNEL])
   tab.json({ t: 'delta', turn, seq: 0, text: 'Warm and wet. ' })
   await fx.settle()
   fx.clock.advance(90_000)
@@ -66,10 +66,14 @@ test('the lookup case at the edge: her turn stays open through 90 s of quiet; on
   tab.json({ t: 'delta', turn, seq: 1, text: 'Rain after four.' })
   tab.json({ t: 'done', turn })
   await fx.settle()
-  assert.deepEqual(spoken(provider, 1), [BACKCHANNEL, 'Warm and wet. ', 'Rain after four.', ''])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, BACKCHANNEL, 'Warm and wet. ', 'Rain after four.', ''])
   // Her first words came after the provider's 15 s wait: the turn is a late answer, with its numbers, and no text.
+  // The outcome is one of
+  // answered | cancelled | failed | handed | refused, with a closed reason, marks, counts and tool calls (names only).
   const { turns } = await history(fx)
-  assert.deepEqual(turns, [{ outcome: 'late-answer', firstWordsSeconds: 90, longestQuietSeconds: 90, atMs: AT + 180_000 }])
+  assert.deepEqual(turns, [{ outcome: 'answered', reason: null, journalMs: 0, endMs: 180_000, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 2, toolRounds: [],
+    firstWordsSeconds: 90, longestQuietSeconds: 90, journaledMs: 0, handedMs: 0, firstTextMs: 90_000,
+    firstSpeechMs: 90_000, modelFirstMs: null, cue: 'timeout', path: 'governed', atMs: AT + 180_000 }])
 })
 
 test('the provider gives up mid-turn (it closes): the edge tells the tab provider-closed, then end; the page carries her turn (page spec)', async () => {
@@ -144,28 +148,31 @@ test('seconds: the reservation is trimmed to what the call used on every end pat
   assert.equal((await admission(lost)).daySeconds, 2400)
 })
 
-test('seconds: 21,600 a day and 180,000 a month (the owner\'s word); a call stays 1,200; under 60 s left is still VOICE_QUOTA', async () => {
-  assert.deepEqual([VOICE_SESSION_LIMITS.seconds, VOICE_SESSION_LIMITS.daySeconds, VOICE_SESSION_LIMITS.monthSeconds, VOICE_SESSION_LIMITS.silenceSeconds], [1200, 21600, 180000, 180])
+test('seconds: 5,356,800 a month and no smaller day; a call stays 1,200; under 60 s left is still VOICE_QUOTA', async () => {
+  assert.deepEqual([VOICE_SESSION_LIMITS.seconds, VOICE_SESSION_LIMITS.daySeconds, VOICE_SESSION_LIMITS.monthSeconds, VOICE_SESSION_LIMITS.silenceSeconds], [1200, 5356800, 5356800, 180])
   const fx = fixture()
-  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 21541, month: '2026-11', monthSeconds: 21541, slots: {} })
+  await fx.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5356741, month: '2026-11', monthSeconds: 5356741, slots: {} })
   assert.deepEqual(await (await fx.ownerDoor()).json(), { ok: false, code: 'VOICE_QUOTA' })
   assert.equal(fx.calls.provider.length, 0)
   // Trimming gives seconds back: after a short call ends, the day has room again.
   const room = fixture()
-  await room.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 20400, month: '2026-11', monthSeconds: 20400, slots: {} })
+  await room.bridgeStorage.put(ADMISSION_KEY, { day: '2026-11-13', daySeconds: 5355600, month: '2026-11', monthSeconds: 5355600, slots: {} })
   const live = await room.connect()
   assert.equal(live.answer.maxDurationSeconds, 1200)
   room.clock.advance(30_000)
   live.tab.json({ t: 'bye' })
   await room.settle()
-  assert.equal((await admission(room)).daySeconds, 20430)
-  assert.deepEqual((await statusOf(room)).secondsLeft, { today: 1170, month: 180000 - 20430 })
+  assert.equal((await admission(room)).daySeconds, 5355630)
+  assert.deepEqual((await statusOf(room)).secondsLeft, { today: 1170, month: 1170 })
 })
 
-test('status: the last 4 calls and 8 turns, newest first, closed values and numbers only, no transcript text or id', async () => {
+// CHANGED 2026-11-18: 12 calls are kept and shown (was 4), so one more call than that is made to prove the bound; every
+// call takes 5 s, so the newest rows' times move with the count.
+test('status: the last 12 calls and 24 turns, newest first, closed values and numbers only, no transcript text or id', async () => {
   const fx = fixture()
   const secret = 'SYNTHETIC OWNER WORDS'
-  for (let call = 0; call < 5; call++) {
+  const made = VOICE_STATUS_CALLS + 1
+  for (let call = 0; call < made; call++) {
     const { conv, tab, provider } = await fx.connect()
     for (let event = 1; event <= 2; event++) {
       provider.json(transcript(event, `${secret} ${String(call)} ${String(event)}`))
@@ -180,14 +187,19 @@ test('status: the last 4 calls and 8 turns, newest first, closed values and numb
     await fx.settle()
   }
   const body = await statusOf(fx)
-  assert.equal(body.calls.length, 4)
-  assert.equal(body.turns.length, 8)
-  assert.deepEqual(body.calls[0], { grantedSeconds: 1200, ended: 'owner-stop', lastedSeconds: 5, atMs: AT + 25_000 })
+  assert.equal(body.calls.length, VOICE_STATUS_CALLS)
+  assert.equal(VOICE_STATUS_CALLS, 12)
+  // The outcome is one of
+  // answered | cancelled | failed | handed | refused, with a closed reason, marks, counts and tool calls (names only).
+  assert.equal(body.turns.length, Math.min(VOICE_STATUS_TURNS, 2 * made))
+  assert.deepEqual(body.calls[0], { grantedSeconds: 1200, ended: 'owner-stop', lastedSeconds: 5, atMs: AT + made * 5000 })
   assert.ok(body.calls.every((item, index) => index === 0 || item.atMs <= body.calls[index - 1].atMs))
   assert.deepEqual(body.turns.slice(0, 2), [
     // 'Yes.' was still gathered (no clause end yet) when the fail came: the edge's line was said, not hers.
-    { outcome: 'timeout', firstWordsSeconds: null, longestQuietSeconds: 2, atMs: AT + 24_000 },
-    { outcome: 'done', firstWordsSeconds: 2, longestQuietSeconds: 2, atMs: AT + 22_000 },
+    { outcome: 'failed', firstWordsSeconds: null, longestQuietSeconds: 2, journaledMs: 0, handedMs: 0, firstTextMs: 2000, firstSpeechMs: null, modelFirstMs: null,
+      reason: 'turn_bound', journalMs: 0, endMs: 2000, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 0, toolRounds: [], cue: 'none', path: 'governed', atMs: AT + made * 5000 - 1000 },
+    { outcome: 'answered', firstWordsSeconds: 2, longestQuietSeconds: 2, journaledMs: 0, handedMs: 0, firstTextMs: 2000, firstSpeechMs: 2000, modelFirstMs: null,
+      reason: null, journalMs: 0, endMs: 2000, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 0, toolRounds: [], cue: 'none', path: 'governed', atMs: AT + made * 5000 - 3000 },
   ])
   for (const item of body.calls) assert.ok(VOICE_CALL_ENDS.includes(item.ended))
   for (const item of body.turns) assert.ok(VOICE_TURN_OUTCOMES.includes(item.outcome))
@@ -203,14 +215,22 @@ test('status: the last 4 calls and 8 turns, newest first, closed values and numb
   tab.json({ t: 'fail', turn: `eleven:${conv}:1`, code: 'VOICE_TURN_TIMEOUT' })
   await quiet.settle()
   // The edge's own line for it is not her first words: firstWordsSeconds stays null (review SHOULD 2).
-  assert.deepEqual(spoken(provider, 1), [BACKCHANNEL, FAIL_LINES.VOICE_TURN_TIMEOUT, ''])
-  assert.deepEqual((await statusOf(quiet)).turns, [{ outcome: 'timeout', firstWordsSeconds: null, longestQuietSeconds: 60, atMs: AT + 60_000 }])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, BACKCHANNEL, FAIL_LINES.VOICE_TURN_TIMEOUT, ''])
+  assert.deepEqual((await statusOf(quiet)).turns, [{ outcome: 'failed', reason: 'turn_bound', journalMs: 0, endMs: 60_000, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 2, toolRounds: [],
+    firstWordsSeconds: null, longestQuietSeconds: 60, journaledMs: 0, handedMs: 0,
+    firstTextMs: null, firstSpeechMs: null, modelFirstMs: null, cue: 'timeout', path: 'governed', atMs: AT + 60_000 }])
   // Hostile history rows (wrong values, text, extra fields) never reach the answer.
   const bad = fixture()
   await bad.bridgeStorage.put(HISTORY_KEY, { calls: [{ grantedSeconds: 1200, ended: 'hacked', lastedSeconds: 1, atMs: AT }, { grantedSeconds: 60, ended: 'deadline', lastedSeconds: 60, atMs: AT, text: secret }],
-    turns: [{ outcome: 'done', firstWordsSeconds: 'x', longestQuietSeconds: 1, atMs: AT }, { outcome: 'done', firstWordsSeconds: null, longestQuietSeconds: 1, atMs: AT, words: secret }] })
+    turns: [{ outcome: 'done', firstWordsSeconds: 'x', longestQuietSeconds: 1, atMs: AT }, { outcome: 'done', firstWordsSeconds: null, longestQuietSeconds: 1, atMs: AT, words: secret },
+      { outcome: 'done', firstWordsSeconds: 1, longestQuietSeconds: 1, journaledMs: -1, handedMs: 1.5, firstTextMs: secret, firstSpeechMs: 900, modelFirstMs: 'x', cue: 'hacked', path: 'hacked', atMs: AT }] })
   const read = await statusOf(bad)
-  assert.deepEqual([read.calls, read.turns], [[{ grantedSeconds: 60, ended: 'deadline', lastedSeconds: 60, atMs: AT }], [{ outcome: 'done', firstWordsSeconds: null, longestQuietSeconds: 1, atMs: AT }]])
+  // An entry from before 2026-11-16 (no timings, no cue) and wrong timing or cue values read as null.
+  assert.deepEqual([read.calls, read.turns], [[{ grantedSeconds: 60, ended: 'deadline', lastedSeconds: 60, atMs: AT }], [
+    { outcome: 'answered', firstWordsSeconds: 1, longestQuietSeconds: 1, journaledMs: null, handedMs: null, firstTextMs: null, firstSpeechMs: 900, modelFirstMs: null,
+      reason: null, journalMs: null, endMs: null, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 0, toolRounds: [], cue: null, path: null, atMs: AT },
+    { outcome: 'answered', firstWordsSeconds: null, longestQuietSeconds: 1, journaledMs: null, handedMs: null, firstTextMs: null, firstSpeechMs: null, modelFirstMs: null,
+      reason: null, journalMs: null, endMs: null, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 0, toolRounds: [], cue: null, path: null, atMs: AT }]])
   assert.equal(JSON.stringify(read).includes(secret), false)
   // The switch off: nothing is read from the object.
   const off = fixture({ env: { VOICE_MANAGED: undefined } })
@@ -239,6 +259,41 @@ test('bye names why the page ended the call: Stop, its own timer, the provider h
   }
 })
 
+test('bye may carry the closed sdk kind; it is recorded on the call and the status shows it; an unlisted one is refused (the voice tools part 2)', async () => {
+  assert.deepEqual(VOICE_SDK_KINDS, ['socket', 'server', 'audio', 'permission', 'other'])
+  for (const sdk of VOICE_SDK_KINDS) {
+    const fx = fixture()
+    const { tab, provider } = await fx.connect()
+    fx.clock.advance(30_000)
+    tab.json({ t: 'bye', why: 'error', sdk })
+    await fx.settle()
+    assert.equal(provider.closedCode, 1000, sdk)
+    assert.deepEqual((await history(fx)).calls, [{ grantedSeconds: 1200, ended: 'error', lastedSeconds: 30, atMs: AT + 30_000, sdk }], sdk)
+    assert.deepEqual((await statusOf(fx)).calls, [{ grantedSeconds: 1200, ended: 'error', lastedSeconds: 30, atMs: AT + 30_000, sdk }], sdk)
+  }
+  // Without it (a page from before this, or a call with no SDK error) the row has no sdk at all.
+  const bare = fixture()
+  const { tab } = await bare.connect()
+  tab.json({ t: 'bye', why: 'disconnected' })
+  await bare.settle()
+  assert.deepEqual((await history(bare)).calls.map(call => Object.keys(call)), [['grantedSeconds', 'ended', 'lastedSeconds', 'atMs']])
+  assert.equal('sdk' in (await statusOf(bare)).calls[0], false)
+  // Closed list only, and only beside a why: anything else is not a frame, and the tab is refused as for an unknown why.
+  for (const frame of [{ t: 'bye', why: 'error', sdk: 'hacked' }, { t: 'bye', why: 'error', sdk: 'toString' }, { t: 'bye', why: 'error', sdk: ['socket'] },
+    { t: 'bye', why: 'error', sdk: 'Server error: words' }, { t: 'bye', sdk: 'socket' }, { t: 'bye', why: 'error', sdk: 'socket', more: 1 }]) {
+    assert.equal(parseTabFrame(JSON.stringify(frame)), null, JSON.stringify(frame))
+  }
+  const refused = fixture()
+  const live = await refused.connect()
+  live.tab.json({ t: 'bye', why: 'error', sdk: 'hacked' })
+  await refused.settle()
+  assert.equal((await history(refused)).calls.some(call => 'sdk' in call), false)
+  // A stored row whose sdk is outside the list (never written by this bridge) is read without it.
+  const odd = fixture()
+  await odd.bridgeStorage.put(HISTORY_KEY, { calls: [{ grantedSeconds: 60, ended: 'error', lastedSeconds: 5, atMs: AT, sdk: 'words words' }], turns: [] })
+  assert.deepEqual((await statusOf(odd)).calls, [{ grantedSeconds: 60, ended: 'error', lastedSeconds: 5, atMs: AT }])
+})
+
 test('a lost turn (her tab went away) speaks the fixed sentence, and that sentence is not her first words (review SHOULD 2)', async () => {
   const fx = fixture()
   const { tab, provider } = await fx.connect()
@@ -247,7 +302,11 @@ test('a lost turn (her tab went away) speaks the fixed sentence, and that senten
   fx.clock.advance(5000)
   tab.close(1001)
   await fx.settle()
-  assert.deepEqual(spoken(provider, 1), [LOST_PLACE, ''])
+  assert.deepEqual(spoken(provider, 1), [EARLY_CUE, LOST_PLACE, ''])
   const { turns } = await history(fx)
-  assert.deepEqual(turns, [{ outcome: 'failed', firstWordsSeconds: null, longestQuietSeconds: 5, atMs: AT + 5000 }])
+  // The outcome is one of
+  // answered | cancelled | failed | handed | refused, with a closed reason, marks, counts and tool calls (names only).
+  assert.deepEqual(turns, [{ outcome: 'failed', reason: 'tab_lost', journalMs: 0, endMs: 5000, calls: 0, merged: 0, grown: 0, resumed: 0, cues: 1, toolRounds: [],
+    firstWordsSeconds: null, longestQuietSeconds: 5, journaledMs: 0, handedMs: 0, firstTextMs: null,
+    firstSpeechMs: null, modelFirstMs: null, cue: 'early', path: 'governed', atMs: AT + 5000 }])
 })

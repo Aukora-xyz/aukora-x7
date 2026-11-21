@@ -73,8 +73,9 @@ export function pickCloudModelProvider(env, order) {
   return found ? Object.freeze({ ok: true, provider: found }) : refuse('PROVIDER_SECRET_NOT_CONFIGURED', { tried: names })
 }
 
-/** OpenAI-shape function tools -> Anthropic tools. */
-function anthropicTools(tools) {
+/** OpenAI-shape function tools -> Anthropic tools (`{ name, description, input_schema }`). Shared with her fast voice
+ * (voice-fast.mjs), so both Anthropic callers write tools the same way. */
+export function anthropicTools(tools) {
   return tools.map(tool => {
     const fn = record(tool?.function) ? tool.function : tool
     return { name: String(fn.name), ...(typeof fn.description === 'string' ? { description: fn.description } : {}),

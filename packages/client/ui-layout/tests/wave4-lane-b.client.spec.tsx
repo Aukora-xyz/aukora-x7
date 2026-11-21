@@ -268,6 +268,7 @@ const live = await import(pathToFileURL(livePath ?? 'apps/web/public/app/genesis
     streamTurn: (input: Record<string, unknown>) => Promise<{ reason: string; text: string; message?: string }>
   }
   VOICE_PROVENANCE: string
+  VOICE_CHANNEL_GUIDANCE: string
   VOICE_PROVENANCE_UNJOURNALED: string
   ROSTER_HEAD: string
 }
@@ -424,7 +425,8 @@ describe('Auma Live: a spoken turn is journaled as voice before she sees it, and
     // (The roster of her other threads rides after the provenance part, which stays first.)
     expect((rpcs[0]?.args.request as { content: unknown }).content).toEqual([
       { type: 'text', text: live.VOICE_PROVENANCE }, { type: 'text', text: `${live.ROSTER_HEAD}\n(no other threads listed)` },
-      { type: 'text', text: 'stage epoch sixty eight' }])
+      // The voice-channel guidance rides just ahead of his words (on main since an earlier commit).
+      { type: 'text', text: live.VOICE_CHANNEL_GUIDANCE }, { type: 'text', text: 'stage epoch sixty eight' }])
     expect(live.VOICE_PROVENANCE).toContain('voice carries no owner authority')
     // The owner speaks over her: the journaled turn is marked cancelled on the edge too.
     streams[0]?.push({ type: 'event', event: { type: 'user/message', data: { turn: 3, source: { rpcId: requestId } } } })

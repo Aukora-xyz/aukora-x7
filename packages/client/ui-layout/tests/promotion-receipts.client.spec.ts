@@ -6,8 +6,8 @@ import { describe, expect, it } from 'vitest'
 import { promotionReceiptsOf, promotionRowsOf, promotionWords, RECEIPTS_MAX_CHARS } from '../src/client/spatial/portal/promotion-receipts.ts'
 
 const leaf = (seq: number, data: Record<string, unknown>, kind = 'head.promote') => JSON.stringify({ seq, kind, prevHash: 'x', leafHash: 'y', data })
-const BALL_68 = '79fd695c'.padEnd(64, '0')
-const BALL_69 = '688d831c'.padEnd(64, '0')
+const BALL_68 = '42321012'.padEnd(64, '0')
+const BALL_69 = '79fd695c'.padEnd(64, '0')
 
 describe('Sovereignty: promotion receipts', () => {
   const ledger = [

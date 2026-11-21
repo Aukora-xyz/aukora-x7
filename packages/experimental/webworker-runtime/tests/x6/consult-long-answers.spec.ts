@@ -6,7 +6,8 @@
  * stream that dies is a failure, never a partial answer marked whole.
  */
 import { describe, expect, it } from 'vitest'
-import { consultProviders, consultProviderOutputLimit, CONSULT_LIMITS } from '../../src/x6/ball-loader.ts'
+import { readFile } from 'node:fs/promises'
+import { consultDefaultMaxTokens, consultProviders, consultProviderOutputLimit, CONSULT_LIMITS, CONSULT_MODEL_CEILINGS } from '../../src/x6/ball-loader.ts'
 
 const ORIGIN = 'https://node.example.invalid'
 const encoder = new TextEncoder()
@@ -59,31 +60,32 @@ describe('x6_consult long answers', () => {
     const result = await consultProviders({ model: 'Fable 5.2', prompt: 'Write it all out.' }, { origin: ORIGIN, fetchImpl })
     expect(calls).toHaveLength(1)
     expect(calls[0]?.url).toBe(`${ORIGIN}/door/anthropic/v1/messages`)
-    expect(calls[0]?.body).toMatchObject({ model: 'claude-fable-5-2', max_tokens: 32_000, stream: true })
+    expect(calls[0]?.body).toMatchObject({ model: 'claude-fable-5-2', max_tokens: 128_000, stream: true })
     const [answer] = result.answers ?? []
     expect(result.ok).toBe(true)
-    expect(answer).toMatchObject({ ok: true, truncated: false, stopReason: 'end_turn', maxTokens: 32_000, code: null, next: null,
-      usage: { inputTokens: 12, outputTokens: 40_000 } })
+    expect(answer).toMatchObject({ ok: true, truncated: false, stopReason: 'end_turn', maxTokens: 128_000, code: null, next: null,
+      usage: { inputTokens: 12, outputTokens: 40_000 }, capped: false, tokensUsed: 40_000 })
     expect(answer?.text).toBe(pieces.join(''))
     expect(answer?.text).toHaveLength(160_000)
   })
 
   it('a stop for length keeps the text so far, says truncated true, and says how to get the rest', async () => {
     const { fetchImpl } = recorder(() => sse(anthropicStream(['The first half ', 'of the answ'], 'max_tokens', { outputTokens: 32_000 })))
-    const result = await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p' }, { origin: ORIGIN, fetchImpl })
+    const result = await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p', maxTokens: 32_000 }, { origin: ORIGIN, fetchImpl })
     expect(result.answers?.[0]).toEqual(expect.objectContaining({ ok: true, text: 'The first half of the answ', truncated: true, stopReason: 'max_tokens',
+      capped: true, tokensUsed: 32_000,
       next: 'The provider stopped at maxTokens 32000 (thinking included); ask again with a larger maxTokens, up to 128000.' }))
     const atCeiling = await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p', maxTokens: 128_000 }, { origin: ORIGIN, fetchImpl })
     expect(atCeiling.answers?.[0]).toEqual(expect.objectContaining({ ok: true, truncated: true, maxTokens: 128_000,
       next: 'The provider stopped at the 128000 ceiling; ask for the rest in a follow-up consult.' }))
     // Thinking that spends the whole cap before a word is said so, with the same way forward.
     const { fetchImpl: silent } = recorder(() => sse(anthropicStream([], 'max_tokens')))
-    expect((await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p' }, { origin: ORIGIN, fetchImpl: silent })).answers?.[0])
-      .toEqual(expect.objectContaining({ ok: false, text: null, code: 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS',
+    expect((await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p', maxTokens: 32_000 }, { origin: ORIGIN, fetchImpl: silent })).answers?.[0])
+      .toEqual(expect.objectContaining({ ok: false, text: null, code: 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS', capped: true,
         next: 'The provider stopped at maxTokens 32000 (thinking included); ask again with a larger maxTokens, up to 128000.' }))
   })
 
-  it('defaults to 32000 on every provider; 128000 is the ceiling and 128001 is refused with a sentence', async () => {
+  it('defaults to each model\'s catalogue ceiling, else 32000; 128000 is the ceiling and 128001 is refused with a sentence', async () => {
     const { calls, fetchImpl } = recorder(call => call.url.endsWith('/v1/messages')
       ? json({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' })
       : json({ choices: [{ finish_reason: 'stop', message: { content: 'ok' } }] }))
@@ -92,17 +94,17 @@ describe('x6_consult long answers', () => {
       { provider: 'deepseek', model: 'deepseek-chat' }, { provider: 'openai', model: 'o-model' },
     ] }, { origin: ORIGIN, fetchImpl })
     expect(council.answers?.map(answer => [answer.provider, answer.ok, answer.maxTokens, answer.truncated])).toEqual([
-      ['anthropic', true, 32_000, false], ['openrouter', true, 32_000, false], ['deepseek', true, 32_000, false], ['openai', true, 32_000, false],
+      ['anthropic', true, 128_000, false], ['openrouter', true, 128_000, false], ['deepseek', true, 32_000, false], ['openai', true, 32_000, false],
     ])
     expect(calls.map(call => [call.body.max_tokens, call.body.max_completion_tokens, call.body.stream])).toEqual([
-      [32_000, undefined, true], [32_000, undefined, true], [32_000, undefined, true], [undefined, 32_000, true],
+      [128_000, undefined, true], [128_000, undefined, true], [32_000, undefined, true], [undefined, 32_000, true],
     ])
     calls.length = 0
     expect((await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p', maxTokens: 128_000 }, { origin: ORIGIN, fetchImpl })).ok).toBe(true)
     expect(calls[0]?.body.max_tokens).toBe(128_000)
     expect(await consultProviders({ provider: 'anthropic', model: 'claude-opus-5-5', prompt: 'p', maxTokens: 128_001 }, { origin: ORIGIN, fetchImpl })).toEqual({
       ok: false, code: 'CONSULT_MAX_TOKENS_INVALID',
-      reason: 'maxTokens is a whole number from 1 to 128000 per target (the ceiling); leave it out for the default 32000.' })
+      reason: 'maxTokens is a whole number from 1 to 128000 per target (the ceiling); leave it out for the model\'s own ceiling (else 32000).' })
     expect(calls).toHaveLength(1)
     expect([CONSULT_LIMITS.defaultMaxTokens, CONSULT_LIMITS.anthropicDefaultMaxTokens, CONSULT_LIMITS.maxTokens])
       .toEqual([32_000, 32_000, 128_000])
@@ -181,7 +183,7 @@ describe('x6_consult long answers', () => {
     const result = await consultProviders({ model: 'Kimi K3.1', prompt: 'p' }, { origin: ORIGIN, fetchImpl })
     expect(calls[0]?.url).toBe(`${ORIGIN}/door/openrouter/v1/chat/completions`)
     expect(result.answers?.[0]).toEqual(expect.objectContaining({ ok: true, text: 'Kimi answers ✓', truncated: false, stopReason: 'stop',
-      maxTokens: 32_000, usage: { inputTokens: 9, outputTokens: 4 }, next: null }))
+      maxTokens: 128_000, usage: { inputTokens: 9, outputTokens: 4 }, capped: false, tokensUsed: 4, next: null }))
     const { fetchImpl: cutByLength } = recorder(() => sse([
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'Cut' }, finish_reason: 'length' }] })}\n\n`, 'data: [DONE]\n\n',
     ]))
@@ -294,8 +296,7 @@ describe('x6_consult long answers are cut, never lost', () => {
       ? stalled(anthropicStream(['Read before ', 'the clock ran out.'], null, { withStop: false }))
       : stalled([openRouterChunk({ content: '', reasoning: 'still thinking' })]))
     const started = Date.now()
-    // A timeout under her own smaller timeoutMs is asked once more at the default (600000 ms); this test's clock
-    // runs that retry for 1000 ms of real time so it stays fast. The clock is asked for each attempt's logical time.
+    // One attempt per target, whatever its time; the clock is asked once per target.
     const clocks: number[] = []
     const council = await consultProviders({ prompt: 'p', timeoutMs: 1000, targets: [{ provider: 'anthropic', model: 'Fable 5.2' }, { provider: 'openrouter', model: 'Kimi K3.1' }] },
       { origin: ORIGIN, fetchImpl, timeoutSignal: (ms) => { clocks.push(ms); return AbortSignal.timeout(Math.min(ms, 1000)) } })
@@ -304,12 +305,10 @@ describe('x6_consult long answers are cut, never lost', () => {
     expect(council.answers?.[0]).toEqual(expect.objectContaining({ ok: true, text: 'Read before the clock ran out.', truncated: true,
       stopReason: 'consult_timeout_cap', code: null,
       next: 'The answer was still streaming when timeoutMs 1000 ran out and was cut here; ask for the rest in a follow-up consult, or ask again with a larger timeoutMs (up to 1800000).' }))
-    expect(council.answers?.[0]?.retried).toBeUndefined()
-    // Only thinking before the clock ran out: there is no answer to keep, so it stays a timeout, after its ONE retry.
-    expect(council.answers?.[1]).toEqual(expect.objectContaining({ ok: false, text: null, truncated: false, code: 'CONSULT_TIMEOUT',
-      retried: { field: 'timeoutMs', from: 1000, to: 600_000 } }))
-    expect(clocks.sort((a, b) => a - b)).toEqual([1000, 1000, 600_000])
-    expect(released).toBe(3)
+    // Only thinking before the clock ran out: there is no answer to keep, so it stays a timeout, and it is not asked again.
+    expect(council.answers?.[1]).toEqual(expect.objectContaining({ ok: false, text: null, truncated: false, code: 'CONSULT_TIMEOUT' }))
+    expect(clocks).toEqual([1000, 1000])
+    expect(released).toBe(2)
 
     const caller = new AbortController()
     const { fetchImpl: cancelled } = recorder(() => {
@@ -321,55 +320,62 @@ describe('x6_consult long answers are cut, never lost', () => {
   })
 })
 
-describe('x6_consult never starves by accident', () => {
-  // Her report this morning: google/gemini-4-the review at maxTokens 2500 spent the whole cap thinking and said nothing.
-  const thinkingOnly = (finish: string) => sse([openRouterChunk({ content: '', reasoning: 'weighing it' }), openRouterChunk({ content: '' }, finish), 'data: [DONE]\n\n'])
-  const spoken = (text: string) => sse([openRouterChunk({ content: text }), openRouterChunk({ content: '' }, 'stop'), 'data: [DONE]\n\n'])
+describe('x6_consult pays once and says when its cap cut it', () => {
+  // Her report: a thinking model capped at 2500 stopped for length with no answer, and was silently asked again at 32000.
+  const thinkingOnly = (finish: string, outputTokens = 2500) => sse([openRouterChunk({ content: '', reasoning: 'weighing it' }),
+    openRouterChunk({ content: '' }, finish), `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 7, completion_tokens: outputTokens } })}\n\n`, 'data: [DONE]\n\n'])
   const carbon = { provider: 'openrouter', model: 'google/gemini-4-carbon', prompt: 'p' }
   const first = async (input: Record<string, unknown>, deps: Omit<Parameters<typeof consultProviders>[1], 'origin'>) =>
     (await consultProviders({ ...carbon, ...input }, { origin: ORIGIN, ...deps })).answers?.[0]
 
-  it('thinking that used her own small cap is asked ONCE more at the default, and the answer says so', async () => {
-    const { calls, fetchImpl } = recorder((_call, index) => index === 0 ? thinkingOnly('length') : spoken('It answers.'))
-    const result = await consultProviders({ ...carbon, maxTokens: 2500 }, { origin: ORIGIN, fetchImpl })
-    expect(calls.map(call => call.body.max_tokens)).toEqual([2500, 32_000])
-    expect(result.answers?.[0]).toEqual(expect.objectContaining({ ok: true, text: 'It answers.', maxTokens: 32_000, code: null,
-      retried: { field: 'maxTokens', from: 2500, to: 32_000 } }))
-    // Starved again at the default: still only one retry, and it says it was retried.
-    const { calls: twice, fetchImpl: alwaysThinking } = recorder(() => thinkingOnly('length'))
-    expect(await first({ maxTokens: 2500 }, { fetchImpl: alwaysThinking })).toEqual(expect.objectContaining({
-      ok: false, code: 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS', maxTokens: 32_000, retried: { field: 'maxTokens', from: 2500, to: 32_000 } }))
-    expect(twice.map(call => call.body.max_tokens)).toEqual([2500, 32_000])
+  it('thinking that used her small cap is ONE call: capped true, its stop reason and the tokens used; nothing is asked again', async () => {
+    const { calls, fetchImpl } = recorder(() => thinkingOnly('length'))
+    const answer = await first({ maxTokens: 2500 }, { fetchImpl })
+    expect(calls.map(call => call.body.max_tokens)).toEqual([2500])
+    expect(answer).toEqual(expect.objectContaining({ ok: false, code: 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS', maxTokens: 2500,
+      capped: true, stopReason: 'length', tokensUsed: 2500 }))
+    expect(answer).not.toHaveProperty('retried')
   })
 
-  it('a cap at or above the default, or no cap at all, is respected and never retried', async () => {
+  it('every cap, or none, is one call; a small cap whose answer was cut keeps its text and says capped', async () => {
     for (const asked of [32_000, 64_000, undefined]) {
       const { calls, fetchImpl } = recorder(() => thinkingOnly('length'))
       const answer = await first(asked === undefined ? {} : { maxTokens: asked }, { fetchImpl })
-      expect([asked, calls.map(call => call.body.max_tokens), answer?.code, answer?.retried]).toEqual([asked, [asked ?? 32_000], 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS', undefined])
+      expect([asked, calls.map(call => call.body.max_tokens), answer?.code, answer?.capped]).toEqual([asked, [asked ?? 32_000], 'CONSULT_REASONING_EXHAUSTED_MAX_TOKENS', true])
     }
-    // A small cap whose answer was merely cut (it said something) is not starved: kept as it is.
     const { calls, fetchImpl } = recorder(() => sse([openRouterChunk({ content: 'Short' }, 'length'), 'data: [DONE]\n\n']))
     expect(await first({ maxTokens: 2500 }, { fetchImpl })).toEqual(expect.objectContaining({
-      ok: true, text: 'Short', truncated: true }))
+      ok: true, text: 'Short', truncated: true, capped: true, stopReason: 'length' }))
     expect(calls).toHaveLength(1)
   })
 
-  it('a timeout under her own short time is asked once more at the default time; a time at the default is respected', async () => {
+  it('a timeout under her own short time is one call, never asked again at a longer time', async () => {
     const stall = () => new Response(new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => {}) }), { headers: { 'content-type': 'text/event-stream' } })
     const clocks: number[] = []
     const fast = (ms: number) => { clocks.push(ms); return AbortSignal.timeout(20) }
-    const { calls, fetchImpl } = recorder((_call, index) => index === 0 ? stall() : spoken('In time.'))
-    expect(await first({ timeoutMs: 120_000 }, { fetchImpl, timeoutSignal: fast })).toEqual(
-      expect.objectContaining({ ok: true, text: 'In time.', code: null, retried: { field: 'timeoutMs', from: 120_000, to: 600_000 } }))
-    expect([calls.length, clocks]).toEqual([2, [120_000, 600_000]])
-    clocks.length = 0
-    for (const asked of [600_000, 1_800_000, undefined]) {
+    for (const asked of [120_000, 600_000, 1_800_000, undefined]) {
       const { calls: once, fetchImpl: stalls } = recorder(() => stall())
       const answer = await first(asked === undefined ? {} : { timeoutMs: asked }, { fetchImpl: stalls, timeoutSignal: fast })
-      expect([asked, once.length, answer?.code, answer?.retried]).toEqual([asked, 1, 'CONSULT_TIMEOUT', undefined])
+      expect([asked, once.length, answer?.code]).toEqual([asked, 1, 'CONSULT_TIMEOUT'])
     }
-    expect(clocks).toEqual([600_000, 1_800_000, 600_000])
+    expect(clocks).toEqual([120_000, 600_000, 1_800_000, 600_000])
+  })
+
+  it('the ceilings are the catalogue\'s: every model row in the web-app bundle maps to its stated maxTokens', async () => {
+    const catalogue = await readFile(new URL('../../../../bundle/web-app/cordis.patch.yml', import.meta.url), 'utf8')
+    const doors: Record<string, string> = { 'anthropic-door': 'anthropic', 'openrouter-door': 'openrouter' }
+    const stated: Record<string, number> = {}
+    let door: string | undefined
+    for (const line of catalogue.split('\n')) {
+      const header = /^ {6}([a-z-]+-door):\s*$/.exec(line)
+      if (header) door = doors[header[1] as string]
+      const row = /- \{ id: ([^,]+), .*maxTokens: (\d+)/.exec(line)
+      if (row && door) stated[`${door}/${row[1] as string}`] = Number(row[2])
+    }
+    expect(Object.keys(stated).length).toBeGreaterThanOrEqual(10)
+    expect(CONSULT_MODEL_CEILINGS).toEqual(stated)
+    expect(consultDefaultMaxTokens('anthropic', 'claude-opus-5-5')).toBe(128_000)
+    expect(consultDefaultMaxTokens('deepseek', 'deepseek-flash')).toBe(CONSULT_LIMITS.defaultMaxTokens)
   })
 
   it('a caller cancel stays CONSULT_CANCELLED and is never retried, even under a small cap or a short time', async () => {
@@ -380,7 +386,7 @@ describe('x6_consult never starves by accident', () => {
     })
     const answer = await first({ maxTokens: 2500, timeoutMs: 120_000 }, { fetchImpl, signal: caller.signal })
     expect(answer).toEqual(expect.objectContaining({ ok: false, text: null, code: 'CONSULT_CANCELLED' }))
-    expect(answer?.retried).toBeUndefined()
+    expect(answer).not.toHaveProperty('retried')
     expect(calls).toHaveLength(1)
   })
 })

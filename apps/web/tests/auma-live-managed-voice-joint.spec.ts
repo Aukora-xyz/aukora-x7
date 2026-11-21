@@ -76,6 +76,24 @@ const { makeDirectiveFilter } = await import(new URL('../public/app/field-direct
   makeDirectiveFilter: (apply: (tag: string) => void) => { push: (text: string) => string; flush: () => string }
 }
 
+// The two memory halves were built in two checkouts. This spec joins them: her home's
+// REAL store (webworker-runtime/src/storage/voice-memory.ts over an in-memory file map) behind the REAL controller, and
+// the REAL bridge, with no memory frame mocked between them.
+const homeMemory = await import(new URL('../../../packages/experimental/webworker-runtime/src/storage/voice-memory.ts', import.meta.url).href) as {
+  createVoiceMemoryStore: (vfs: Record<string, unknown>) => {
+    head: () => Promise<Record<string, unknown>>
+    append: (items: unknown) => Promise<Record<string, unknown>>
+  }
+  recordDigest: (record: unknown) => Promise<string>
+  VOICE_MEMORY_CHAIN: string
+  VOICE_MEMORY_WORDS: string
+  VOICE_MEMORY_ZERO: string
+}
+const edgeMemory = await import(new URL('../../../deploy/cloudflare/src/voice-memory.mjs', import.meta.url).href) as {
+  MEMORY_KEYS: { head: string; tail: string; synced: string }
+}
+const edgeFakes = fakes as unknown as { memoryStorage: () => { get: (key: string) => Promise<unknown> } }
+
 const NOTHING: Empty = { conversations: 0, sockets: 0, writes: 0, timers: 0 }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 const HOME = 'session-voice-1'
@@ -132,7 +150,13 @@ function governed(options: { mark?: () => Response; reply?: string[] | null }) {
       stream?.push({ type: 'assistant-stream', frame: { type: 'end' } })
       stream?.push({ type: 'event', event: { type: 'turn/end', data: { turn, reason: { kind: 'completed' } } } })
     }
-    return { more: (text: string) => stream?.push({ type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', text } } }) }
+    return {
+      more: (text: string) => stream?.push({ type: 'assistant-stream', frame: { type: 'chunk', chunk: { type: 'text-delta', text } } }),
+      finish: () => {
+        stream?.push({ type: 'assistant-stream', frame: { type: 'end' } })
+        stream?.push({ type: 'event', event: { type: 'turn/end', data: { turn, reason: { kind: 'completed' } } } })
+      },
+    }
   }
   const items = [{ sessionId: HOME, title: '[voice] Auma Live', updatedAt: 1 }]
   const transport = {
@@ -180,7 +204,14 @@ function governed(options: { mark?: () => Response; reply?: string[] | null }) {
 }
 
 /** Both halves, wired. */
-function joint(options: { edge?: Record<string, unknown>; mark?: () => Response; reply?: string[] | null; gate?: Promise<void> } = {}) {
+type JointOptions = {
+  edge?: Record<string, unknown>
+  mark?: () => Response
+  reply?: string[] | null
+  gate?: Promise<void>
+  memory?: (body: Record<string, unknown>) => Promise<unknown>
+}
+function joint(options: JointOptions = {}) {
   const fx = fakes.fixture(options.edge ?? {})
   type PageInit = { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }
   const pageFetch = async (path: string, init: PageInit = {}) => {
@@ -229,6 +260,7 @@ function joint(options: { edge?: Record<string, unknown>; mark?: () => Response;
     },
     onTranscript: (role: string, text: string) => { lines.push([role, text]) },
     onNotice: (line: string) => { notices.push(line) },
+    ...(options.memory ? { memory: options.memory } : {}),
   })
   /** Let both halves run until nothing moves. */
   const flush = async (rounds = 25) => {
@@ -311,7 +343,9 @@ describe('the page and the edge, one protocol (no frame mocked between them)', (
     expect(j.fx.empty()).toEqual(NOTHING)
   })
 
-  it('the SDK\'s own interruption: the page cuts its turn, says fail VOICE_TURN_CANCELLED, and the edge never speaks for it', async () => {
+  // CHANGED: only the edge decides an
+  // interruption. The SDK's own interruption no longer cuts the page's turn: her work goes on and its answer is spoken.
+  it('the SDK\'s own interruption: the page keeps its turn running; no fail, no cancel; her answer reaches the edge whole', async () => {
     const j = joint({ reply: null })
     await j.controller.start()
     await j.flush()
@@ -319,15 +353,19 @@ describe('the page and the edge, one protocol (no frame mocked between them)', (
     const provider = await j.provider('conv_1')
     provider.json(fakes.transcript(1, 'go on'))
     await j.flush(60)
-    j.her.respond(j.her.streams.at(-1), j.her.prompts[0] as string, ['Partial thought. '], false)
+    const reply = j.her.respond(j.her.streams.at(-1), j.her.prompts[0] as string, ['Partial thought. '], false)
     await j.flush(40)
     j.sdk.configs[0]?.onInterruption()
     await j.flush(60)
-    expect(page.frames('fail')).toEqual([{ t: 'fail', turn: 'eleven:conv_1:1', code: 'VOICE_TURN_CANCELLED' }])
-    expect(said(provider, 1)).toEqual(['Partial thought. ', '<final>'])
+    expect(page.frames('fail')).toEqual([])
+    expect(j.her.calls.filter(call => call === 'rpc:session/cancel')).toEqual([])
+    reply.more('And the rest of it.')
+    reply.finish()
+    await j.flush(60)
+    expect(page.frames('done')).toEqual([{ t: 'done', turn: 'eleven:conv_1:1' }])
+    expect(said(provider, 1)).toEqual(['Partial thought. ', 'And the rest of it.', '<final>'])
     expect(JSON.stringify(provider.frames())).not.toContain(bridgeDo.LOST_PLACE)
-    expect(await rowsOf(j.fx)).toEqual([['eleven:conv_1:1', false, true]])
-    expect(j.her.calls.filter(call => call === 'rpc:session/cancel')).toHaveLength(1)
+    expect(await rowsOf(j.fx)).toEqual([['eleven:conv_1:1', true, false]])
     j.controller.stop()
     await j.flush()
     expect(j.fx.empty()).toEqual(NOTHING)
@@ -379,7 +417,8 @@ describe('the page and the edge, one protocol (no frame mocked between them)', (
     await j.flush()
     const page = j.page()
     const provider = await j.provider('conv_1')
-    provider.json(fakes.transcript(1, 'one moment'))
+    // Real words, not "one moment": since the voice fix that phrase is one of his stop phrases and starts no turn at all.
+    provider.json(fakes.transcript(1, 'read me the whole note'))
     await j.flush(60)
     j.controller.stop()
     await j.flush(40)
@@ -476,6 +515,72 @@ describe('the page and the edge, one protocol (no frame mocked between them)', (
     expect(j.sdk.configs).toEqual([])
     expect(j.sockets).toEqual([])
     expect(j.fx.bridgeBuilt).toBe(false)
+    expect(j.fx.empty()).toEqual(NOTHING)
+  })
+
+  it('voice memory, both halves: her home says what it has, the edge sends the exchange, her home appends it and the edge marks it', async () => {
+    // Her home: the real store over a file map.
+    const files = new Map<string, string>()
+    const folders = new Set<string>(['/', '/dsh', '/dsh/home', '/dsh/home/auma'])
+    const vfs = {
+      existsSync: (path: string) => files.has(path) || folders.has(path),
+      statSync: (path: string) => ({ isDirectory: () => folders.has(path), isFile: () => files.has(path) }),
+      lstatSync: () => ({ isSymbolicLink: () => false }),
+      readFileSync: (path: string) => { const text = files.get(path); if (text === undefined) throw new Error('ENOENT'); return text },
+      writeFileSync: (path: string, data: string) => { files.set(path, data) },
+      mkdirSync: (path: string) => { let at = ''; for (const part of path.split('/').filter(Boolean)) { at += `/${part}`; folders.add(at) } },
+      unlinkSync: (path: string) => { files.delete(path) },
+    }
+    const home = homeMemory.createVoiceMemoryStore(vfs)
+    const memory = (body: Record<string, unknown>) => (body.action === 'head' ? home.head() : home.append(body.items))
+    // The edge: the fast voice on (a made-up key, a made-up model answer), its storage kept so the test can read it.
+    const bridgeStorage = edgeFakes.memoryStorage()
+    const encoder = new TextEncoder()
+    const answer = () => new Response(new ReadableStream({ start(control) {
+      control.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: 'It is noon.' } }] })}\n\n`))
+      control.enqueue(encoder.encode('data: [DONE]\n\n'))
+      control.close()
+    } }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    const j = joint({ memory, edge: { bridgeStorage, modelFetch: answer, env: { DEEPSEEK_API_KEY: 'sk-synthetic-fast-voice-key-0123456789abcdef',
+      PROVIDER_BUDGET_WINDOW_MS: '60000', PROVIDER_BUDGET_REQUESTS: '1000', PROVIDER_BUDGET_TOKENS: '50000000', PROVIDER_MAX_OUTPUT_TOKENS: '256000' } } })
+    await j.controller.start()
+    await j.flush()
+    const page = j.page()
+    const provider = await j.provider('conv_1')
+    // Her home had nothing: the page said so once, in the shape the tab door accepts (the door is still open).
+    expect(page.frames('memory_have')).toEqual([{ t: 'memory_have', seq: 0, digest: homeMemory.VOICE_MEMORY_ZERO }])
+    expect(page.readyState).toBe(1)
+    // He first speaks well after hello (the first-frame wait for the awareness is not what this case is about).
+    j.fx.clock.advance(3000)
+    provider.json(fakes.transcript(1, 'what time is it'))
+    await j.flush(80)
+    expect(said(provider, 1).join('')).toContain('It is noon.')
+    // The edge sent the exchange; her home appended it; the page acknowledged it; the door never closed.
+    const sent = page.heard.filter(frame => frame.t === 'memory')
+    expect(sent).toHaveLength(1)
+    const chain = (files.get(homeMemory.VOICE_MEMORY_CHAIN) ?? '').split('\n').filter(Boolean)
+    const words = (files.get(homeMemory.VOICE_MEMORY_WORDS) ?? '').split('\n').filter(Boolean)
+    expect(chain).toHaveLength(1)
+    expect(words).toHaveLength(1)
+    const record = JSON.parse(chain[0] as string) as { seq: number; prev: string; ended: string; path: string }
+    expect([record.seq, record.prev, record.ended, record.path]).toEqual([1, homeMemory.VOICE_MEMORY_ZERO, 'answered', 'fast'])
+    expect(JSON.parse(words[0] as string)).toMatchObject({ seq: 1, heard: 'what time is it', said: 'It is noon.' })
+    const digest = await homeMemory.recordDigest(record)
+    expect(page.frames('memory_ack')).toEqual([{ t: 'memory_ack', seq: 1, digest }])
+    expect(page.frames('memory_nack')).toEqual([])
+    expect(page.readyState).toBe(1)
+    // Both holders name the same head, and the edge knows her home has it.
+    expect(await bridgeStorage.get(edgeMemory.MEMORY_KEYS.head)).toMatchObject({ seq: 1, digest })
+    expect(await bridgeStorage.get(edgeMemory.MEMORY_KEYS.synced)).toBe(1)
+    // A second exchange links to the first in her home as it does at the edge.
+    provider.json(fakes.transcript(2, 'and tomorrow'))
+    await j.flush(80)
+    const chain2 = (files.get(homeMemory.VOICE_MEMORY_CHAIN) ?? '').split('\n').filter(Boolean)
+    expect(chain2).toHaveLength(2)
+    expect((JSON.parse(chain2[1] as string) as { seq: number; prev: string })).toMatchObject({ seq: 2, prev: digest })
+    expect(await bridgeStorage.get(edgeMemory.MEMORY_KEYS.synced)).toBe(2)
+    j.controller.stop()
+    await j.flush(40)
     expect(j.fx.empty()).toEqual(NOTHING)
   })
 })

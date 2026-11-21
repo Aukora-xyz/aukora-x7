@@ -13,12 +13,15 @@ import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import z from '@deepseek-ai/schemastery'
 import WorkflowEngine, { WorkflowError, WorkflowRunId } from '@deepseek-ai/dsh-workflow'
-import type { WorkflowRun, WorkflowRunInfo, WorkflowStartRequest } from '@deepseek-ai/dsh-workflow'
+import type { WorkflowAgentEndInfo, WorkflowAgentInfo, WorkflowRun, WorkflowRunInfo, WorkflowStartRequest } from '@deepseek-ai/dsh-workflow'
 import { PtcWorkflowRun } from './host.ts'
+import { InProcessWorkflowRun, inProcessExecutor, looksLikeTypeScript } from './in-process.ts'
 import { validateMeta } from './meta.ts'
 import type { WorkerInit, WorkerLimits } from './types.ts'
 
 export { validateMeta } from './meta.ts'
+export { InProcessWorkflowRun, inProcessExecutor, looksLikeTypeScript, WORKFLOW_EXECUTOR_KEY } from './in-process.ts'
+export type { InProcessExecutorHost } from './in-process.ts'
 export { materializeFromRealm, MaterializeError } from './realm.ts'
 export type {
   ChildHandle,
@@ -52,7 +55,7 @@ const META_STATEMENT = /^\s*export\s+const\s+meta\b/
  * Reject invalid JavaScript synchronously before publishing a workflow run.
  * The guest compiles the same async wrapper in its own process.
  */
-function assertBodyParses(body: string, name: string): void {
+function assertBodyParses(body: string, name: string, inProcess: boolean): void {
   if (META_STATEMENT.test(body)) {
     throw new WorkflowError('workflow meta rides the `meta` request field, not the script: remove the `export const meta = {...}` statement from the body', 'SCRIPT_PARSE')
   }
@@ -60,6 +63,10 @@ function assertBodyParses(body: string, name: string): void {
     // Parse only — the script object is discarded, nothing executes.
     void new vm.Script(`(async () => {\n${body}\n})()`, { filename: `workflow:${name}`, lineOffset: -1 })
   } catch (error: unknown) {
+    // The in-process host has no type stripper: TypeScript gets a named refusal instead of a bare parse error.
+    if (inProcess && looksLikeTypeScript(body)) {
+      throw new WorkflowError(`WORKFLOW_TS_STRIP_UNAVAILABLE: this host runs workflow scripts as plain JavaScript and has no TypeScript stripper; remove the type syntax and send plain JS (${String(error)})`, 'WORKFLOW_TS_STRIP_UNAVAILABLE', { cause: error })
+    }
     throw new WorkflowError(`workflow script does not parse: ${String(error)}`, 'SCRIPT_PARSE', { cause: error })
   }
 }
@@ -133,7 +140,8 @@ class PtcWorkflowEngine extends WorkflowEngine {
    */
   start(request: WorkflowStartRequest): WorkflowRun {
     const meta = validateMeta(request.meta)
-    assertBodyParses(request.script, meta.name)
+    const inProcess = inProcessExecutor()
+    assertBodyParses(request.script, meta.name, inProcess !== undefined)
     const subagentProvider = resolveSubagentProvider(this.ctx, this.config.provider, request.subagentProvider)
     const maxTotalAgents = resolveMaxTotalAgents(request.maxTotalAgents, this.config.maxTotalAgents)
     const id = WorkflowRunId(randomUUID())
@@ -155,24 +163,24 @@ class PtcWorkflowEngine extends WorkflowEngine {
     // Captured service handles keep a holder-owned run usable after engine unload.
     const runCtx = this.ctx
     const subagents = runCtx.subagents
-    const run = new PtcWorkflowRun(
-      runCtx,
-      subagents,
-      runCtx.ptcRuntime,
-      id,
-      meta,
-      request.parent,
-      init,
-      subagentProvider,
-      runCtx.sandboxPolicy.resolve({ session: request.parent.session }),
-      {
-        phase: (title) => { this.emitWorkflowEvent('workflow/phase', info, title) },
-        log: (message) => { this.emitWorkflowEvent('workflow/log', info, message) },
-        agentStart: (agent) => { this.emitWorkflowEvent('workflow/agent-start', info, agent) },
-        agentEnd: (agent) => { this.emitWorkflowEvent('workflow/agent-end', info, agent) },
-      },
-      request.signal,
-    )
+    const policy = runCtx.sandboxPolicy.resolve({ session: request.parent.session })
+    const observer = {
+      phase: (title: string) => { this.emitWorkflowEvent('workflow/phase', info, title) },
+      log: (message: string) => { this.emitWorkflowEvent('workflow/log', info, message) },
+      agentStart: (agent: WorkflowAgentInfo) => { this.emitWorkflowEvent('workflow/agent-start', info, agent) },
+      agentEnd: (agent: WorkflowAgentEndInfo) => { this.emitWorkflowEvent('workflow/agent-end', info, agent) },
+    }
+    // A host without Node children (the browser worker) installs the in-process executor; every other host keeps PTC.
+    const run: WorkflowRun = inProcess === undefined
+      ? new PtcWorkflowRun(
+        runCtx, subagents, runCtx.ptcRuntime, id, meta, request.parent, init, subagentProvider, policy, observer, request.signal,
+      )
+      : new InProcessWorkflowRun(
+        subagents, id, meta, request.parent, init, subagentProvider, policy,
+        runCtx.workingDirectory.ensure(request.parent, request.signal ?? new AbortController().signal), observer, inProcess,
+        (error: unknown) => { runCtx.logger.warn(`workflow-ptc: in-process child dispose failed: ${String(error)}`) },
+        request.signal,
+      )
 
     this.emitWorkflowEvent('workflow/start', info)
     // `workflow/end` fires as the (never-rejecting) result settles, with the

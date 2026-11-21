@@ -37,6 +37,13 @@ name: Proposal checks (tests on her branches; no secrets, no deploy)
 # only the fence runs (main's list judges the proposal at that level: plain paths, no credential files) and `checks`
 # needs the fence alone; the baseline, edge, ui, boot and new-test jobs are skipped, and the edge's merge waits for
 # proposal-gate.yml only. Any other value of the line runs everything, as before ('guarded').
+# At
+# 'open' the fence also reports whether the diff touches a test file (packages/**/tests/**) or src/storage/**, and
+# new-vitest-tests runs then, so a card that changes a suite or the storage module is judged by the run of its own specs
+# instead of by nothing. `checks` requires it exactly when it ran. Every protection above is unchanged: main's
+# configuration, setup and helpers are put back, the added files are removed from the other jobs, and main's retention.mjs
+# is the judge and the parent of the run. It does not touch new-node-tests: a card adding a node test is still skipped at
+# this level, which is named here rather than hidden.
 # DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
 # repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
 on:
@@ -72,6 +79,7 @@ jobs:
     outputs:
       main: ${{ steps.main.outputs.sha }}
       level: ${{ steps.level.outputs.level }}
+      touched: ${{ steps.level.outputs.touched }}
     steps:
       - name: Checkout the pushed proposal commit
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -123,6 +131,26 @@ jobs:
           ' "$RUNNER_TEMP/frozen-paths-main.mjs")"
           echo "door level: $level (origin/main deploy/ci/frozen-paths.mjs)"
           echo "level=$level" >> "$GITHUB_OUTPUT"
+          # the open door level (her card, 2026-11-15): does this proposal touch a test file or the storage module? At the open door level
+          # nothing else ran, so a card changing a suite or src/storage/ was judged by no run of its own specs (two of her
+          # storage cards went green here while the spec they changed was red). It is computed in THIS step, not a new one,
+          # because main's guard holds the fence job's step names to exactly four (deploy/ci/frozen-paths.test.mjs). The
+          # diff is main...HEAD with no renames, so a rename is seen as its old path and its new one.
+          git diff --no-renames --no-ext-diff --name-status -z 'refs/remotes/origin/main...HEAD' > "$RUNNER_TEMP/touched.z"
+          node --input-type=module -e '
+            import { readFileSync, writeFileSync } from "node:fs"
+            const raw = readFileSync(process.argv[1], "utf8")
+            const fields = raw.split("\u0000").filter(Boolean)
+            const paths = []
+            // status and path alternate; with no renames there is never a third field
+            for (let i = 1; i < fields.length; i += 2) paths.push(fields[i])
+            const hit = paths.filter(path =>
+              (path.startsWith("packages/") && path.includes("/tests/")) || path.includes("/src/storage/"))
+            for (const path of hit) console.log("touches a suite or the storage module: " + path)
+            console.log("touched: " + (hit.length ? "1" : "0") + " (" + hit.length + " path(s) of " + paths.length + " changed)")
+            writeFileSync(process.argv[2], hit.length ? "1" : "0")
+          ' "$RUNNER_TEMP/touched.z" "$RUNNER_TEMP/touched.flag"
+          echo "touched=$(cat "$RUNNER_TEMP/touched.flag")" >> "$GITHUB_OUTPUT"
 
   baseline:
     needs: fence
@@ -483,7 +511,9 @@ jobs:
 
   new-vitest-tests:
     needs: fence
-    if: ${{ needs.fence.outputs.level != 'open' }}
+    # the open door level: at the open door level this used to be skipped for every proposal, so a card changing a suite or src/storage
+    # was judged by no run of its own specs. It now runs there too when the fence reports such a path in the diff.
+    if: ${{ needs.fence.outputs.level != 'open' || needs.fence.outputs.touched == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -567,8 +597,12 @@ jobs:
           LEVEL: ${{ needs.fence.outputs.level }}
         run: |
           node --input-type=module -e '
-            // At the open door level only the fence ran (main decides the level); otherwise every job must be green.
-            const required = process.env.LEVEL === "open" ? { fence: "FENCE" }
+            // At the open door level only the fence ran (main decides the level) — and, since the open door level, new-vitest-tests too
+            // when the proposal touches a suite or src/storage. Whether it ran is read from its own result, never from a new
+            // fence output, because main holds this job to red and level only (deploy/ci/retention.test.mjs).
+            const ran = process.env.NEW_VITEST_TESTS !== "skipped" && process.env.NEW_VITEST_TESTS !== "missing"
+            const required = process.env.LEVEL === "open"
+              ? (ran ? { fence: "FENCE", "new-vitest-tests": "NEW_VITEST_TESTS" } : { fence: "FENCE" })
               : { fence: "FENCE", baseline: "BASELINE", edge: "EDGE", ui: "UI", boot: "BOOT", "new-node-tests": "NEW_NODE_TESTS", "new-vitest-tests": "NEW_VITEST_TESTS" }
             console.log("door level: " + (process.env.LEVEL || "guarded"))
             const red = process.env.RED ?? ""

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { canonicalJson } from '../owner-grant-policy.mjs'
-import { createLinearDoor, LINEAR_ACTIONS, LINEAR_CORE, LINEAR_DOOR_LIMITS, LINEAR_OPEN_WRITES, LINEAR_READS, linearDoorLevel, linearScreenClean } from '../linear-door.mjs'
+import { createLinearDoor, LINEAR_ACTIONS, LINEAR_CORE, LINEAR_DOOR_LIMITS, LINEAR_NEXT, LINEAR_OPEN_WRITES, LINEAR_READS, linearDoorLevel, linearScreenClean } from '../linear-door.mjs'
 
 const ORIGIN = 'https://node.example.invalid'
 // Made up for these tests; the screen must catch it even though it has no known key format.
@@ -468,6 +468,25 @@ test('bounds: 2,400 reads and 240 writes an hour per owner session (were 600 and
 })
 
 // ---- Linear's failures ------------------------------------------------------------------------------------------------
+test('an upstream error carries Linear\'s own class as a closed code, never its words; a parentless document says what to pass', async () => {
+  const PROVIDER = 'made-up provider words that must never leave'
+  const door = answer => createLinearDoor({ fetchImpl: fakeLinear(answer).fetchImpl, now: () => NOW, upstreamTimeoutMs: 30 })
+  const classed = await call(door(() => ({ errors: [{ message: PROVIDER, extensions: { code: 'INPUT_ERROR', userPresentableMessage: PROVIDER } }] })), { action: 'teams' })
+  assert.deepEqual([classed.status, classed.body], [502, { ok: false, code: 'LINEAR_UPSTREAM_ERROR', kind: 'INPUT_ERROR' }])
+  assert.ok(!classed.text.includes('made-up'))
+  // A class that is not an upper-snake code (prose, lower case, too long, not a string) never leaves.
+  for (const code of [PROVIDER, 'input error', 'A'.repeat(41), 'X', 7, null]) {
+    const shaped = await call(door(() => ({ errors: [{ message: PROVIDER, extensions: { code } }] })), { action: 'teams' })
+    assert.deepEqual(shaped.body, { ok: false, code: 'LINEAR_UPSTREAM_ERROR' }, String(code))
+  }
+  const failing = () => ({ errors: [{ message: PROVIDER, extensions: { code: 'INPUT_ERROR' } }] })
+  const bare = await call(door(failing), { action: 'document_create', requestId: 'request-document-bare', title: 'Round state' })
+  assert.deepEqual(bare.body, { ok: false, code: 'LINEAR_UPSTREAM_ERROR', kind: 'INPUT_ERROR', next: LINEAR_NEXT.documentParent })
+  const placed = await call(door(failing), { action: 'document_create', requestId: 'request-document-placed', title: 'Round state', projectId: UUID1 })
+  assert.deepEqual(placed.body, { ok: false, code: 'LINEAR_UPSTREAM_ERROR', kind: 'INPUT_ERROR' }, 'with a project the hint would be wrong, so it is not said')
+  assert.ok(!bare.text.includes('made-up') && !placed.text.includes('made-up'))
+})
+
 test('a Linear error, refusal, rate limit, redirect, bad answer or timeout is a closed code with no provider text', async () => {
   const PROVIDER = 'made-up provider words that must never leave'
   const cases = [

@@ -37,7 +37,7 @@ export const EXEC_TOOL_DESCRIPTION =
   + 'timeoutMinutes? (1 to 30, default 10), browser?, label? (1 to 55 of A-Z a-z 0-9 . _ -; `-` and 8 hex are added so '
   + 'each run\'s label is its own; one is made if absent) } starts it and answers { run, label, status, url }, or '
   + '{ pending: true, label } when GitHub has not shown it yet: then `status` { label } with that full label finds it. '
-  + '`status` { run | label }; `logs` { run, job? } (the newest 252 KiB of a log up to 32 MiB; `earlier` says where the rest is); '
+  + '`status` { run | label }; `logs` { run, job? } (the newest 252 KiB of a log up to 32 MiB; `earlier` says where the rest is; GitHub keeps a job\'s log only once the job has finished, so a queued or running run of yours answers EXEC_LOG_NOT_READY with its status and, while it runs, `currentStep` and `stepsDone`/`stepsTotal`: ask again when status says completed); '
   + '`cancel` { run }; `list` (your newest 20 runs); `artifacts` { run } (names, sizes, expiry; download them on the run\'s page). '
   + 'It runs as an ordinary user without sudo. Bounds: 60 runs an hour and 300 a day, counted by each edge instance in '
   + 'memory, not durably (EXEC_RATE_LIMITED names `retryAt`). Refusals: EXEC_REF_INVALID, '

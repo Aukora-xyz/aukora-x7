@@ -157,7 +157,8 @@ test('the managed voice\'s Durable Object (VoiceBridge): exported, bound, its ow
   assert.equal(new Set(tags).size, tags.length)
   assert.deepEqual(migrations[0], { tag: 'x61-v1', new_sqlite_classes: ['X61HeadDurableObject', 'MirrorDO'] })
   assert.deepEqual(migrations.filter(migration => migration.tag === 'x61-v2-voice-bridge'), [{ tag: 'x61-v2-voice-bridge', new_sqlite_classes: ['VoiceBridgeDO'] }])
-  assert.equal(migrations.at(-1).tag, 'x61-v2-voice-bridge')
+  // The voice bridge's migration comes right after x61-v1; the witness's (x61-v3-witness) after it, as deploy-guard.test.mjs lists.
+  assert.deepEqual(tags, ['x61-v1', 'x61-v2-voice-bridge', 'x61-v3-witness'])
   assert.equal(migrations.flatMap(migration => [...(migration.new_classes ?? []), ...(migration.new_sqlite_classes ?? [])]).filter(name => name === 'VoiceBridgeDO').length, 1)
   assert.equal(config.vars.VOICE_MANAGED, '1') // switched on 2026-11-13; '0' is the rollback
 })

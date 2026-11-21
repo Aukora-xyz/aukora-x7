@@ -73,8 +73,8 @@ describe('x6_consult: one model or a council, through the host doors', () => {
     expect(calls[0]?.url).toBe(`${ORIGIN}/door/anthropic/v1/messages`)
     expect(calls[0]?.init?.credentials).toBe('same-origin')
     // The Anthropic default cap moved from 2048 to 16000 and every consult now streams.
-    // The default is 32000 on every provider.
-    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ model: 'claude-opus-5-5', max_tokens: 32_000, stream: true, system: 'Be brief.',
+    // With no cap the model's own catalogue ceiling is asked for (128000 for Opus 5.5).
+    expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ model: 'claude-opus-5-5', max_tokens: 128_000, stream: true, system: 'Be brief.',
       messages: [{ role: 'user', content: 'Review this.' }] })
   })
   it('takes the composer pill names: each picks its door and the exact id the pill runs; a raw id still needs its provider', async () => {
@@ -146,7 +146,7 @@ describe('x6_consult: one model or a council, through the host doors', () => {
     // An out-of-range cap now also says the ceiling in a sentence; the code is unchanged.
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', maxTokens: 999_999 }, { origin: ORIGIN, fetchImpl })).toEqual({
       ok: false, code: 'CONSULT_MAX_TOKENS_INVALID',
-      reason: 'maxTokens is a whole number from 1 to 128000 per target (the ceiling); leave it out for the default 32000.' })
+      reason: 'maxTokens is a whole number from 1 to 128000 per target (the ceiling); leave it out for the model\'s own ceiling (else 32000).' })
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p', timeoutMs: 10 }, { origin: ORIGIN, fetchImpl })).toEqual({
       ok: false, code: 'CONSULT_TIMEOUT_INVALID', reason: 'timeoutMs is a whole number from 1000 to 1800000 per target (default 600000).' })
     expect(await consultProviders({ provider: 'openai', model: 'm', prompt: 'p' }, { origin: undefined, fetchImpl })).toEqual({ ok: false, code: 'CONSULT_ORIGIN_UNAVAILABLE' })

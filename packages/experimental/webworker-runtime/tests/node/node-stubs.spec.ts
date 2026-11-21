@@ -66,7 +66,8 @@ const CALLED: [string, Record<string, unknown>, readonly string[]][] = [
     create: piCodingAgent.SessionManager.create, open: piCodingAgent.SessionManager.open,
     inMemory: piCodingAgent.SessionManager.inMemory, list: piCodingAgent.SessionManager.list,
   }, ['create', 'open', 'inMemory', 'list']],
-  ['@deepseek-ai/pi-ai', piAi, ['openAIResponsesApi', 'anthropicMessagesApi']],
+  // Anthropic Messages is served through the edge door now (tests/node/pi-ai-claude-effort.spec.ts).
+  ['@deepseek-ai/pi-ai', piAi, ['openAIResponsesApi']],
 ]
 
 /** Classes that refuse when constructed. */

@@ -30,7 +30,9 @@ export interface ExecutionObserver {
 }
 
 /** The `agent()` options the script may pass; everything else rejects loud. */
-const SUPPORTED_AGENT_OPTIONS = new Set(['label', 'phase', 'schema', 'provider', 'model'])
+const SUPPORTED_AGENT_OPTIONS = new Set(['label', 'phase', 'schema', 'provider', 'model', 'maxTokens', 'timeoutMs'])
+/** The supported option names, as the rejection messages list them. */
+const SUPPORTED_AGENT_OPTION_LIST = 'label, phase, schema, provider, model, maxTokens, timeoutMs'
 /** Deferred Claude Code options we name explicitly in the rejection message. */
 const DEFERRED_AGENT_OPTIONS = new Set(['effort', 'isolation', 'agentType'])
 
@@ -185,6 +187,7 @@ export class WorkflowExecution {
           ...opts.schema !== undefined ? { schema: opts.schema } : {},
           ...opts.provider !== undefined ? { provider: opts.provider } : {},
           ...opts.model !== undefined ? { model: opts.model } : {},
+          ...opts.maxTokens !== undefined ? { maxTokens: opts.maxTokens } : {},
         })
       } catch (error: unknown) {
         throw new WorkflowError(`agent() could not start a child: ${renderThrown(error)}`, 'AGENT_START', { cause: error })
@@ -193,8 +196,12 @@ export class WorkflowExecution {
       this.observer.agentStart(info)
       try {
         let result
+        let timer: ReturnType<typeof setTimeout> | undefined
         try {
-          result = await run.result
+          // A per-call timeoutMs bounds this child; past it the child is disposed (below) and the call answers AGENT_TIMEOUT.
+          result = opts.timeoutMs === undefined ? await run.result : await Promise.race([run.result, new Promise<'timeout'>((resolve) => {
+            timer = setTimeout(() => { resolve('timeout') }, opts.timeoutMs)
+          })])
         } catch (error: unknown) {
           // A rejected child result is an INFRASTRUCTURE fault relayed by the
           // host — distinct from a child that failed and resolved. Pair the
@@ -203,6 +210,13 @@ export class WorkflowExecution {
           // and a broken provider must not read as a failed child.
           this.observer.agentEnd({ ...info, outcome: 'failed' })
           throw new WorkflowError(`child agent run failed: ${renderThrown(error)}`, 'AGENT_RESULT', { cause: error })
+        } finally {
+          if (timer !== undefined) clearTimeout(timer)
+        }
+        if (result === 'timeout') {
+          // Not fatal: inside parallel()/pipeline() the item becomes null; a bare await sees the code and may catch it.
+          this.observer.agentEnd({ ...info, outcome: 'failed' })
+          throw new WorkflowError(`AGENT_TIMEOUT: agent() "${label}" passed its timeoutMs ${String(opts.timeoutMs)}; the child was stopped`, 'AGENT_TIMEOUT', { fatal: false })
         }
         if (result.stopReason === 'completed') {
           if (opts.schema !== undefined) {
@@ -234,6 +248,8 @@ export class WorkflowExecution {
     phase?: string
     provider?: string
     model?: string
+    maxTokens?: number
+    timeoutMs?: number
     schema?: ObjectJsonSchema
   } {
     if (rawOpts === undefined) return {}
@@ -252,13 +268,19 @@ export class WorkflowExecution {
     for (const key of Object.keys(record)) {
       if (SUPPORTED_AGENT_OPTIONS.has(key)) continue
       if (DEFERRED_AGENT_OPTIONS.has(key)) {
-        throw new WorkflowError(`agent() option "${key}" is deferred and not supported by this engine (supported: label, phase, schema, provider, model)`, 'UNSUPPORTED_OPTION')
+        throw new WorkflowError(`agent() option "${key}" is deferred and not supported by this engine (supported: ${SUPPORTED_AGENT_OPTION_LIST})`, 'UNSUPPORTED_OPTION')
       }
-      throw new WorkflowError(`agent() option "${key}" is not recognized (supported: label, phase, schema, provider, model)`, 'UNSUPPORTED_OPTION')
+      throw new WorkflowError(`agent() option "${key}" is not recognized (supported: ${SUPPORTED_AGENT_OPTION_LIST})`, 'UNSUPPORTED_OPTION')
     }
     for (const key of ['label', 'phase', 'provider', 'model'] as const) {
       if (record[key] !== undefined && typeof record[key] !== 'string') {
         throw new WorkflowError(`agent() option "${key}" must be a string`, 'INVALID_ARGUMENT')
+      }
+    }
+    for (const key of ['maxTokens', 'timeoutMs'] as const) {
+      const value = record[key]
+      if (value !== undefined && (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)) {
+        throw new WorkflowError(`agent() option "${key}" must be a positive whole number`, 'INVALID_ARGUMENT')
       }
     }
     let schema: ObjectJsonSchema | undefined
@@ -277,6 +299,8 @@ export class WorkflowExecution {
       ...record.phase !== undefined ? { phase: record.phase as string } : {},
       ...record.provider !== undefined ? { provider: record.provider as string } : {},
       ...record.model !== undefined ? { model: record.model as string } : {},
+      ...record.maxTokens !== undefined ? { maxTokens: record.maxTokens as number } : {},
+      ...record.timeoutMs !== undefined ? { timeoutMs: record.timeoutMs as number } : {},
       ...schema !== undefined ? { schema } : {},
     }
   }

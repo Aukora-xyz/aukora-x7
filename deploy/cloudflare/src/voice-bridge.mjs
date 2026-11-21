@@ -13,7 +13,9 @@
  */
 
 import { VOICE_SESSION_LIMITS, validDurationSeconds } from './voice-session-policy.mjs'
-import { CONVERSATION_ID_RE, SPEECH_ENGINE_AUTH_HEADER, verifySpeechEngineJwt } from './voice-provider-speech-engine.mjs'
+import { CONVERSATION_ID_RE, SPEECH_ENGINE_AUTH_HEADER, SPEECH_ENGINE_TIMEOUT_SECONDS, verifySpeechEngineJwt } from './voice-provider-speech-engine.mjs'
+import { FAST_VOICE_EFFORTS, FAST_VOICE_MODEL_RE, FAST_VOICE_PROVIDERS, fastVoiceStatus } from './voice-fast.mjs'
+import { providerSideNotAsked, readProviderSide } from './voice-provider-side.mjs' // The provider's own account and conversation records
 
 export const VOICE_BRIDGE_PROTOCOL = 'aukora.voice-bridge.v1'
 export const VOICE_BRIDGE_ROUTES = Object.freeze({ tab: '/_host/voice/bridge', provider: '/door/voice-brain' })
@@ -28,15 +30,74 @@ export const VOICE_BRIDGE_SETTINGS = Object.freeze(['VOICE_MANAGED', 'ELEVENLABS
 export const VOICE_FAILURE_STAGES = Object.freeze({
   owner: Object.freeze(['duration-read', 'mint-401', 'mint-403', 'mint-404', 'mint-429', 'mint-5xx', 'mint-other', 'mint-timeout', 'mint-shape', 'bind']),
   // No `jwt-missing`: a request with no JWT needs nothing from the caller, so it is never recorded (any scanner sends one).
-  provider: Object.freeze(['jwt-bad', 'secret-missing', 'secret-bad', 'init-unbound', 'init-timeout']),
+  // `frame-refused` (2026-11-18): the object closed the provider's socket over one of its frames: one parse could not
+  // read (voice-provider-speech-engine.mjs parse gave null), or one refused as it arrived (over the socket's frame cap,
+  // or too much already queued). Never the frame itself.
+  provider: Object.freeze(['jwt-bad', 'secret-missing', 'secret-bad', 'init-unbound', 'init-timeout', 'frame-refused']),
 })
 /** The saved-duration read gets this much of the owner door's 12 s; the mint keeps the rest. */
 /** Why a call ended and how a turn ended, in the status read (voice-bridge-do.mjs HISTORY_KEY says what each means). */
 export const VOICE_CALL_ENDS = Object.freeze(['deadline', 'provider-closed', 'owner-stop', 'unclaimed', 'journal-unavailable', 'error'])
-export const VOICE_TURN_OUTCOMES = Object.freeze(['done', 'cancelled', 'timeout', 'failed', 'late-answer'])
-/** How many of each the status read shows. */
-export const VOICE_STATUS_CALLS = 4
-export const VOICE_STATUS_TURNS = 8
+/** How a turn ended, and the closed reason (null: none). A turn
+ * kept from before (done, late-answer, timeout) reads as answered, answered, failed. */
+export const VOICE_TURN_OUTCOMES = Object.freeze(['answered', 'cancelled', 'failed', 'handed', 'refused'])
+const OUTCOMES_BEFORE = Object.freeze({ done: 'answered', 'late-answer': 'answered', timeout: 'failed' })
+export const VOICE_TURN_REASONS = Object.freeze(['barge_in', 'stop_words', 'turn_bound', 'first_event_bound', 'provider_status', 'request_shape', 'unreplayable',
+  'journal', 'budget', 'tool_limit', 'tab_lost', 'model_refusal'])
+/** A turn's millisecond marks from the transcript's arrival, its counts, and its tool calls (names only). */
+export const VOICE_TURN_MARKS = Object.freeze(['journalMs', 'endMs'])
+// `grown` is 1 when the turn's words were only the new part of an entry that grew (an older entry: 0).
+export const VOICE_TURN_NUMBERS = Object.freeze(['calls', 'merged', 'cues', 'grown', 'resumed'])
+export const VOICE_TOOL_NAMES = Object.freeze(['look', 'voice_scratch', 'think_deeper', 'hand_to_session', 'other'])
+export const VOICE_TOOL_RESULTS = Object.freeze(['ok', 'timeout', 'refused', 'cancelled'])
+export const VOICE_TOOL_ROUNDS_KEPT = 8
+/** The bridge's counts the status shows (closed names, whole numbers). */
+export const VOICE_STATUS_COUNTS = Object.freeze(['backchannelsKept', 'wordsMerged', 'stops', 'presenceCues', 'handoffsKept', 'handoffEchoes', 'fastFallbacks',
+  'toolTimeouts', 'awareFrames', 'awareStoredLoads', 'blocksTrimmed',
+  // Events that held nothing new from him, turns on only the new words of a grown entry, events whose
+  // history ended with her entry.
+  'nothingNew', 'grownTurns', 'agentTailEvents', 'resumes', 'resumesByHistory', 'resumeLimit',
+  // Her voice memory (records written, her home's acks and refusals, heads adopted from her home).
+  'memoryRecords', 'memoryAcks', 'memoryNacks', 'memoryAdoptedFromHome', 'memoryOtherOwner',
+  // 2026-11-18 (every call ended by the provider about 2 s after it connected, and the status could not say whether the
+  // provider ever reached the brain door): provider sockets the object accepted, valid inits, frames of a type the
+  // adapter does not know (ignored), frames that closed the socket; tab sockets accepted, hellos that claimed a place,
+  // hellos refused; bound starts nobody claimed before their window passed. Since this object last started.
+  'brainSockets', 'brainInits', 'brainFramesOther', 'brainFramesRefused', 'tabSockets', 'tabHellos', 'tabHellosRefused', 'startsUnclaimed'])
+/** Her voice memory in the status (the voice memory design "Status"), as an empty edge reads (the status shows null when the bridge was not read). */
+export const VOICE_MEMORY_EMPTY = Object.freeze({ seq: 0, digest12: '000000000000', synced: 0, unsynced: 0, gapFrom: null, adoptedFromHome: false, fork: false })
+/** The memory object, closed: whole numbers, 12 lower-case hex, a seq or null, two booleans; anything else is null. */
+export function readMemoryStatus(value) {
+  if (!isObject(value) || wholeCount(value.seq) === null || typeof value.digest12 !== 'string' || !/^[0-9a-f]{12}$/.test(value.digest12)
+    || wholeCount(value.synced) === null || wholeCount(value.unsynced) === null || !(value.gapFrom === null || wholeCount(value.gapFrom) !== null)
+    || typeof value.adoptedFromHome !== 'boolean' || typeof value.fork !== 'boolean') return null
+  return { seq: value.seq, digest12: value.digest12, synced: value.synced, unsynced: value.unsynced, gapFrom: value.gapFrom, adoptedFromHome: value.adoptedFromHome, fork: value.fork }
+}
+/** the voice fix/E7: the stream block types whose start keys are named, at most this many names each, each this shape. */
+export const VOICE_STREAM_BLOCKS = Object.freeze(['text', 'thinking', 'tool_use'])
+export const VOICE_STREAM_KEYS_MAX = 12
+export const VOICE_STREAM_KEY_RE = /^[a-z_]{1,24}$/
+/** the voice tools part 2 (2026-11-16): the closed kind of the provider SDK's last error in a call, as the page's `bye` names it
+ * (managed-voice/policy.mjs SDK_ERROR_KINDS; never the SDK's words). A call row carries `sdk` only when the page sent one. */
+export const VOICE_SDK_KINDS = Object.freeze(['socket', 'server', 'audio', 'permission', 'other'])
+/** Which of the edge's cues a turn said (2026-11-16): none, the early acknowledgement, or the timeout-protection cue
+ * (the last one said; the timeout cue may follow the early one). */
+export const VOICE_TURN_CUES = Object.freeze(['none', 'early', 'timeout'])
+/** A turn's timings in the status read (2026-11-16), whole milliseconds from the transcript's arrival at the bridge, each
+ * measured on the bridge object's own clock (never a difference between two machines' clocks), each null when not
+ * observed: the journal row confirmed, the `turn` frame handed to the tab, her first text from the tab, her first speech
+ * chunk sent to the provider. */
+export const VOICE_TURN_TIMINGS = Object.freeze(['journaledMs', 'handedMs', 'firstTextMs', 'firstSpeechMs', 'modelFirstMs'])
+/** Which path answered a turn: the bridge's fast voice, the governed hand-off to her tab, or the
+ * fast voice falling back to the governed hand-off (no first text in time, or the fast call failed). `modelFirstMs` (a
+ * timing above) is the fast model's first text, null on the governed path. */
+export const VOICE_TURN_PATHS = Object.freeze(['fast', 'governed', 'fast_fell_back'])
+/** Who chose a fast Claude turn's level: the edge's default, his own words, or her think_deeper. */
+export const VOICE_EFFORT_BY = Object.freeze(['default', 'owner', 'self'])
+/** How many of each the status read shows. 12 calls (was 4 until 2026-11-18: four rows are too few to read a run of
+ * calls that each end within seconds). */
+export const VOICE_STATUS_CALLS = 12
+export const VOICE_STATUS_TURNS = 24
 export const DURATION_READ_DEADLINE_MS = 3000
 /** A refused request at the provider door is recorded at most once per stage per this long (per isolate), so a stranger
  * can never turn the door into a stream of writes. */
@@ -202,6 +263,108 @@ async function providerJson(networkFetch, path, apiKey, signal) {
   }
 }
 
+/**
+ * THE PROVIDER'S SAVED VOICE SETTINGS, from the same best-effort read of the saved resource as the
+ * duration (no new request, no new secret). Each is the saved value when the read carries it in its documented place
+ * (scout-1113 VOICE-PROVIDER.md: an agent under `conversation_config.{tts,asr,turn}` and the per-event wait at
+ * `conversation_config.agent.prompt.cascade_timeout_seconds`; a speech engine under `tts`, `asr`, `turn` and
+ * `cascade_timeout_seconds`, the create body's places, read back by id: UNVERIFIED, as the duration is) AND within its
+ * closed shape: a model id, a voice id, a boolean, a finite number, a short lower-case word; else "not read". Never any
+ * other field of the resource. `waitMatches`: whether the saved per-event wait equals SPEECH_ENGINE_TIMEOUT_SECONDS.
+ *
+ * 2026-11-18 (every call ended by the provider about 2 s after it connected): MORE CLOSED FACTS from the same read, in the
+ * places of the provider's documented GET /v1/speech-engine/{id} answer. Where its brain socket points (`brainUrl`: ours,
+ * other or missing; the address itself is never kept), what KIND of value is saved under the bridge secret header
+ * (`brainHeader`: text, secret, variable or missing; the value is never read into anything kept), the first-message
+ * override, whether the provider's own auth is on, the call limits, the saved call length, the turn waits, and when and
+ * from where the resource was last changed. An agent resource has none of these places except `metadata`: the rest read
+ * "not read" for it. Each closer below must accept its own output unchanged (the object and the Worker's status close
+ * the stored object again), so `brainUrl` and `brainHeader` are computed in providerSettings and only checked here.
+ */
+export const VOICE_PROVIDER_SETTINGS = Object.freeze(['speakingModel', 'voice', 'expressiveMode', 'stability', 'speed', 'listeningModel', 'listeningQuality',
+  'turnEagerness', 'silenceEndCallSeconds', 'eventWaitSeconds',
+  'brainUrl', 'brainHeader', 'overrideFirstMessage', 'authEnabled', 'dailyLimit', 'concurrencyLimit', 'maxDurationSeconds', 'turnTimeoutSeconds',
+  'initialWaitSeconds', 'updatedAtSeconds', 'updatedFrom'])
+const NOT_READ = 'not read'
+export const BRAIN_URL_KINDS = Object.freeze(['ours', 'other', 'missing'])
+export const BRAIN_HEADER_KINDS = Object.freeze(['text', 'secret', 'variable', 'missing'])
+/** The provider's documented `metadata.last_updated_from` words. */
+export const PROVIDER_UPDATED_FROM = Object.freeze(['cli', 'ui', 'api', 'template', 'architect', 'mcp', 'unknown'])
+/** 2100-01-01 in unix seconds: a later "last updated" is not a time this edge believes. */
+const UPDATED_AT_MAX_SECONDS = 4102444800
+const MODEL_ID_RE = /^[a-z0-9_.-]{1,60}$/
+const VOICE_ID_RE = /^[A-Za-z0-9]{1,40}$/
+const WORD_RE = /^[a-z_]{1,24}$/
+const closedModel = value => (typeof value === 'string' && MODEL_ID_RE.test(value) ? value : NOT_READ)
+const closedVoice = value => (typeof value === 'string' && VOICE_ID_RE.test(value) ? value : NOT_READ)
+const closedBoolean = value => (typeof value === 'boolean' ? value : NOT_READ)
+const closedNumber = value => (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 100000 ? value : NOT_READ)
+const closedWord = value => (typeof value === 'string' && WORD_RE.test(value) ? value : NOT_READ)
+const closedIn = list => value => (list.includes(value) ? value : NOT_READ)
+/** A whole count the provider saves (a limit, a length): -1 is the provider's "none". */
+const closedWhole = value => (Number.isSafeInteger(value) && value >= -1 && value <= 1_000_000_000 ? value : NOT_READ)
+const closedUnixSeconds = value => (Number.isSafeInteger(value) && value >= 1 && value <= UPDATED_AT_MAX_SECONDS ? value : NOT_READ)
+const CLOSED_SETTINGS = Object.freeze({ speakingModel: closedModel, voice: closedVoice, expressiveMode: closedBoolean, stability: closedNumber, speed: closedNumber,
+  listeningModel: closedModel, listeningQuality: closedWord, turnEagerness: closedWord, silenceEndCallSeconds: closedNumber, eventWaitSeconds: closedNumber,
+  brainUrl: closedIn(BRAIN_URL_KINDS), brainHeader: closedIn(BRAIN_HEADER_KINDS), overrideFirstMessage: closedBoolean, authEnabled: closedBoolean,
+  dailyLimit: closedWhole, concurrencyLimit: closedWhole, maxDurationSeconds: closedWhole, turnTimeoutSeconds: closedNumber, initialWaitSeconds: closedNumber,
+  updatedAtSeconds: closedUnixSeconds, updatedFrom: closedIn(PROVIDER_UPDATED_FROM) })
+
+/** Where the saved brain socket points, as one word: 'ours' only for exactly wss://<the edge's own host><the provider
+ * door> with no query and no fragment; 'missing' for no address; 'other' for anything else, one that does not parse
+ * included. Not read without the speech_engine object or without the edge's own host. The address is never returned. */
+function brainUrlKind(engine, host) {
+  if (!isObject(engine) || typeof host !== 'string' || !host) return NOT_READ
+  const address = engine.ws_url
+  if (typeof address !== 'string' || !address) return 'missing'
+  let parsed
+  try { parsed = new URL(address) } catch { return 'other' }
+  return parsed.protocol === 'wss:' && parsed.host === host && parsed.pathname === VOICE_BRIDGE_ROUTES.provider && !parsed.search && !parsed.hash ? 'ours' : 'other'
+}
+/** The KIND of value saved under the bridge secret header (its name matched without case): a plain text value, a
+ * reference to a provider-held secret, a reference to a variable, or no such header. A value of any other shape, or the
+ * header saved twice under two spellings (which one is sent cannot be told), is not read. The value is never returned. */
+function brainHeaderKind(engine) {
+  if (!isObject(engine)) return NOT_READ
+  const headers = engine.request_headers
+  if (headers === undefined || headers === null) return 'missing'
+  if (!isObject(headers)) return NOT_READ
+  const names = Object.keys(headers).filter(name => name.toLowerCase() === VOICE_BRIDGE_SECRET_HEADER)
+  if (names.length === 0) return 'missing'
+  if (names.length > 1) return NOT_READ
+  const value = headers[names[0]]
+  if (typeof value === 'string') return 'text'
+  if (isObject(value) && typeof value.secret_id === 'string') return 'secret'
+  if (isObject(value) && typeof value.variable_name === 'string') return 'variable'
+  return NOT_READ
+}
+
+/** `host`: the edge's own host (the owner door's url.host), for `brainUrl`. */
+export function providerSettings(resourceId, saved, host) {
+  const agent = typeof resourceId === 'string' && resourceId.startsWith('agent_')
+  const base = agent ? saved?.conversation_config : saved
+  const part = name => (isObject(base?.[name]) ? base[name] : {})
+  // The speech engine's own places; an agent has none of them (its shape differs), so each reads "not read" for it.
+  const engine = agent || !isObject(saved) ? {} : saved
+  const of = name => (isObject(engine[name]) ? engine[name] : {})
+  const metadata = isObject(saved?.metadata) ? saved.metadata : {}
+  const raw = { speakingModel: part('tts').model_id, voice: part('tts').voice_id, expressiveMode: part('tts').expressive_mode, stability: part('tts').stability,
+    speed: part('tts').speed, listeningModel: part('asr').provider, listeningQuality: part('asr').quality, turnEagerness: part('turn').turn_eagerness,
+    silenceEndCallSeconds: part('turn').silence_end_call_timeout, eventWaitSeconds: agent ? base?.agent?.prompt?.cascade_timeout_seconds : base?.cascade_timeout_seconds,
+    brainUrl: brainUrlKind(engine.speech_engine, host), brainHeader: brainHeaderKind(engine.speech_engine),
+    overrideFirstMessage: of('overrides').first_message, authEnabled: of('auth').enable_auth,
+    dailyLimit: of('call_limits').daily_limit, concurrencyLimit: of('call_limits').agent_concurrency_limit,
+    maxDurationSeconds: of('conversation').max_duration_seconds, turnTimeoutSeconds: of('turn').turn_timeout, initialWaitSeconds: of('turn').initial_wait_time,
+    updatedAtSeconds: metadata.updated_at_unix_secs, updatedFrom: metadata.last_updated_from }
+  return readProviderSettings(raw)
+}
+/** The settings object, each value closed again (the object and the Worker both read it through here). */
+export function readProviderSettings(value) {
+  const out = Object.fromEntries(VOICE_PROVIDER_SETTINGS.map(name => [name, CLOSED_SETTINGS[name](isObject(value) ? value[name] : undefined)]))
+  out.waitMatches = out.eventWaitSeconds === NOT_READ ? NOT_READ : out.eventWaitSeconds === SPEECH_ENGINE_TIMEOUT_SECONDS
+  return out
+}
+
 /** The provider's saved conversation length for the one resource, in seconds (agent: SOURCE website code; speech
  * engine: the create body's `conversation.max_duration_seconds`, read back by id, UNVERIFIED). */
 function savedDuration(resourceId, saved) {
@@ -254,10 +417,14 @@ export async function handleManagedSession({ request, url, env, seedId, access, 
   // 1. The saved duration, best effort: a failure of any kind (status, type, size, its 3 s, a shape without the
   //    field, a number out of range) means the reserved seconds. It never refuses the session.
   let saved = null
+  // The provider's saved voice settings from this SAME read (closed values only), for the status.
+  let seen = null
   try {
     const kind = settings.resourceId.startsWith('agent_') ? '/v1/convai/agents/' : '/v1/speech-engine/'
     const readSignal = AbortSignal.any([signal, AbortSignal.timeout(DURATION_READ_DEADLINE_MS)])
-    saved = savedDuration(settings.resourceId, await providerJson(networkFetch, kind + settings.resourceId, settings.apiKey, readSignal))
+    const resource = await providerJson(networkFetch, kind + settings.resourceId, settings.apiKey, readSignal)
+    seen = providerSettings(settings.resourceId, resource, url.host)
+    saved = savedDuration(settings.resourceId, resource)
   } catch {
     saved = null
   }
@@ -309,6 +476,8 @@ export async function handleManagedSession({ request, url, env, seedId, access, 
     return await refuse('bind')
   }
   for (const item of stages) await noteFailure(env, 'owner', item, now())
+  // What the read carried, kept in the bridge object for the status (best effort; never changes the answer).
+  if (seen) await admit(env, { action: 'provider', provider: seen, at: now() }).catch(() => null)
   return json({ token, maxDurationSeconds: seconds })
 }
 
@@ -320,11 +489,13 @@ const nameState = (env, name) => (settingText(env, name) ? 'set' : 'missing')
  * about configuration. NAMES and closed values only, never a setting's value, an id or provider text. With the switch
  * off the bridge object is not reached (it stays unbuilt, as the switch promises): `live` is 0 and `failures` is [].
  * @param {object} options request, url, env, access, now, input (the parsed body).
- * The last 4 calls (seconds granted, how each ended, how long it lasted), the last 8 turns (outcome, seconds to her
+ * The last 12 calls (seconds granted, how each ended, how long it lasted), the last 24 turns (outcome, seconds to her
  * first words, longest quiet) and the seconds left today and this month ride beside them (2026-11-14).
- * @returns {Promise<Response>} { switch, names, keyInUse, resourceKind, live, failures, calls, turns, secondsLeft }.
+ * `fast` is her fast voice's line (voice-fast.mjs fastVoiceStatus): on or off, the provider NAME, the model
+ * id and why it is off (for example provider-not-configured: its key binding is not set). Never a value.
+ * @returns {Promise<Response>} { switch, names, keyInUse, resourceKind, live, failures, calls, turns, secondsLeft, fast }.
  */
-export async function handleManagedStatus({ request, url, env, access, now = Date.now, input }) {
+export async function handleManagedStatus({ request, url, env, access, networkFetch, now = Date.now, input }) {
   if (!isObject(input) || Object.keys(input).length !== 1 || input.action !== 'managed_status') return json({ ok: false, code: 'VOICE_ACTION_INVALID' }, 400)
   const at = now()
   if (!managedVoiceOwner(access, env, at)) return json({ ok: false, code: 'OWNER_ACCESS_REQUIRED' }, 403)
@@ -332,7 +503,9 @@ export async function handleManagedStatus({ request, url, env, access, now = Dat
   const on = voiceManagedOn(env)
   const resourceId = settingText(env, 'ELEVENLABS_X61_VOICE_RESOURCE_ID')
   const resourceKind = !RESOURCE_RE.test(resourceId) ? null : resourceId.startsWith('seng_') ? 'speech-engine' : 'agent'
-  let live = 0, failures = [], calls = [], turns = [], secondsLeft = null
+  let live = 0, failures = [], calls = [], turns = [], secondsLeft = null, counts = readCounts(null), streamKeys = {}, memory = null
+  // Memory is null (not read) unless the bridge was read: never an empty memory guessed.
+  let provider = { readAtMs: null, ...readProviderSettings(null) }
   if (on && env?.[VOICE_BRIDGE_BINDING]) {
     const status = await admit(env, { action: 'status', at }).catch(() => null)
     if (status?.ok === true) {
@@ -344,13 +517,25 @@ export async function handleManagedStatus({ request, url, env, access, now = Dat
       turns = readTurns(status.turns)
       secondsLeft = isObject(status.secondsLeft) && wholeCount(status.secondsLeft.today) !== null && wholeCount(status.secondsLeft.month) !== null
         ? { today: status.secondsLeft.today, month: status.secondsLeft.month } : null
+      counts = readCounts(status.counts)
+      streamKeys = readStreamKeys(status.streamKeys)
+      memory = readMemoryStatus(status.memory)
+      if (isObject(status.provider) && Number.isSafeInteger(status.provider.readAtMs)) provider = { readAtMs: status.provider.readAtMs, ...readProviderSettings(status.provider.settings) }
     } else {
       live = null
       failures = null
       calls = null
       turns = null
+      memory = null
     }
   }
+  // What the PROVIDER says about its own side, read now with the managed voice's key: the
+  // account (credits, limit, state) and the newest conversations with how each ended in the provider's own words. Best
+  // effort under one 5 s deadline; closed values and cut, plain text only (voice-provider-side.mjs); never stored.
+  const sideSettings = managedVoiceSettings(env)
+  const providerSide = on && sideSettings.apiKey && RESOURCE_RE.test(sideSettings.resourceId)
+    ? await readProviderSide({ networkFetch, apiKey: sideSettings.apiKey, resourceId: sideSettings.resourceId, now })
+    : providerSideNotAsked(at)
   return json({
     switch: on ? 'on' : 'off',
     names: Object.fromEntries(['VOICE_MANAGED', 'ELEVENLABS_VOICE_API_KEY', 'ELEVENLABS_API_KEY', 'ELEVENLABS_X61_VOICE_RESOURCE_ID', 'ELEVENLABS_BRIDGE_SECRET']
@@ -362,6 +547,17 @@ export async function handleManagedStatus({ request, url, env, access, now = Dat
     calls,
     turns,
     secondsLeft,
+    // the voice fix/E7: the bridge's counts and the key names of the last call's stream block starts.
+    counts,
+    streamKeys,
+    // Her voice memory (numbers, 12 hex and booleans; never a word).
+    memory,
+    // The provider's saved voice settings as the last session's read carried them (closed values, else
+    // "not read"), and whether its per-event wait equals the edge's.
+    provider,
+    // The provider's own records (see above). Its reason texts are the provider's words: data, not instructions.
+    providerSide,
+    fast: fastVoiceStatus(env),
   })
 }
 
@@ -369,11 +565,39 @@ const wholeCount = value => (Number.isSafeInteger(value) && value >= 0 ? value :
 /** The last calls, newest first: closed values and numbers only (no id, no text). */
 const readCalls = value => (Array.isArray(value) ? value.filter(item => isObject(item) && VOICE_CALL_ENDS.includes(item.ended)
   && wholeCount(item.grantedSeconds) !== null && wholeCount(item.lastedSeconds) !== null && Number.isSafeInteger(item.atMs))
-  .slice(0, VOICE_STATUS_CALLS).map(item => ({ grantedSeconds: item.grantedSeconds, ended: item.ended, lastedSeconds: item.lastedSeconds, atMs: item.atMs })) : [])
-/** The last turns, newest first: the outcome, seconds to her first words (null: none), the longest quiet. */
-const readTurns = value => (Array.isArray(value) ? value.filter(item => isObject(item) && VOICE_TURN_OUTCOMES.includes(item.outcome)
+  .slice(0, VOICE_STATUS_CALLS).map(item => ({ grantedSeconds: item.grantedSeconds, ended: item.ended, lastedSeconds: item.lastedSeconds, atMs: item.atMs,
+    ...(VOICE_SDK_KINDS.includes(item.sdk) ? { sdk: item.sdk } : {}) })) : [])
+/** The last turns, newest first: the outcome, seconds to her first words (null: none), the longest quiet, the five
+ * timings (VOICE_TURN_TIMINGS), the cue said and the path (VOICE_TURN_PATHS). A timing that is not a whole count, and a cue outside the closed list
+ * (an entry kept from before 2026-11-16 has neither), reads as null. */
+const outcomeOf = value => (VOICE_TURN_OUTCOMES.includes(value) ? value : OUTCOMES_BEFORE[value])
+/** Up to 8 tool calls, each its tool name (closed list), two marks and how it ended; nothing else. */
+const readToolRounds = value => (Array.isArray(value) ? value.filter(item => isObject(item) && VOICE_TOOL_NAMES.includes(item.tool)).slice(0, VOICE_TOOL_ROUNDS_KEPT)
+  .map(item => ({ tool: item.tool, sentMs: wholeCount(item.sentMs), backMs: wholeCount(item.backMs), result: VOICE_TOOL_RESULTS.includes(item.result) ? item.result : null })) : [])
+/** The counts, by their closed names, whole numbers only. */
+export const readCounts = value => Object.fromEntries(VOICE_STATUS_COUNTS.map(name => [name, wholeCount(isObject(value) ? value[name] : undefined) ?? 0]))
+/** The key NAMES seen on the last call's stream block starts, per block type; names only, never a value. */
+export const readStreamKeys = value => Object.fromEntries(VOICE_STREAM_BLOCKS.filter(type => isObject(value) && Array.isArray(value[type]))
+  .map(type => [type, [...new Set(value[type].filter(name => typeof name === 'string' && VOICE_STREAM_KEY_RE.test(name)))].slice(0, VOICE_STREAM_KEYS_MAX)]))
+const readTurns = value => (Array.isArray(value) ? value.filter(item => isObject(item) && outcomeOf(item.outcome) !== undefined
   && (item.firstWordsSeconds === null || wholeCount(item.firstWordsSeconds) !== null) && wholeCount(item.longestQuietSeconds) !== null && Number.isSafeInteger(item.atMs))
-  .slice(0, VOICE_STATUS_TURNS).map(item => ({ outcome: item.outcome, firstWordsSeconds: item.firstWordsSeconds, longestQuietSeconds: item.longestQuietSeconds, atMs: item.atMs })) : [])
+  .slice(0, VOICE_STATUS_TURNS).map(item => ({ outcome: outcomeOf(item.outcome), firstWordsSeconds: item.firstWordsSeconds, longestQuietSeconds: item.longestQuietSeconds,
+    ...Object.fromEntries(VOICE_TURN_TIMINGS.map(name => [name, wholeCount(item[name])])),
+    // Why it ended and how long each step took; closed codes and numbers only.
+    reason: VOICE_TURN_REASONS.includes(item.reason) ? item.reason : null,
+    ...Object.fromEntries(VOICE_TURN_MARKS.map(name => [name, wholeCount(item[name])])),
+    ...Object.fromEntries(VOICE_TURN_NUMBERS.map(name => [name, wholeCount(item[name]) ?? 0])),
+    toolRounds: readToolRounds(item.toolRounds),
+    cue: VOICE_TURN_CUES.includes(item.cue) ? item.cue : null, path: VOICE_TURN_PATHS.includes(item.path) ? item.path : null,
+    // A fast turn's provider NAME (from the closed table) and model id (an id, or null); none on a governed turn.
+    ...(Object.hasOwn(item, 'provider') ? { provider: typeof item.provider === 'string' && Object.hasOwn(FAST_VOICE_PROVIDERS, item.provider) ? item.provider : null,
+      model: typeof item.model === 'string' && FAST_VOICE_MODEL_RE.test(item.model) ? item.model : null } : {}),
+    // The level a fast Claude turn ran at (FAST_VOICE_EFFORTS) and who chose it (VOICE_EFFORT_BY); a level
+    // he asked for that the edge does not offer. Closed values only, else null.
+    ...(Object.hasOwn(item, 'effort') ? { effort: FAST_VOICE_EFFORTS.includes(item.effort) ? item.effort : null,
+      effortBy: VOICE_EFFORT_BY.includes(item.effortBy) ? item.effortBy : null } : {}),
+    ...(Object.hasOwn(item, 'effortNotOffered') ? { effortNotOffered: FAST_VOICE_EFFORTS.includes(item.effortNotOffered) ? item.effortNotOffered : null } : {}),
+    atMs: item.atMs })) : [])
 
 const internalUpgrade = (path, extra = {}) => new Request('https://x61.internal' + path, {
   method: 'GET', headers: { upgrade: 'websocket', 'x-x6-internal-authorized': '1', ...extra },

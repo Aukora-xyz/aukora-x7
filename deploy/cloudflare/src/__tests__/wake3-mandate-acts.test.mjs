@@ -121,7 +121,7 @@ test('RT-MANDATE-1: a malformed stored mandate fails closed MANDATE_STATE_INVALI
   assert.equal((await head.store.readOwnerMandate()).code, 'MANDATE_STATE_INVALID')
   const response = await head.fetch(new Request(ORIGIN + '/_head/mandate', { method: 'GET', headers: { 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': SEED,
     // The route checks the session against the real clock (head-do.mjs ownerMandateRoute), so the fixture's session must not be pinned to T0:
-    // it expired for good at T0 + 1 h ( WITA) and the case then answered 403 before it reached the mandate.
+    // it expired for good at T0 + 1 h and the case then answered 403 before it reached the mandate.
     'x-x6-verified-access': JSON.stringify({ type: 'owner', email: OWNER, expires: Math.floor(Date.now() / 1000) + 3600 }) } }))
   assert.equal(response.status, 503, 'the route passes 503 through, never 403')
   assert.equal((await response.json()).code, 'MANDATE_STATE_INVALID')
@@ -416,7 +416,9 @@ test('a hallucinated act call without an active mandate is refused in the step, 
 })
 
 test('x6_wish create keeps mandateId (owner only, the active one); a running mandated wish is never silently replaced; probe reports acts', async () => {
-  const { head, storage } = world({ wish: null })
+  // The wish routes check the mandate against the real clock (as the session check above does), so this case's mandate must not
+  // end at T0 + 24 h: it expired for good and every wish_create then answered MANDATE_EXPIRED first.
+  const { head, storage } = world({ wish: null, record: mandateRecord(MANDATE, {}, { expiresAt: Date.now() + 86400000 }) })
   const ownerHeaders = { 'x-x6-internal-authorized': '1', 'x-x6-bootstrap-seed': SEED, 'content-type': 'application/json',
     'x-x6-verified-access': JSON.stringify({ type: 'owner', email: OWNER, expires: Math.floor(Date.now() / 1000) + 3600 }) }
   const post = (body, headers = ownerHeaders) => head.fetch(new Request(ORIGIN + '/_head/transcript', { method: 'POST', headers, body: JSON.stringify(body) }))

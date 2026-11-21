@@ -117,6 +117,49 @@ test('her command runs as auma, a user with no sudo and no other group, and noth
   assert.match(code, /PW_DIR: \/opt\/x61-playwright\n {10}PLAYWRIGHT_BROWSERS_PATH: \/opt\/x61-playwright\/browsers\n/)
 })
 
+test('two body users as powerless as she is; she may run as them and as nobody else; they are stopped before anything is read', () => {
+  const steps = stepsOf(code), names = steps.map(nameOf)
+  const at = name => { const index = names.indexOf(name); assert.ok(index >= 0, name); return index }
+  const made = 'Make two body users for her fixtures (no sudo; she may run as them and as nobody else)'
+  // After her user exists, before her command runs.
+  assert.ok(at('Make her user (no sudo) and give her the checkout') < at(made))
+  assert.ok(at(made) < at('Run her command'))
+  const bodies = scriptOf(steps[at(made)])
+  assert.match(bodies, /^set -euo pipefail\n/)
+  assert.match(bodies, /^for body in body_a body_b; do$/m)
+  // Each body: its own group only, checked to have no sudo, a home nobody else enters, and one folder shared with her alone.
+  assert.match(bodies, /sudo useradd --create-home --home-dir "\/home\/\$body" --shell \/bin\/bash --user-group "\$body"/)
+  assert.match(bodies, /case "\$\(sudo -n -l -U "\$body" 2>&1\)" in \*"may run the following"\*\) echo "::error::\$body may use sudo"; exit 1 ;; esac/)
+  assert.match(bodies, /\[ "\$\(id -nG "\$body"\)" = "\$body" \] \|\| \{ echo "::error::\$body is in another group"; exit 1; \}/)
+  assert.match(bodies, /sudo chmod 700 "\/home\/\$body"/)
+  assert.match(bodies, /sudo chown "\$body:auma" "\/home\/auma\/bodies\/\$body"\n\s*sudo chmod 2770 "\/home\/auma\/bodies\/\$body"/)
+  // The ONE sudoers line of the whole workflow: her, as the two bodies, nothing else. Then what it allows is tried.
+  const sudoers = code.split('\n').filter(line => line.includes('/etc/sudoers.d/') && line.includes('printf'))
+  assert.deepEqual(sudoers.map(line => line.trim()), ["printf 'auma ALL=(body_a,body_b) NOPASSWD: ALL\\n' | sudo tee /etc/sudoers.d/auma-bodies >/dev/null"])
+  assert.equal((code.match(/NOPASSWD/g) ?? []).length, 1)
+  assert.match(bodies, /sudo visudo -cf \/etc\/sudoers\.d\/auma-bodies/)
+  const order = ['sudo -u auma sudo -n -u body_a true', 'sudo -u auma sudo -n -u body_b true',
+    'if sudo -u auma sudo -n true 2>/dev/null; then echo "::error::auma may become root"; exit 1; fi',
+    'if sudo -u auma sudo -n -u "$(id -un)" true 2>/dev/null; then echo "::error::auma may become the runner"; exit 1; fi',
+    'if sudo -u body_a sudo -n -u body_b true 2>/dev/null; then echo "::error::a body may become the other body"; exit 1; fi',
+    "if sudo -u body_a test -r /home/auma/bodies/body_b; then echo \"::error::a body can read the other body's folder\"; exit 1; fi"]
+  const positions = order.map(text => bodies.indexOf(text))
+  assert.ok(positions.every(position => position >= 0), JSON.stringify(positions))
+  assert.deepEqual([...positions].sort((a, b) => a - b), positions)
+  // No input reaches this step, and nothing of her checkout is read by it.
+  assert.doesNotMatch(bodies, /inputs\.|AUMA_COMMAND|\/home\/auma\/repo|pnpm|npm|curl|wget/)
+  // At the end the bodies are locked and stopped, and the sudoers line is gone, BEFORE her own stop and before any copy.
+  const stop = scriptOf(steps[at('Stop her processes and keep only her plain files')])
+  const last = ['for body in body_a body_b; do', 'sudo usermod --lock --expiredate 1 "$body"', 'sudo pkill -KILL -u "$body"',
+    'echo "::error::a process of $body is still running"; exit 1', 'sudo rm -f /etc/sudoers.d/auma-bodies',
+    'sudo usermod --lock --expiredate 1 auma', 'sudo cp -R /home/auma/artifacts/. "$RUNNER_TEMP/artifacts/"']
+  const where = last.map(text => stop.indexOf(text))
+  assert.ok(where.every(position => position >= 0), JSON.stringify(where))
+  assert.deepEqual([...where].sort((a, b) => a - b), where)
+  // Her own command line is unchanged: it still runs as auma, never as a body and never as the runner.
+  assert.equal(steps.flatMap(step => scriptOf(step).split('\n')).filter(line => line.includes('$AUMA_COMMAND')).length, 1)
+})
+
 test('one run at a time per branch, the run name carries her label, and the job timeout is the validated input', () => {
   assert.match(code, /^run-name: auma-exec \$\{\{ inputs\.label \}\} @ \$\{\{ inputs\.ref \}\}$/m)
   assert.match(code, /^concurrency:\n {2}group: auma-exec-\$\{\{ inputs\.ref \}\}\n {2}cancel-in-progress: false\n {2}queue: max$/m)
