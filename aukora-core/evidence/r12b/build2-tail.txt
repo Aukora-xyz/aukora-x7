@@ -1,0 +1,60 @@
+-   17,
+-   46,
+-   104,
+-   233,
+-   237,
+-   66,
+-   114,
+-   96,
+-   3,
+-   233,
+-   174,
+-   129,
+-   113,
+-   250,
+-   93,
+-   40,
+    56,
++   27,
++   143
+-   205,
+-   157,
+-   122,
+-   106
+  ]
+
+    at file://~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tests/chain-vectors.mjs:58:12
+    at ModuleJob.run (node:internal/modules/esm/module_job:377:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:671:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5) {
+  generatedMessage: true,
+  code: 'ERR_ASSERTION',
+  actual: Buffer(32) [Uint8Array] [
+     94, 246,  41,  20, 103, 155, 100, 193,
+    149,  59, 226,  99,  88,  24, 139,  39,
+    195, 148,  73, 228,  54, 219, 221,  50,
+    124,  25, 144, 173, 221,  56,  27, 143
+  ],
+  expected: Buffer(32) [Uint8Array] [
+     90, 197,  54, 14, 190, 175,  17, 106,
+     21, 240, 178, 17,  46, 104, 233, 237,
+     66, 114,  96,  3, 233, 174, 129, 113,
+    250,  93,  40, 56, 205, 157, 122, 106
+  ],
+  operator: 'deepStrictEqual',
+  diff: 'simple'
+}
+
+Node.js v24.11.1
+exit 1, 0.391 s, peak sampled 167.1 MiB
+Traceback (most recent call last):
+  File "~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tools/build.py", line 67, in <module>
+    test("chain-vectors.mjs")
+  File "~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tools/build.py", line 24, in test
+    run(driver, release / "tools/watch.py", "node", release / "tests" / name, *args)
+  File "~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tools/build.py", line 21, in run
+    subprocess.run(list(map(str, argv)), check=True, env=env)
+  File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py", line 528, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/Library/Developer/CommandLineTools/usr/bin/python3', '~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tools/watch.py', 'node', '~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.4/tests/chain-vectors.mjs']' returned non-zero exit status 1.
+sh v0.4/build.sh  693.51s user 121.80s system 109% cpu 12:27.84 total

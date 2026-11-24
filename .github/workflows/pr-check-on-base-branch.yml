@@ -1,0 +1,24 @@
+name: Policy
+# INERT in this repository. Inherited from the upstream harness, where a master
+# push re-ran the head-branch merge checks through the external action deepseek-harness/deepseek-harness-check@master
+# with `actions: write`. Nothing in this repository uses it: its repository variables (MERGE_POLICY_MASTER_DIFF,
+# MERGE_POLICY_PRE_MERGE) and its secret (DSH_RECHECK_LABEL_TOKEN) are not set here, and no workflow, script or test
+# starts it. Holding `actions: write` with a mutable external action could dispatch, re-run or cancel the x61 deploy, so
+# it now holds no permission, starts only by hand, runs no action and stops with one sentence. Only deploy-x61.yml and
+# rollback-x61.yml may hold `actions: write` (deploy/ci/workflow-credentials.test.mjs).
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: pr-check-on-base-branch-${{ github.ref_name }}
+jobs:
+  recheck:
+    name: Recheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Say that this inherited check is switched off
+        run: |
+          echo "This inherited upstream policy recheck is switched off in this repository and checked nothing."
+          exit 1

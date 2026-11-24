@@ -1,0 +1,3 @@
+feed: accepted 96 MiB of staged candidate bytes in 1 MiB chunks; last return 1; trap null; process memory 50 -> 244 MiB
+reset after staging returns 1 ; head still readable: 0
+input before genesis: 1179774 bytes accepted, then return 0; trap null

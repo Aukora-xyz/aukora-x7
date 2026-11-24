@@ -1,0 +1,16 @@
+{
+ "a1": {
+  "payload": "send the invoice to the client",
+  "audience": "mail",
+  "generation": 0,
+  "nonce": 1,
+  "state": "acted"
+ },
+ "a2": {
+  "payload": "delete the old drafts folder",
+  "audience": "files",
+  "generation": 0,
+  "nonce": 2,
+  "state": "approved"
+ }
+}

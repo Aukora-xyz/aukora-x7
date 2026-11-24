@@ -1,0 +1,16 @@
+/* apps/web/scripts/stock-apps/pentora-live/pentora-live.css */
+.alv-pentora-live {
+  pointer-events: none;
+}
+.alv-pentora-live > canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  display: block;
+  pointer-events: none;
+}
+.alv-app .alv-aura-trace.alv-pentora-live {
+  filter: none;
+}

@@ -1,0 +1,45 @@
+Lean r11-safe: 66/66 agree on verdict and all 32 head bytes (30 admitted)
+exit 0, 27.745 s
+$ node v0.2/tests/replay11.mjs r11-safe
+Wasm r11-safe 66/66 agree on verdict and all 32 head bytes (30 admitted)
+exit 0, 0.882 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --root=v0.2 --run v0.2/tests/Replay11.lean signed
+Lean signed: 66/66 agree on verdict and all 32 head bytes (22 admitted)
+exit 0, 22.033 s
+$ node v0.2/tests/replay11.mjs signed
+Wasm signed 66/66 agree on verdict and all 32 head bytes (22 admitted)
+exit 0, 0.577 s
+$ node ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.2/tests/recovery11.mjs
+ACCEPT live exact-file install grant before halt
+ACCEPT owner halt with staged lawful candidate and live grant
+REFUSE halt blocks the lawfully certified authorized install
+ACCEPT both owner signatures clear at the stamped head
+ACCEPT identical installation payload succeeds after clear
+PASS the refused upgrade left the staged file and grant available. Verified original halt and stamp bytes after install.
+ACCEPT fresh full cell accepts doubly signed genesis halt
+REFUSE fresh selected same-set successor refuses identical genesis halt
+Selected candidate SHA-256 35336b36d3e18c7b6313d1b07812ffc6c130af27a172fee90d24ae4f7c21f866
+PASS equal genesis head, keys, law identity and exact signed frame; the full and selected cells diverge on the first halt.
+ACCEPT halt before a failed feed
+ACCEPT valid clear succeeds with poisoned staging, without reset
+ACCEPT owner halts while staging remains poisoned
+ACCEPT valid rebind succeeds with poisoned staging, without reset
+REFUSE old owner cannot clear the new binding
+ACCEPT new owner clears with staging still poisoned
+PASS poisoned staging persisted across valid clear and rebind. The new owner cleared and reset restored feed.
+exit 0, 1.700 s
+$ node ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.2/tests/replay11.mjs --successor r11-install
+gate exact round-nine bytes model and proof reason 2
+gate old 23-law model lacks successor obligation reason 8
+gate candidate with weaker gate claims current succession law reason 7
+gate unsatisfiable law set has entailment but no inhabitant reason 7
+gate same set and checked entailment reason 0
+gate one additional law and checked entailment reason 0
+gate previous root certificate after strengthening reason 4
+gate candidate satisfies root but fails entailment to stronger set reason 8
+gate strong successor preserves accumulated law reason 0
+fresh selected successor initialized 5e4a3ff4e391d0df9e55b5d485f7bfd1316581d8ceccd20a2e2fc49acc3a067a genesis law 61339063ce6f525d761487ac3af759b4611fce6dad5196a09b39c68eef6bf127
+Successor Wasm r11-install 17/17 agree on verdict and all 32 head bytes (11 admitted)
+exit 0, 2.077 s
+PASS v0.2 (774.1 seconds for the entire build)
+sh v0.2/build.sh  692.48s user 118.38s system 104% cpu 12:54.41 total

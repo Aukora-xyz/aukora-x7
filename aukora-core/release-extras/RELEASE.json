@@ -1,0 +1,10 @@
+{
+  "name": "aukora-core",
+  "version": "v0.8",
+  "laws": 44,
+  "lawIdentity": "4815cb2ee9f39f6f186d575bdf04efab2b44d31ec9e85e33e9815409ac6acddc",
+  "smallCore": { "file": "v0.8/aukora-core-lite.wasm", "bytes": 679046, "sha256": "2f10eb8fd9adb3f25d854b642bba29ceaadcbcb2cc40a2fb05fca51f770b59e9" },
+  "fullCore": { "file": "v0.8/aukora-core.wasm", "bytes": 7554007, "sha256": "d0d3bfe5f9111419ff4fc98dfc3dc894252d106efe630e0dfce5a2ba4bddf84b" },
+  "sample": { "file": "examples/sample-record.txt", "sha256": "238d52d69f50d61aa445a812e56e055320a8ab707b8cf936b838cf03704f7dce", "frames": 5, "head": "e258bcc3f72d59da3307ed09a354493266f1e4c0a4185e255588c84391d4aa9f" },
+  "note": "laws is DECLARED here and in v0.8/PROVED.md. lawIdentity and head are also OBSERVED: the core file reports them when run (see examples/read-record.mjs)."
+}

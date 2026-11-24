@@ -1,0 +1,15 @@
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-5-variant-5","trueVerdict":0,"lenTrue":60,"lenMut":61,"firstDiff":58,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-13-variant-7","trueVerdict":0,"lenTrue":47,"lenMut":51,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-5","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-13","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-76","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-130","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-138","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+FINDING ACCEPTED_MUTANT {"g":"matrix","row":"inner-byte-147","trueVerdict":0,"lenTrue":44,"lenMut":44,"firstDiff":41,"tag":"0"}
+group matrix {"mutants":2340,"refused":2313,"accepted":27,"trueOk":818,"trueBad":0,"diff":0,"changedOnRefusal":0}
+group history {"mutants":2902,"refused":2854,"accepted":48,"trueOk":1010,"trueBad":0,"diff":0,"changedOnRefusal":0}
+group signed {"mutants":4071,"refused":4003,"accepted":68,"trueOk":1076,"trueBad":0,"diff":0,"changedOnRefusal":0}
+group length {"mutants":4248,"refused":4176,"accepted":72,"trueOk":1162,"trueBad":0,"diff":0,"changedOnRefusal":0}
+misuse sequences 600 calls 24000
+TOTAL {"mutants":4248,"refused":4176,"accepted":72,"trueOk":1162,"trueBad":0,"diff":0,"changedOnRefusal":0} findings {"ACCEPTED_MUTANT":72} seed 20261122
+node logs/breakit10/fuzz.mjs 20261122 3 600  25.62s user 2.50s system 121% cpu 23.172 total

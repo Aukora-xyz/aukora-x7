@@ -1,0 +1,2 @@
+seed-*.js -text -diff linguist-generated
+MANIFEST.json -text

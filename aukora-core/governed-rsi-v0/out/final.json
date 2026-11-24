@@ -1,0 +1,30 @@
+{
+ "proposals": 6,
+ "head": "7ee46fd0f131d3349294a42e043524d661400c1dbc5d047ad1f0f2786b2f56f9",
+ "lines": 17,
+ "pinned": {
+  "judge": "7614e6583f1412e6a41fc5ea96dc0693b07f4e6e32279d169a1b579cd69b9747",
+  "laws": "de3c2df8bdd98456d93f1e34142de2a826aaeb2e527871075e0385612cede809"
+ },
+ "final": {
+  "governed": {
+   "incumbent": "2d8c7a66a001f2ac4d2ed70398947de1595d43c8a04b8b01eee765968ac0d9bf",
+   "heldout": 16,
+   "admitted": 2,
+   "refused": {
+    "LAW_VIOLATED": 1,
+    "LAWSET_CONTINUITY": 1,
+    "JUDGE_MISMATCH": 1,
+    "NOT_BETTER": 1
+   }
+  },
+  "score_only": {
+   "incumbent": "4828e6d72e50fb06dc78efd5662fa5d63fcd23cec48a4005611f6a3aad53b074",
+   "heldout": 16,
+   "admitted": 2,
+   "refused": {
+    "NOT_BETTER": 4
+   }
+  }
+ }
+}

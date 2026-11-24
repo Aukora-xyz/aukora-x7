@@ -1,0 +1,22 @@
+{
+  "personaplex": {
+    "repository": "https://github.com/NVIDIA/personaplex",
+    "commit": "3428dfd95309a7f3c84fd93259ded0f810d1ff91",
+    "files": {
+      "client/public/assets/decoderWorker.min.js": "55b513929dc52be93042974cd0a20e71a010b7e394afed9dd3ad38fc2db2153c",
+      "client/public/assets/decoderWorker.min.wasm": "cd1d29c43b3fa05719c3d024ed9b9f1528be92415bd6d39d413b262a61d1891f",
+      "client/src/audio-processor.ts": "fb9fa5b712c075c1591564bb066a86ef65c90fac70348d1c4f57fff811b14f34",
+      "LICENSE-MIT": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+    }
+  },
+  "opusRecorder": {
+    "package": "opus-recorder",
+    "version": "8.0.5",
+    "integrity": "sha512-tBRXc9Btds7i3bVfA7d5rekAlyOcfsivt5vSIXHxRV1Oa+s6iXFW8omZ0Lm3ABWotVcEyKt96iIIUcgbV07YOw==",
+    "files": {
+      "dist/encoderWorker.min.js": "c3a64a87b2868e37c0387da45262900820ec85ab448869011247cbd351858a95",
+      "dist/decoderWorker.min.wasm": "cd1d29c43b3fa05719c3d024ed9b9f1528be92415bd6d39d413b262a61d1891f",
+      "LICENSE.md": "cbecb5e0feaa6ef30acca654ab98ba6df1c23d31e6d2122254925b10e7f0a428"
+    }
+  }
+}

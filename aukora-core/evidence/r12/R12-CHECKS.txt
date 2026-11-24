@@ -1,0 +1,248 @@
+ROUND 12   Local research results
+Paths are relative to the research lab. CHECKED denotes a theorem accepted by
+the local Lean 4.19 kernel during this round. A checker Bool, an observed Wasm
+verdict and an inference from a source read are identified separately below.
+
+0. ROOT v1 and the genuine blocker
+CHECKED  v0.3/Laws.lean, Proofs/Root12Availability.lean, Proofs/Root12Grammar.lean,
+         Proofs/Root12Record.lean, Proofs/Root12Conflict.lean, Proofs/FullSuccession.lean,
+         Root12.lean. Final proofs are in r12/clean-build-final.log. The
+         grammar and carried-witness revision is in r12/kernel-lineage-02.log.
+  Full table of all 23 clauses: r12/root-audit.md. The original structure
+  is retained as Release.Lawful; Root12.Lawful is the 23-clause restatement.
+  Availability in L1, D3, D5, S1, P1, P2 and O1 is qualified by the
+  pre-state halt flag and recorded owner rules. L2's original direction
+  is admission implies decoding and proper recording. It does not oblige
+  the machine to admit a frame. The grammar, raw record, exact projected
+  ledger history, and active-line view were rechecked for the full transition.
+  The transition witness requires both universal old-law entailment and the
+  proposed predicate’s universal commitment to the submitted machine’s whole
+  grammar. Consecutive transitions preserve all assigned version slots, including
+  rejection of malformed bodies. Version-three parsing retains the entire
+  typed receipt or assessment (Grammar.version_three_fields). Persistent
+  predicates resolve exclusively in
+  the immutable foundation. Native controls also check that implication alone
+  fails the combined goal. This is a conditional guarantee for successors. The
+  full model’s contradiction prevents an actual child installation.
+  The named safety projections were checked for all restatements. The L2
+  preservation claim for the old decoder covers the old dialect; the old
+  global closed-grammar formula is incompatible with adding accepted tags.
+  full_violates_both gives an unsigned failed-act halt and proves that the
+  full model violates BOTH old RulesLaw (P1) and RiskStateLaw (D5). Both
+  constrain every successful frame, even one with no state change in the
+  fields of interest. recovery_excludes_root holds for arbitrary models
+  with H5 given a valid clear. Further conditional conflicts are the old
+  binding classification for a changed owner in ff 02 and L10's old result
+  list for a new-format report. L8's original target is Release.Lawful;
+  changed_core_checks_frozen and frozen_goal_impossible identify the additional
+  incompatibility under honest checking. No global soundness theorem about the
+  compiled checker or the selected Wasm bytes was assumed proved.
+  Root12.full_supplement assembles seven evidence, five safe-state and one
+  succession predicates on the SAME full model. The 36-clause target is
+  a checked proposition. There is no proof that the full model satisfies it.
+  r12/root-wasm.log shows a reachable version-two halt, clear and a rebind
+  with different keys. The new keys worked and the old keys failed. It also
+  shows tag-zero speech succeeding during halt. As a predicate over candidates,
+  E5 fixes the reference verdict for tag-zero frames. Retaining it therefore
+  preserves that positive baseline even in a halted state. Recovery-only
+  unconditional availability cannot describe the entire list of 36.
+  R11 closed the inner evidence bookkeeping, recursiveness of the carried
+  gate and the ideal recovery behavior. These results were reused; installation
+  in live x6.1, actual tool execution and the truth of assertions are outside
+  this lab. A syntax or elaboration failure in a file is never a proof.
+
+WASM  node v0.3/tests/gate12.mjs (r12/gate-wasm.log)
+      native independent satisfaction and combined transition checks (r12/native-witnesses.log)
+  The fresh full gate independently exposed the expected 32-byte law identity.
+  Round-nine file: refused, code 11. Same-set and proposed 37-clause
+  standard-genesis successor: transition witness true, satisfaction false, code 7.
+  The added predicate conjoins a named constraint; no strict strengthening
+  by a model inhabiting the parent has been exhibited. The 13-clause
+  supplement: satisfaction true, submitted transition witness false, code 8. All 12 separate
+  single evidence/safe-state omissions: both submitted witnesses false,
+  first failure code 8. For each omission the witness passes its own set’s
+  transition including its grammar commitment. A failed term at the parent
+  goal does not prove universal non-entailment.
+  Every Wasm attempt first received a fresh, head-bound Ed25519 + ML-DSA grant.
+  No honest full positive install control exists for the root as specified.
+
+WASM  node v0.3/tests/record-compatibility.mjs (r12/record-compatibility.log)
+  Only v0.3 executed. Against four archived v0.1 records, all 193 previously
+  accepted non-install frames matched every recorded byte and all head bytes.
+  On the install history the grant replayed, then the original install was
+  refused. The head stayed at the grant. Continuity does not hold for all
+  v0.1 records. ROOT v1 relaxes availability; no ratchet transition or
+  inherited law lineage from v0.1 or v0.2 is claimed.
+
+CHECKED  Round11.install_package_bound (v0.3/Proofs/FullSuccession.lean)
+WASM     node v0.3/tests/package-binding.mjs ... --expected-reason 7
+         r12/package-binding.log, r12/package-host.txt
+  The install intent names the staged file's SHA-256 and the digest of the
+  length-delimited model and proof (see WIRE.md). Both signatures cover it.
+  The gate checks the package commitment, the exact grant and its consumption.
+  The theorem identifies the actual frame appended if the installation succeeds.
+  The current parent and sequence still address the eventual install.
+  With a single genuine grant, the canonical package passed binding. Two
+  single-bit mutations at each of 220 proof positions gave 440/440 code 10
+  and step 0, unchanged views; subsequent speech worked. The new proof has a
+  different length from the archived R10 proof. This is the second seat's
+  proof-bit test design on the new format (two flips at 220 distinct offsets). The unmodified positive binding
+  control failed the later satisfaction check. Byte uniqueness assumes SHA-256
+  collision resistance.
+
+A. Judge lineage
+WASM  node v0.3/tests/judge12.mjs (r12/judge-wasm.log)
+  R11's foundation identity was a statement by the running program about
+  itself. The judge includes lean4lean, the reached Lean/Wasm runtime and
+  parser code, the type/entailment goal constructors, and the actual pinned
+  declaration snapshot installed by Context.c. Build-time code expands the
+  aggregate proofs; the checker trusts a foundation which includes component
+  theorem statements. Host/runtime/kernel/crypto correctness remain assumptions.
+  Option (a) alone would authenticate a named custom environment copy. A
+  candidate could compile against different data. Option (b) requires the
+  host to instantiate the named separate judge and use its decision on the exact
+  target. We chose (c): fix the entire executable prefix after export stripping.
+  The outgoing core reads the actual staged bytes. It compares the embedded
+  pin and hashes the normalized prefix, including the complete code and
+  initialized data sections; only length-framed custom sections can follow. A conforming host must also
+  validate UTF-8 names and the entire module. It
+  therefore also names the compiled runtime, checker and goal constructor.
+  See v0.3/tools/JudgePin.h and tools/seal-judge.py. Main costs are staging
+  the executable, one hash per changed staging area, and forbidding even a
+  legitimate change to any executable bytes. Extra predicates travel in metadata
+  against the fixed foundation. The compiled handler executes. Equivalence of a
+  submitted model and that compiled transition remains unproved.
+  Probe: changed one real, equal-length serialized definition in the actual
+  initializer data. The named comparison control formerly required the standard
+  genesis and its new body permitted any genesis. Export12.LineageControl's
+  strictness theorem was checked. This control is outside the security root.
+  Equal file size and valid Wasm in both cases; only the outgoing file ran.
+  A matching grant/target for EACH staged file, identical carried model and
+  proof. Altered file: 11 before checking. Identical judge: comparison passed,
+  witness mask 1 (satisfaction only), submitted transition witness refused. This isolates
+  executable lineage without claiming admission of an impossible successor.
+  Strongest conclusion: subject to SHA-256 collision resistance, the
+  accepted prefix must contain the same executable bytes, including the real
+  declaration data. The byte comparison cannot prove that any code correctly
+  implements or executes the mathematical judge, or that a host actually
+  selects these bytes and continues their ledger.
+
+B. Bounds
+CHECKED  v0.3/Bounds12.lean: total_submission, refused_unchanged, stage_limit,
+         record_limit, fits_record, fits_stage and recovery_at_capacity.
+WASM     r12/bounds-aukora-core-{memory,stage,count,volume}.log and lite equivalents.
+  Full/lite initially 223/147 pages. Both declare 4,096 64-KiB pages max
+  (256 MiB): space for the 8-MiB stack, foundation, at most 16 MiB of staged
+  data, limited record, plus transient parsing/verification. This is an
+  engineering choice, not a worst-case heap proof. 16 MiB stages either
+  release with room for metadata. Model + proof share an independent 1 MiB.
+  One input may be 1,179,774 bytes; assembly failures consume the rejected
+  submission but preserve the prior machine. Over-limit feeds keep all prior
+  staged bytes and the ability to finish or reset staging. A validated call
+  to step or stamp shares an inclusive budget of 512 entries and 2 MiB of
+  exact stored bytes. New instances have separate genesis; no checkpoint or
+  continuity beyond a terminal record is claimed. Tests exercised below,
+  at and over limits, preserved the prior file after rejection and used a
+  harmless engine probe carrying each release's exact private memory section.
+  On each profile the very same valid signed clear succeeded in the instance
+  with room and was refused unchanged by the instance at capacity.
+  finite_session_excludes_H5 demonstrates this conflict in the model. A
+  refused nonempty feed in an open state separately contradicts the exact
+  L1 feed promise (open_feed_refusal). The model states the finite wrapper
+  explicitly, and Wasm enforces the engineering quota.
+  Replay, staging and resource limits apply to finite sessions. Physical
+  H5 cannot be unconditional with this record policy. The Lean Option law
+  has only accept/refuse outcomes. The implementation preflights quota
+  before allocations for a submission. Growth failure can still trap during
+  engine instantiation, allocations in valid small calls, cryptography, hashes,
+  decoding, proof checking or stack use. Physical no-trap/OOM was not proved.
+  See v0.3/EXPORTS.md for regime and exact argument/result behavior.
+
+C. Checker controls and budget
+WASM  node v0.3/tests/checker-controls.mjs (r12/checker-controls-final.log)
+  21 submissions (one baseline, 20 variations); every actual install refused.
+  0 traps, 0 above 10 s; valid speech worked on every same instance afterward.
+  The transcript reports time for each step, diagnostic, optional independent
+  witness masks, verdicts and liveness. In this run the largest step time
+  was 195.67 ms. Cases include 1 MiB, one byte over, 24 ordinary nested
+  lets, valid proof at the wrong goal, different carried model, a pinned name
+  and a duplicate name. Every variable-length field class in the canonical
+  model/proof/outer package received a bounded mismatch or truncation. See
+  r12/checker-length-coverage.txt for the mapping. Long adversarial reduction
+  and exhaustive search for a crashing or stalling input were not exercised;
+  these counts concern only the submitted cases.
+  Before this work the pinned checker already had per-branch recursion fuel
+  1,000 and expression-parser nesting 256. A source-hash-checked local
+  transform now charges inference, equality, whnf/whnfCore and iterations of
+  the whnf and lazy-delta loops to a shared 100,000-credit counter per M.run.
+  Exhaustion throws deterministicTimeout and verification refuses. With ≤64
+  model declarations there are at most 2n+5 M.run invocations for a tag-27
+  step, i.e. at most 13.3 million charged entries. Bytes, hashing, primitive
+  arithmetic, the two structural traversals of the persistent predicates and
+  other internal work are not metered Wasm instructions.
+  Ordinary Sort reflexivity and type checking at 0 and 1 credit refused;
+  2 credits admitted. See r12/budget-control.log and r12/budget-stage.log.
+
+D. Cell receipts
+CHECKED  v0.3/Proofs/Cell12.lean: full_citation, full_passive, replay,
+         bounded_replay, replay_exported (r12/clean-build-final.log).
+WASM     node v0.3/tests/cell12.mjs (r12/cell-wasm.log)
+  ff 03 01 stores a name, pin, operation, optional input/output digests and
+  status. A direct typed cell-result claim must resolve an earlier committed
+  receipt with a present output, before its assessment, before the act.
+  Cell receipts supply no confidence field; the bound is zero. A receipt
+  preserves owner keys, all authority, grants, rules and risk/threshold.
+  The full and lite models replay the exact admitted non-install byte suffix
+  to identical state from the same start, including the finite session limits.
+  The comparison concerns the head, not sidecar reconstruction from frame
+  bytes. Both Wasm files matched 200/200 input verdicts and every head;
+  168 entries were admitted. The canonical journal line and its binary receipt
+  were both submitted, and citing the speech copy as a typed receipt failed.
+  An act citing the true earlier output succeeded. Replay in fresh instances
+  returned da58997656ab4680317466eb4383e4beed581cd4edf99fecf15d5ac493c9a4a4.
+  The 200 vectors are synthetic. No x6.1 session, host attestation or real
+  journal was used.
+
+Guarded build and retained failures
+  The first exact "-j1 -M 4096" bootstrap stopped immediately at
+  "unknown configuration option 'max_memory'". Lean 4.19's util/shell.cpp
+  sets its native memory limit before the front end validates options.
+  The tiny local MemoryOption.c plugin registers that same Nat option only.
+  Every successful Lean invocation retained the native 4,096 MiB limit,
+  physical-footprint watchdog, single-job flag and per-process timeout.
+  The watcher preflights the OS process inventory for live Lean compilers.
+  The actual child inherits the lock. A 355-second alarm plus parent cleanup
+  bounds individual checks. The lab's original macOS ps/top commands are
+  restricted in this session; the supervisor reads Darwin's proc inventory
+  and task physical footprint directly and logs any kill to logs/memwatch.txt.
+  No downloads, priority wrappers, application windows or production actions.
+  Full failures are kept in the corresponding r12/bootstrap.log, kernel-*.log
+  and link-lite-01.log. Early failures included explicit namespace/type errors,
+  an exporter doc-comment syntax error, replay elaboration heartbeat limits,
+  incomplete record lemmas, and a missing platform word-size symbol on the
+  first lite link. The later grammar proof also needed an explicit case for
+  disabled parsing in the reserved namespace (kernel-lineage-01.log). These
+  were fixed before the final run. No memory-killed
+  proof was retried.
+
+Final offline reproduction and cleanup
+  From this folder: sh v0.3/build.sh
+  The final build (r12/clean-build-final.log) regenerated both Wasm images and the
+  detached fixtures from a clean staging tree. All 40 SHA-256 pins matched.
+  492 separately supervised commands completed in 477.2 s in aggregate.
+  All 441 Lean invocations show a clear process preflight, -j1 and -M 4096.
+  Longest individual stage: KernelCell.lean, 33.942 s. Peak sampled footprint:
+  Proofs/Evidence11.lean, 2966.3 MiB. No command reached six minutes or 4 GiB.
+  The named native and Wasm test transcripts above are exact slices of this run.
+  Full image: 6,815,521 bytes. Lite: 649,663 bytes. The full image contains
+  5,017,687 bytes of serialized declarations; see r12/judge-inventory.txt for
+  the file hash, normalized prefix hash, declaration counts and actual offset.
+  New root law identity: 1e207550423242f0c1a8b10ecd8898ce73eadc4c19e2a1ce5a849f0cd1de2fe1.
+  The release's disposable .work tree, lean object files, C objects, archives and
+  caches were removed. After the driver exited, its global worker and build locks
+  were both free and the OS inventory showed no Lean or lab toolchain process.
+  Every worker started for this round exited. The owner's pre-existing monitor
+  recorded no memory kill. No installed application was changed or inspected.
+  The report fits two pages at 11-point body text on A4 and US Letter.
+  Final allocated disk use (du -sk -I _export -I standalone . v0.3):
+  827,852 KiB for the lab in scope; 9,164 KiB for v0.3.

@@ -1,0 +1,33 @@
+# cloudflared ingress for the PersonaPlex voice gateway (locally managed tunnel).
+# Copy OUTSIDE the repo (e.g. /etc/aukora/voice-cloudflared.yml), fill the three <...> values, and
+# check it before use:
+#   node deploy/personaplex/verify-personaplex-zero-secret.mjs --config /etc/aukora/voice-cloudflared.yml
+#
+# Lock-down model (all three are required; the verifier enforces 1 and 2):
+#   1. Exactly one public hostname, exactly one path (^/api/chat$), exactly one origin
+#      (http://gateway:8080 on the internal tunnel_net), then a catch-all 404. No other service.
+#   2. Cloudflare Access validation sits UNDER the ingress rule. A top-level originRequest.access
+#      block is silently ignored by cloudflared (cloudflare/cloudflared#784,
+#      cloudflare-docs#32006; not reproduced here).
+#   3. The Access application on voice.example.invalid has ONE policy: action "Service Auth", include
+#      the single service token issued to the your-node Worker. No identity providers, no
+#      bypass, no "everyone". (Dashboard/API setting, outside this file.)
+# Behind that, the gateway still requires the Worker's bearer (digest-checked).
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/credentials.json
+no-autoupdate: true
+metrics: 127.0.0.1:20241
+
+ingress:
+  - hostname: voice.example.invalid
+    path: ^/api/chat$
+    service: http://gateway:8080
+    originRequest:
+      connectTimeout: 10s
+      noTLSVerify: false
+      access:
+        required: true
+        teamName: <ZERO_TRUST_TEAM_NAME>
+        audTag:
+          - <ACCESS_APPLICATION_AUD_TAG>
+  - service: http_status:404

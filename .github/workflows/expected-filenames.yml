@@ -1,0 +1,31 @@
+name: Expected filenames
+
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   pull_request:
+# [disabled in aukora-x7]     paths:
+# [disabled in aukora-x7]       - '*[gG][oO][lL][dD][eE][nN]*'
+# [disabled in aukora-x7]       - '**/*[gG][oO][lL][dD][eE][nN]*'
+# [disabled in aukora-x7]       - '!vendor/**'
+
+permissions:
+  contents: read
+
+env:
+  # CI runs must never report to the production telemetry endpoint baked
+  # into apps/cli/cordis.yml (AppCLIEntry disables the row when set).
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  expected-filenames:
+    name: no golden filenames
+    runs-on: >-
+      ${{ vars.DSH_CI_FAILOVER_LINUX == 'blacksmith' && 'blacksmith-4vcpu-ubuntu-2404'
+          || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Check tracked filenames
+        run: scripts/check-expected-filenames.sh

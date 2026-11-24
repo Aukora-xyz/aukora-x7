@@ -1,0 +1,32 @@
+'RootV2Spike.ref_unless_refused' depends on axioms: [propext]
+'RootV2Spike.old_follows' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.refused_mono' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.keychange_keeps' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.bound_refuses_legacy' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.no_lockout' depends on axioms: [propext]
+'RootV2Spike.usable_run' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.cannot_refuse_last' depends on axioms: [propext, Classical.choice, Quot.sound]
+'RootV2Spike.round14' depends on axioms: [propext, Quot.sound]
+'RootV2Spike.weak_locks_out' does not depend on any axioms
+'RootV2Spike.strong_keeps_one' does not depend on any axioms
+'RootV2Spike.old_key_change_travels' does not depend on any axioms
+'RootV2Spike.approvals_can_be_refused_for_ever' depends on axioms: [propext, Quot.sound]
+        2.18 real         1.49 user         0.36 sys
+           284229632  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                6827  page reclaims
+               11345  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                 634  voluntary context switches
+               31023  involuntary context switches
+         19518121454  instructions retired
+          6989173022  cycles elapsed
+            95435104  peak memory footprint
+exit 0

@@ -1,0 +1,12 @@
+{
+  "requiredPoints": 2,
+  "defaultPoints": 1,
+  "reviewerPoints": {
+    "reviewer--a": 2,
+    "reviewer--b": 2,
+    "reviewer--c": 2,
+    "reviewer--c-bot": 2,
+    "reviewer--d": 2,
+    "reviewer--e": 2
+  }
+}

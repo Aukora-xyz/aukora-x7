@@ -1,0 +1,12 @@
+all five organs                                cells 110  determines degree <=  9 = 100 numbers; degree 10 is NOT determined
+any 4 organs (every one of the 5 choices)      cells  92  determines degree <= [7] = [64] numbers
+any 3 organs (every one of the 10 choices)     cells  72  determines degree <= [7] = [64] numbers
+any 2 organs (every one of the 10 choices)     cells  50  determines degree <= [5] = [36] numbers
+any 1 organs (every one of the 5 choices)      cells  26  determines degree <= [3] = [16] numbers
+the 20 corners only                            cells  20  determines degree <=  3 =  16 numbers; degree 4 is NOT determined
+the 30 face centres only                       cells  30  determines degree <=  4 =  25 numbers; degree 5 is NOT determined
+the 60 edge middles only                       cells  60  determines degree <=  5 =  36 numbers; degree 6 is NOT determined
+corners + edge middles (80), no face centres   cells  80  determines degree <=  7 =  64 numbers; degree 8 is NOT determined
+corners + face centres (50)                    cells  50  determines degree <=  5 =  36 numbers; degree 6 is NOT determined
+edge middles + face centres (90)               cells  90  determines degree <=  8 =  81 numbers; degree 9 is NOT determined
+one organ without its face centres (20)        cells  20  determines degree <=  3 =  16 numbers; degree 4 is NOT determined

@@ -1,0 +1,79 @@
+# Aukora
+
+> Auma proposes changes. HEAD checks owner approval on the protected-promotion route. This assumes a trustworthy approval page, edge and storage. ARK is a separate receipt demonstration. BUILT-ON-MAIN identifies product code and tests exported from the authors’ main branch. SYNTHETIC-PROOF identifies a bounded exercise using test identities, test worlds or fixed reference files. The code is AGPL-3.0-or-later with separate notices for inherited and prebuilt components.
+
+From the repository root, run `node scripts/probe.mjs`. It reports the Node version and minimum-version flag, claim count and missing paths, ARK manifest line count and any failed filenames or invalid-entry diagnostics, and presence of the known-failure file.
+
+## Tech at a glance
+
+| Technology | What it does here | Files in this repository | Maturity |
+| --- | --- | --- | --- |
+| Nostr | After signing an empty-content kind 4871 witness event, the node attempts delivery to five named relays. The owner-approved kind 30078 announcement records the head at publication over HTTPS. Separate local Messages turns can be unsigned. | `deploy/cloudflare/src/witness.mjs`, `deploy/cloudflare/src/witness-do.mjs`, `deploy/cloudflare/src/nostr-anchor.mjs`, `deploy/cloudflare/src/messages-store.mjs` | BUILT-ON-MAIN |
+| Bitcoin / OpenTimestamps | A usable calendar upgrade adds a Bitcoin attestation to the proof. The edge records `confirmed` and the claimed height. A later hourly tick can select the record for a separate check against the header’s Merkle root. Two explorers must agree on the block hash, which must meet the header’s stated target and have at least 72 leading zero bits. The lowest answering tip must give at least six confirmations. | `deploy/cloudflare/src/ots.mjs`, `deploy/cloudflare/src/bitcoin-header.mjs`, `deploy/cloudflare/src/witness-do.mjs` | BUILT-ON-MAIN |
+| RFC 3161 | The witness accepts status 0 (granted) or 1 (granted with modifications) and checks for the signedData identifier and the digest and nonce byte strings in the reply’s ContentInfo. Authenticating the signed fields, signature and certificate chain requires a separate check. | `deploy/cloudflare/src/tsa.mjs`, `deploy/cloudflare/src/witness-do.mjs` | BUILT-ON-MAIN |
+| WebAuthn | The edge verifies a user-verified assertion and binds its challenge to request or promotion terms. The supplied review cards present action-specific details. The edge relies on the requesting page to show the terms accurately. One-use enforcement depends on current storage history. | `deploy/cloudflare/src/aumlok.mjs`, `deploy/cloudflare/src/owner-grant-policy.mjs` | BUILT-ON-MAIN |
+| Cloudflare Workers and Durable Objects | A Worker routes requests using four Durable Object class bindings for HEAD, MIRROR, voice and witness state. The witness object stores and serves timestamp proofs. R2 holds archives, vault blobs and nightly copies. | `deploy/cloudflare/wrangler.toml`, `deploy/cloudflare/src/worker.mjs` | BUILT-ON-MAIN |
+| WebAssembly | Before compiling a cell, the browser rejects empty input, enforces the pinned size ceiling and compares the SHA-256 of the bytes with the pinned digest. The edge Kyber host receives a precompiled module. A separate Kyber test compares the artifact with its byte pin. Both hosts check the interface and memory and supply fuel. | `deploy/cloudflare/src/kyber-cell.mjs`, `packages/experimental/webworker-runtime/src/x6/wasm-cells.ts` | BUILT-ON-MAIN |
+| AES-256-GCM, HPKE and Reed–Solomon | The standalone module encrypts a file and wraps its data key with a supplied secret (v1) or for an X25519 recipient with HPKE (v2). With a trusted manifest, k distinct valid pieces recover ciphertext. Opening it requires the matching secret. | `deploy/cloudflare/src/sealed-shards.mjs` | BUILT-ON-MAIN |
+| X-Wing hybrid key exchange | The experimental handshake combines X25519 and ML-KEM-768, checks Ed25519 and ML-DSA-65 signatures and requires an explicit peer-acceptance rule. With default randomness each peer generates a throwaway Ed25519 key pair per connection. The authenticated peer ID derives from the peer’s long-term public keys. Callers can supply their own randomness. Frames use AES-256-GCM. No node route calls it. | `deploy/cloudflare/src/fresh-link.mjs` | BUILT-ON-MAIN |
+| ARK receipts | Three separately written readers check signed demo outcomes against the draft Ed25519 contract. The demo supplies test identities and a separate pins file. An outside verifier needs independently trusted owner and receiver pins. | `ark/CONTRACT.md`, `ark/ABOUT.md` | SYNTHETIC-PROOF |
+
+## What this is, in ten lines
+
+1. Auma is a personal AI that runs in her owner's browser and at a small Cloudflare edge outside her.
+2. The repository merge card binds the branch, expected Git base, proposal head and tree. An owner session can commit eligible Markdown at the repository root or under docs/ directly to main. A separate route checks explicit approval for other permitted direct publications. Head sync can commit the selected manifest, checked modules, handoff text and eligible receipt-ledger additions to main. Head sync refuses a repository named aukora-x7. The broker source fixes the repository slug. Hosting permissions govern other writers.
+3. For an AUMLOK request approval, the edge binds the origin, method, path and SHA-256 of the parsed body encoded as canonical JSON to the challenge. The five-minute approval can be spent once while the store retains its history.
+4. A ball records each organ’s module specifier. The supplied genesis uses SHA-256 module references.
+5. Cloud thread appends require a writer lease reference. A reader browser can pull eligible threads of up to 64 MiB each. One pull can add up to 128 MiB of thread data to its in-memory file store.
+6. After signing a kind 4871 witness event, the node attempts publication to five configured relays. The HTTPS kind 30078 announcement names the already-selected ball and epoch checked inside the publication transaction and the receipt leaf read from MIRROR beforehand. Local Messages turns can be unsigned. The witness attempts scheduled and promotion-triggered records. Individual attempts can fail.
+7. The nightly copier pages eligible rows from four Durable Objects. It omits three HEAD identity rows, redacts the Messages signing field, withholds hidden, unresolved or conflicting MIRROR rows, and records the vault count, total bytes and a digest of sorted blob names and sizes. Pages can span concurrent changes. Separately, with its own trusted manifest the shard module uses any k distinct valid pieces to reconstruct the ciphertext. Opening the file also needs the v1 unwrapping secret or the v2 recipient private key. A live node restore from distributed pieces remains unverified.
+8. In the ARK demonstration the owner signs an approval naming the proposal digest. The receiver appends a line once and signs its outcome. A valid retry with the same operation ID and proposal digest returns the prior outcome if the receiver still holds it. Offline readers need the bundle and independently trusted owner and receiver pins. Restore imports qualifying signed history from the archive. The demo effect file is outside it. After restore, new appends stay locked until the receiver accepts owner-signed authority for this receiver with an epoch above the restored floor.
+9. ARK exercises the demo here on TEST keys with three separately written readers (Node, Go, Swift), not independent ones: readers 1 and 2 come from models of one family; reader 2's author also read a hand-off note and part of a private design review (`ark/INDEPENDENCE.md`); reader 3’s author reports consulting no reference implementation, and the project reports no audit of what that author read; reader 1's author wrote the contract and the vectors, and both were revised after the readers' questions. It is not wired into the node.
+10. The authors' live node is private. What happened there is the authors' report; this tree cannot show it.
+
+## Five claims you can check yourself (repository root, no network)
+
+- `node scripts/verify-lite.mjs` requires Node 24.9 or newer. The unsigned macOS report for commit 80e392d1 gave the reference line `verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list`. Exit 0 means each file’s counted failures fit its published allowance. Totals and failing case identities can differ. Node’s permission model applies to 21 of the 22 default test files. `server/asset-cache.test.mjs` runs without it because the test calls fsync, which Node 24.22 and newer disable under the permission model. That file still gets the network guard, a rebuilt environment and the run’s fresh temporary folder as HOME. Read the per-file diagnostics, including timeouts and missing summaries.
+- `(cd ark && ./accept/run.sh)` requires Node 22+, Go 1.26.5+ and shasum. Run ARK acceptance from a checkout whose absolute path contains no whitespace. The reported macOS result began `accept: 20 PASS, 0 FAIL`. In the ARK demonstration the owner signs an approval naming the proposal digest. The receiver appends a line once and signs its outcome. A valid retry with the same operation ID and proposal digest returns the prior outcome if the receiver still holds it. Offline readers need the bundle and independently trusted owner and receiver pins. Restore imports qualifying signed history from the archive. The demo effect file is outside it. After restore, new appends stay locked until the receiver accepts owner-signed authority for this receiver with an epoch above the restored floor.
+- `./ark/b/run-vectors.sh` (Go 1.26.5 or newer: `ark/b/go.mod` sets the floor, and the scripts set `GOTOOLCHAIN=local` and `GOPROXY=off`, so nothing is downloaded and an older Go fails). Expected last line: `vectors matched: 26 of 26`. Shows: a second, separately written reader reaches the verdicts the vectors expect; `ark/ABOUT.md` says what its author also read. Reader 3 (`ark/c/`) builds with macOS Swift and CryptoKit. Its vector script requires Python 3.9 or newer.
+- `node --test deploy/cloudflare/src/__tests__/sealed-shards.test.mjs deploy/cloudflare/src/__tests__/sealed-shards-v2.test.mjs` with nothing installed. Expected: 26 pass, 0 fail. With a trusted manifest, any k distinct valid pieces reconstruct the ciphertext. Opening the file also needs the v1 unwrapping secret or the v2 recipient private key. A live node restore from distributed pieces remains unverified.
+- `node --test deploy/cloudflare/src/__tests__/ots.test.mjs` with nothing installed. The suite uses two reference proofs, constructed trees, malformed inputs and mutations. The suite defines ten cases, including [two and four calendar replies](deploy/cloudflare/src/__tests__/ots.test.mjs#L78).
+
+All four unsigned outside reports in `claims.json` name commit `80e392d1`. The Linux entries distinguish the unmodified checkout from a copy with one runner change. For commit `80e392d1`, outside reports recorded 565 passes and 12 failures on macOS and 554 passes and 23 failures on unmodified Linux. On Node 24.22.3, a Linux copy using the single-file exception now shipped here reported 565 passes and 12 failures. None establishes a deployed revision.
+
+## Where each mechanism lives
+
+- Approvals and identity: `deploy/cloudflare/src/aumlok.mjs`; promotion of a version: `deploy/cloudflare/src/head-do.mjs`; fixed protected IDs and governance declarations: `server/ball-transition.mjs` (`T2_ONLY_ORGANS` and `isT2OnlyOrgan`).
+- Merge cards and her repository door: `deploy/cloudflare/src/cloud-brokers.mjs`, `deploy/ci/frozen-paths.mjs`.
+- The outside witness: `witness.mjs`, `witness-do.mjs`, `ots.mjs`, `bitcoin-header.mjs` and `tsa.mjs`, all under `deploy/cloudflare/src/`; page: `docs/auma/outside-witness.md`.
+- The nightly copy: `deploy/cloudflare/src/nightly-copy.mjs`; page: `docs/auma/nightly-copy.md`.
+- Sealed shards: `deploy/cloudflare/src/sealed-shards.mjs`; page: `docs/auma/sealed-shards.md`.
+- Fresh Link has fixture and vector callers. No shipped node route uses it. See `deploy/cloudflare/src/fresh-link.mjs`; page: `docs/auma/fresh-link.md`.
+- The thread log and the second browser: `deploy/cloudflare/src/thread-log.mjs`, `packages/experimental/webworker-runtime/src/storage/thread-sync.ts`.
+- ARK: `ark/ABOUT.md`, `ark/CONTRACT.md`, `ark/vectors/`, `ark/a/` (Node), `ark/b/` (Go), `ark/c/` (Swift), `ark/accept/run.sh`.
+- The shipped edge settings: `deploy/cloudflare/wrangler.toml` (placeholders for node-specific deployment settings, alongside real binding names, service endpoints and feature switches). The repository door's default level (`REPO_DOOR_LEVEL`) is in `deploy/ci/frozen-paths.mjs`.
+
+## The labels
+
+- BUILT-ON-MAIN: product code and tests exported from the authors’ main branch. A live result needs separate evidence.
+- SYNTHETIC-PROOF covers bounded demonstrations using test identities, worlds or fixed reference files.
+- SPEC-ONLY identifies a written criterion, design or model.
+- IDEA: a direction, nothing built.
+- Private use and historical runs are attributed separately. An undocumented outcome is unverified. Public-edition checks such as the probe do not establish private-main implementation.
+
+## What not to infer
+
+- The authors report that Aukora has had no security audit. The project cites no independent cryptographic review of Fresh Link, sealed shards or ARK.
+- Not that ARK uses a passkey: its owner is a stand-in tool with a TEST key. Binding it to a real passkey is not built.
+- The restore test reconstructs a recovery file from shards and applies it to an empty test edge. A live restore from distributed pieces remains unverified.
+- The supplied genesis starts at epoch 1. The authors say the export omits their live state.
+- Not that every file is rebuildable: 24 of the 30 Wasm cells and one prebuilt app ship without source. See the separate notice at `apps/web/public/seed-library/pentora/LICENSE.binaries`. The component notice states, “The authors own pentora36.wasm and ship it without source and without a separate licence.”
+
+## Read next
+
+- README.md: what she can do and how far each part is proven.
+- docs/AI-START-HERE.md gives authority and recovery references, reading budgets, evidence labels and commands for the nine published claims.
+- docs/WHAT-IS-BUILT.md, docs/KNOWN-RED-TESTS.md, docs/DIRECTION.md, docs/WHITEPAPER.md (English only).
+- docs/research/KYBER-SHIELD.md. Kyber Shield is a research proposal. This export contains the underlying computation, approval and receipt code. It supplies no child-safety classifier, trained model, reporting service or real-world evaluation. Involving a trusted adult is an explicit choice.
+
+

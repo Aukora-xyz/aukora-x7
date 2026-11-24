@@ -1,0 +1,116 @@
+ROUND 11   Local research results
+All paths below are relative to the lab. CHECKED refers only to native Lean 4.19
+kernel acceptance during this round. A Wasm verdict is observed test evidence.
+The production application was outside the scope of the brief.
+
+CHECKED   v0.2/RatchetLegacy.lean, RatchetModel.lean, tests/RatchetStrict.lean
+  legacy_lawful preserves the unchanged 23 old fields. Dynamic trace filtering
+  covers the checks on histories. The advice proof threads the current law
+  identity through both aligned histories. model_succession, goal_shapes,
+  change_requires_both and child_succession specify the model's own future gate.
+  initialized_basis ties the actual base initializer to the bytes that it hashes.
+  strictly_stronger proves strictness given an input accepted by ordinary
+  genesis. The Wasm positive control supplies such an input. See
+  r11/ratchet-legacy-03.txt, r11/ratchet-lean-06.txt and r11/ratchet-manifest-01.txt.
+
+CHECKED   v0.2/Proofs/Evidence11.lean (7 of 7)
+  E1 resolves; E1b kind_matches; E2 no_laundering and release_bounds;
+  E3 guess_ceiling and ceiling_owner; E4 looked; E5 speech_free;
+  E6 lower_stated, act_lowering and weaker_class_can_fail.
+  The bounds apply to the listed claims and their transitive inference premises.
+  Confidence weakening fixes the evidence basis and the other admission checks.
+  The class counterexample keeps the reference while changing observed to guessed.
+  See r11/full-evidence-kernel-final.txt.
+
+CHECKED   v0.2/Proofs/Safe11.lean and Proofs/Round11Safe.lean (5 of 5)
+  H1_blocked/destructive/upgrade, H2_no_escape, H3_clear_closed, H4_record,
+  H5_clear and H5_rebind. full_safe assembles the statements on the public full
+  model. H2/H4 include frame, feed, reset and stamp histories. H5 conditions
+  are correct addressing, well-formed control and verification by both owner
+  keys; rebind additionally validates the new key pair. Resource exhaustion
+  and loss of signing keys are outside the theorem.
+  full_violates_L2 proves that this actual full model violates frozen L2 for
+  every checker context. The old quantification is over every public state:
+  the concrete proof uses a constructed empty state, a failed act and an
+  admitted halt. The Wasm test also reaches an incompatibility from genesis
+  with a properly signed halt. See r11/safe-public-4.txt.
+  Round11.full_succession and full_core_change identify the full cell's
+  outgoing install gate. See r11/full-evidence-kernel-final.txt.
+  The final printed axiom lists for these claims are subsets of propext,
+  Classical.choice, and Quot.sound. No failed elaboration counts as a proof.
+
+CERTIFICATES   v0.2/.work/package generated from v0.2/tools/Export11.lean
+  The pinned environment has 3,571 entries (4,676,668 bytes), including
+  506 trusted theorem statements, 21 opaque declarations and one explicit
+  axiom. SHA-256 ae08506e39c933c834b8ea23f183d2aeafc93eccc66a145b940dc19961ad0c4d.
+  It omits the complete candidate proof, the assembled root proofs and the
+  extra-law declaration. Every package includes two independently checked
+  proof terms. One is for the child model, the other universally quantifies
+  over models. The original check still checks the complete R10 proof.
+  Native reason controls and the independent False entailment check:
+  r11/ratchet-implication.txt. The old-context versus inertly extended-context
+  test returned 1 (foundation mismatch). This is a native test of init/check.
+  The foundation and prior list must be retained through continued execution.
+
+WASM   v0.2/tests/replay11.mjs and tests/recovery11.mjs
+  The full core and selected successor each ran with zero imports.
+  SHA-256, export inventory and byte sizes: r11/abi-final.txt.
+  Archived FixedGenesis9.wasm with exact R9 model and proof, after a freshly
+  head-bound hybrid grant: refused, reason 2 (two-witness certificate missing).
+  Original 23-law software claiming its original set: refused, reason 8
+  (entailment). Same software claiming R11: refused, reason 7 (satisfaction).
+  Unsatisfiable child: refused, reason 7; its universal entailment checked.
+  Same set admitted, stronger named standard-genesis clause admitted,
+  previous certificate refused (identity), proposed narrowing refused
+  (entailment), strong set admitted again. The selected successor itself
+  reproduced the complete install history. See r11/successor-replay-final.txt.
+  r11/law-view.mjs independently computed the visible hashes of both manifests
+  with Node SHA-256. See r11/law-view.txt.
+  Signed halt was accepted by the full machine and refused by the selected
+  same-set successor on identical genesis state, keys and law identity.
+  A fully staged and granted install was refused while halted, then admitted
+  after clear with the same certificate, candidate and intent. The halt entry
+  and sidecar stamp survived. A failed candidate feed kept staging closed but
+  permitted owner clear/rebind. See r11/safe-recovery-selection-final.txt.
+
+LIMITS AND FAILURES
+  No downloads, priority wrappers, application windows or production actions.
+  The lab used the local Lean and WASI SDK distributions. R10 source, fixture
+  and distributed output integrity checks: r11/previous-release-integrity.txt.
+  All debugging logs are retained in r11/. Early Lean elaboration failures,
+  an intermediate C export mismatch, and an interrupted optional concrete-key
+  strictness reduction are preserved. The latter was interrupted after about
+  125 s; its Lean child outlived the driver and briefly overlapped an interim
+  build. This breached the serial-compile limit. The final watchdog passes the
+  lock descriptor through to the actual child so cancellation cannot free the
+  slot while that child is still running. The stopped attempt is not counted.
+  The final strictness theorem takes successful genesis as an explicit premise.
+
+FINAL SERIAL REPRODUCTION
+  Command from the lab root: sh v0.2/build.sh
+  PASS v0.2 (767.2 seconds for the entire multi-stage build).
+  All 32 output pins reproduced. Inventory matched 127 shared and local
+  source files and the complete declaration index. All 492 individually
+  timed successful commands exited zero. The longest took 82.226 seconds.
+  No individual check or test ran past six minutes. The final run had no
+  compiler overlap. Full transcript: r11/clean-build.txt.
+
+  Independent reference and engine read the exact same published frames:
+  group          Lean/total    Wasm/total    accepted
+  gate              5/5           5/5           1
+  history         192/192       192/192        96
+  length           86/86         86/86         15
+  matrix          818/818       818/818        60
+  r11-evidence     90/90         90/90         52
+  r11-fields      520/520       520/520         1
+  r11-install      17/17         17/17         11
+  r11-safe         66/66         66/66         30
+  signed           66/66         66/66         22
+  Total 1,860/1,860 matched on verdict and every head byte; 288 admitted, 1,572 refused.
+  New vectors: 693, comprising evidence, field boundaries, recovery and succession.
+  Additional replay of the 17 install vectors inside the selected successor is excluded from that count.
+  The raw r10 corpus bytes are unchanged. Only the archived install verdict and resulting heads changed.
+  Cleanup removed v0.2/.work. No .olean, .ilean, .o, .a or .pyc files remained in v0.2.
+  All test, compile and research workers exited. lsof reported no open files under logs/r11.
+  Final disk usage (du -sk -I _export -I standalone .; du -sk v0.2):
+  796.4 MiB for the scoped working lab, including 15.7 MiB for v0.2.

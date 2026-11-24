@@ -1,0 +1,16 @@
+replay matrix 818 of 818 accepted 60
+hostile matrix {"rows":818,"agree":818,"mutants":1634,"refused":1625,"accepted":9,"staleReplayAccepted":0,"trueOk":818}
+replay length 86 of 86 accepted 15
+hostile length {"rows":904,"agree":904,"mutants":1752,"refused":1737,"accepted":15,"staleReplayAccepted":0,"trueOk":904}
+replay history 192 of 192 accepted 96
+hostile history {"rows":1096,"agree":1096,"mutants":2135,"refused":2104,"accepted":31,"staleReplayAccepted":0,"trueOk":1096}
+replay signed 66 of 66 accepted 22
+hostile signed {"rows":1162,"agree":1162,"mutants":2267,"refused":2231,"accepted":36,"staleReplayAccepted":0,"trueOk":1162}
+replay r11-evidence 90 of 90 accepted 52
+hostile r11-evidence {"rows":1252,"agree":1252,"mutants":2447,"refused":2383,"accepted":64,"staleReplayAccepted":0,"trueOk":1252}
+replay r11-fields 520 of 520 accepted 1
+hostile r11-fields {"rows":1772,"agree":1772,"mutants":3487,"refused":3419,"accepted":68,"staleReplayAccepted":0,"trueOk":1772}
+replay r11-safe 66 of 66 accepted 30
+hostile r11-safe {"rows":1838,"agree":1838,"mutants":3617,"refused":3542,"accepted":75,"staleReplayAccepted":0,"trueOk":1838,"whileHalted":78}
+TOTAL {"rows":1838,"agree":1838,"mutants":3617,"refused":3542,"accepted":75,"staleReplayAccepted":0,"trueOk":1838,"whileHalted":78} findings {}
+WASM=v0.3/aukora-core.wasm node logs/repro12/mythos-v03-on-v02-vectors.mjs 2  40.27s user 2.04s system 127% cpu 33.101 total

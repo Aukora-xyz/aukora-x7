@@ -1,0 +1,10 @@
+'Pentora.cells_pass_the_rule' does not depend on any axioms
+'Pentora.cells_lit' does not depend on any axioms
+'Pentora.all7p_spec' depends on axioms: [propext, Quot.sound]
+'Pentora.box_check' does not depend on any axioms
+'Pentora.sq_nonneg'' depends on axioms: [propext]
+'Pentora.small_of_sq' depends on axioms: [propext, Quot.sound]
+'Pentora.norm2_a' depends on axioms: [propext]
+'Pentora.rule_norm' depends on axioms: [propext]
+'Pentora.rule_iff_cell' depends on axioms: [propext, Quot.sound]
+exit 0

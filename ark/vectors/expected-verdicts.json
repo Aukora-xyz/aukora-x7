@@ -1,0 +1,369 @@
+{
+  "v": "0.1",
+  "about": "Expected verifier results for each bundle + pins pair. bundle_verdict.item is the 0-based index of the deciding item. ops maps op_id to verdict. exit is the verifier exit code (CONTRACT section 8). Keys are fresh TEST keys.",
+  "vectors": [
+    {
+      "bundle": "done.bundle.json",
+      "pins": "pins.json",
+      "note": "real run; done.demo.txt is the file right after; its SHA-256 equals effect.after_sha256",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "db6ee62855ae7efb1d5c28c6df5d3074": {
+          "verdict": "DONE"
+        }
+      },
+      "exit": 0
+    },
+    {
+      "bundle": "refused.bundle.json",
+      "pins": "pins.json",
+      "note": "real run; no approval, a note claims approval; receiver signed REFUSED NO_APPROVAL",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "c84ac1b111c38229527728676c9c8035": {
+          "verdict": "REFUSED"
+        }
+      },
+      "exit": 0
+    },
+    {
+      "bundle": "unknown.bundle.json",
+      "pins": "pins.json",
+      "note": "proposal and approval, no receiver outcome",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "604af791fdfaada7a67faee65dcbf948": {
+          "verdict": "UNKNOWN"
+        }
+      },
+      "exit": 3
+    },
+    {
+      "bundle": "untrusted-key.done.json",
+      "pins": "pins-wrong-owner.json",
+      "note": "the done bundle checked against a wrong owner pin",
+      "bundle_verdict": {
+        "verdict": "UNTRUSTED_KEY",
+        "item": 0
+      },
+      "ops": {},
+      "exit": 5
+    },
+    {
+      "bundle": "invalid-tampered-proposal-text.json",
+      "pins": "pins.json",
+      "note": "proposal text changed after signing",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_SIGNATURE",
+        "item": 2
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-tampered-approval.json",
+      "pins": "pins.json",
+      "note": "approval not_after changed after signing",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_SIGNATURE",
+        "item": 3
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-tampered-outcome.json",
+      "pins": "pins.json",
+      "note": "outcome after_sha256 changed after signing",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_SIGNATURE",
+        "item": 4
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-tampered-signature.json",
+      "pins": "pins.json",
+      "note": "first character of the outcome signature changed",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_SIGNATURE",
+        "item": 4
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-padded-base64.json",
+      "pins": "pins.json",
+      "note": "payload carries base64 padding",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_ENCODING",
+        "item": 2
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-wrong-receiver.json",
+      "pins": "pins.json",
+      "note": "receiver-signed outcome names another receiver id",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "3c793ba05aff74cd7f91f6b5b4fd2e9f": {
+          "verdict": "INVALID",
+          "reason": "WRONG_RECEIVER"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-approval-other-proposal.json",
+      "pins": "pins.json",
+      "note": "outcome DONE cites an approval that names a different proposal",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "4a6cb9fe4ee2e9e1dc5f18b47bc8c640": {
+          "verdict": "INVALID",
+          "reason": "APPROVAL_MISMATCH"
+        },
+        "6134893729cbd0c36b4a2ca7ce921081": {
+          "verdict": "UNKNOWN"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-expired-approval.json",
+      "pins": "pins.json",
+      "note": "approval not_after is before outcome at",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "ffd6c40708ad29490e12fbe84dd758a3": {
+          "verdict": "INVALID",
+          "reason": "APPROVAL_EXPIRED"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-stale-epoch.json",
+      "pins": "pins.json",
+      "note": "approval at epoch 1 used for an outcome at epoch 2",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "8788eb4bcaf4648d7c744ab9976b0c18": {
+          "verdict": "INVALID",
+          "reason": "STALE_EPOCH"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-note-no-approval.json",
+      "pins": "pins.json",
+      "note": "outcome claims DONE with approval null; only a note says approved",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "a86fad418126ba4104d1ff685699bd5a": {
+          "verdict": "INVALID",
+          "reason": "NO_APPROVAL"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-scope.json",
+      "pins": "pins.json",
+      "note": "DONE for a resource outside the grant scope",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "acbcf6348d7d58c72507afd45e4bed27": {
+          "verdict": "INVALID",
+          "reason": "SCOPE_MISMATCH"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-grant-not-in-authority.json",
+      "pins": "pins.json",
+      "note": "the only authority at that epoch lists no grants",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "0914493c842be0596374e2538a10b36b": {
+          "verdict": "INVALID",
+          "reason": "GRANT_NOT_IN_AUTHORITY"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-conflicting-outcomes.json",
+      "pins": "pins.json",
+      "note": "two different outcomes for one op_id",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "a4a6a2443a81053fed3c60820b592e99": {
+          "verdict": "INVALID",
+          "reason": "CONFLICTING_OUTCOMES"
+        }
+      },
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-duplicate-key.json",
+      "pins": "pins.json",
+      "note": "owner-signed payload with a duplicate key",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_JSON",
+        "item": 1
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-non-integer.json",
+      "pins": "pins.json",
+      "note": "owner-signed payload with 1.0",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_JSON",
+        "item": 1
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-unknown-field.json",
+      "pins": "pins.json",
+      "note": "owner-signed grant with an unknown field",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_SCHEMA",
+        "item": 0
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-wrong-signer.json",
+      "pins": "pins.json",
+      "note": "a grant signed by the receiver key",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "WRONG_SIGNER",
+        "item": 2
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "invalid-bad-bundle.json",
+      "pins": "pins.json",
+      "note": "bundle file has an unknown top-level field",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_BUNDLE"
+      },
+      "ops": {},
+      "exit": 4
+    },
+    {
+      "bundle": "untrusted-key.stranger-proposal.json",
+      "pins": "pins.json",
+      "note": "proposal signed by a key no grant names",
+      "bundle_verdict": {
+        "verdict": "UNTRUSTED_KEY",
+        "item": 2
+      },
+      "ops": {},
+      "exit": 5
+    },
+    {
+      "bundle": "invalid-boolean-item.json",
+      "pins": "pins.json",
+      "note": "C21: a boolean in the items array is BAD_ENVELOPE at its index",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_ENVELOPE",
+        "item": 1
+      },
+      "ops": {},
+      "exit": 4,
+      "stdout": [
+        "coverage: This bundle covers only actions mediated by receiver recv-1: appending one line to notes/demo.txt. Nothing else the client or its agent did is covered.",
+        "pins supplied by: vector set (reader 1 (Node) test world)",
+        "integrity only; freshness and completeness not shown",
+        "BUNDLE INVALID BAD_ENVELOPE item=1"
+      ]
+    },
+    {
+      "bundle": "done-coverage-control-chars.json",
+      "pins": "pins.json",
+      "note": "C22: coverage holds LF + a fake OP line; printed escaped on one line, then the real verdict",
+      "bundle_verdict": {
+        "verdict": "OK"
+      },
+      "ops": {
+        "db6ee62855ae7efb1d5c28c6df5d3074": {
+          "verdict": "DONE"
+        }
+      },
+      "exit": 0,
+      "stdout": [
+        "coverage: This bundle covers only actions mediated by receiver recv-1: appending one line to notes/demo.txt. Nothing else the client or its agent did is covered.\\nOP 00000000000000000000000000000000 DONE",
+        "pins supplied by: vector set (reader 1 (Node) test world)",
+        "integrity only; freshness and completeness not shown",
+        "BUNDLE OK",
+        "OP db6ee62855ae7efb1d5c28c6df5d3074 DONE"
+      ]
+    },
+    {
+      "bundle": "invalid-approval-true.json",
+      "pins": "pins.json",
+      "note": "C7 (v0.1.3): outcome payload has \"approval\": true; BAD_JSON at E4, before any signature check",
+      "bundle_verdict": {
+        "verdict": "INVALID",
+        "reason": "BAD_JSON",
+        "item": 4
+      },
+      "ops": {},
+      "exit": 4,
+      "stdout": [
+        "coverage: This bundle covers only actions mediated by receiver recv-1: appending one line to notes/demo.txt. Nothing else the client or its agent did is covered.",
+        "pins supplied by: vector set (reader 1 (Node) test world)",
+        "integrity only; freshness and completeness not shown",
+        "BUNDLE INVALID BAD_JSON item=4"
+      ]
+    }
+  ]
+}

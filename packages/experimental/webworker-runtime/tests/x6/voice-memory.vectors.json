@@ -1,0 +1,120 @@
+{
+  "about": "the voice memory edge lane vectors (deploy/cloudflare/src/voice-memory.mjs; test deploy/cloudflare/src/__tests__/voice-memory.test.mjs). Canonical JSON: UTF-8, keys sorted by UTF-16 code unit, no whitespace, safe integers only, strings as the platform JSON writer writes them. heardC = sha256(salt || 0x00 || utf8(heard)), saidC = sha256(salt || 0x01 || utf8(said)), salt = the 16 bytes of words.salt (hex). digest = sha256(utf8(canonical(record))); record n+1 prev = digest of record n; seq 1 prev = 64 zeros.",
+  "records": [
+    {
+      "record": {
+        "v": 1,
+        "seq": 1,
+        "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+        "at": 1763294400000,
+        "conv": "conv_vector1",
+        "turn": "eleven:conv_vector1:1",
+        "kind": "exchange",
+        "heardC": "74623c7047db747754926b9cf8f699b87c6f0457b55aefa4e1fbc4558041a4a1",
+        "saidC": "e47fbc3f3c4b64b27d0eeb73461c0382958140e1fcba5c7ecbf03ce0107f6be7",
+        "ended": "answered",
+        "path": "fast",
+        "calls": [
+          {
+            "id": "eleven:conv_vector1:1.fast",
+            "req": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "res": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "model": "claude-fable-5-2",
+            "effort": "low",
+            "rid": "req_011CVector1"
+          }
+        ]
+      },
+      "words": {
+        "seq": 1,
+        "salt": "11111111111111111111111111111111",
+        "heard": "What did we decide about the chain?",
+        "said": "We chain every exchange: each record names the hash of the one before."
+      },
+      "canonicalUtf8Hex": "7b226174223a313736333239343430303030302c2263616c6c73223a5b7b226566666f7274223a226c6f77222c226964223a22656c6576656e3a636f6e765f766563746f72313a312e66617374222c226d6f64656c223a22636c617564652d6661626c652d352d32222c22726571223a2261616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161222c22726573223a2262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262222c22726964223a227265715f30313143566563746f7231227d5d2c22636f6e76223a22636f6e765f766563746f7231222c22656e646564223a22616e737765726564222c22686561726443223a2237343632336337303437646237343737353439323662396366386636393962383763366630343537623535616566613465316662633435353830343161346131222c226b696e64223a2265786368616e6765222c2270617468223a2266617374222c2270726576223a2230303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c227361696443223a2265343766626333663363346236346232376430656562373334363163303338323935383134306531666362613563376563626630336365303130376636626537222c22736571223a312c227475726e223a22656c6576656e3a636f6e765f766563746f72313a31222c2276223a317d",
+      "canonicalText": "{\"at\":1763294400000,\"calls\":[{\"effort\":\"low\",\"id\":\"eleven:conv_vector1:1.fast\",\"model\":\"claude-fable-5-2\",\"req\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"res\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"rid\":\"req_011CVector1\"}],\"conv\":\"conv_vector1\",\"ended\":\"answered\",\"heardC\":\"74623c7047db747754926b9cf8f699b87c6f0457b55aefa4e1fbc4558041a4a1\",\"kind\":\"exchange\",\"path\":\"fast\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"saidC\":\"e47fbc3f3c4b64b27d0eeb73461c0382958140e1fcba5c7ecbf03ce0107f6be7\",\"seq\":1,\"turn\":\"eleven:conv_vector1:1\",\"v\":1}",
+      "digest": "f040100821a69703fbec761eef9c24dab4317cc050e2e5ba5fbc2f1dbd7223b4"
+    },
+    {
+      "record": {
+        "v": 1,
+        "seq": 2,
+        "prev": "f040100821a69703fbec761eef9c24dab4317cc050e2e5ba5fbc2f1dbd7223b4",
+        "at": 1763294460000,
+        "conv": "conv_vector1",
+        "turn": "eleven:conv_vector1:2",
+        "kind": "exchange",
+        "heardC": "d1f76408ba469d6df14e08dd0e36bb2641e5eeb5376764b39103d42c538a85f4",
+        "saidC": "bb3753e328a7732ff52252d2e875968533051880d518ce08c73d961688521534",
+        "ended": "cut",
+        "path": "fast",
+        "calls": []
+      },
+      "words": {
+        "seq": 2,
+        "salt": "22222222222222222222222222222222",
+        "heard": "Say it with an accent: café, naïve, 日本, 🙂 and \"quotes\"\nand a new line.",
+        "said": "Café, naïve, 日本, 🙂 — \"quoted\" (cut off here)"
+      },
+      "canonicalUtf8Hex": "7b226174223a313736333239343436303030302c2263616c6c73223a5b5d2c22636f6e76223a22636f6e765f766563746f7231222c22656e646564223a22637574222c22686561726443223a2264316637363430386261343639643664663134653038646430653336626232363431653565656235333736373634623339313033643432633533386138356634222c226b696e64223a2265786368616e6765222c2270617468223a2266617374222c2270726576223a2266303430313030383231613639373033666265633736316565663963323464616234333137636330353065326535626135666263326631646264373232336234222c227361696443223a2262623337353365333238613737333266663532323532643265383735393638353333303531383830643531386365303863373364393631363838353231353334222c22736571223a322c227475726e223a22656c6576656e3a636f6e765f766563746f72313a32222c2276223a317d",
+      "canonicalText": "{\"at\":1763294460000,\"calls\":[],\"conv\":\"conv_vector1\",\"ended\":\"cut\",\"heardC\":\"d1f76408ba469d6df14e08dd0e36bb2641e5eeb5376764b39103d42c538a85f4\",\"kind\":\"exchange\",\"path\":\"fast\",\"prev\":\"f040100821a69703fbec761eef9c24dab4317cc050e2e5ba5fbc2f1dbd7223b4\",\"saidC\":\"bb3753e328a7732ff52252d2e875968533051880d518ce08c73d961688521534\",\"seq\":2,\"turn\":\"eleven:conv_vector1:2\",\"v\":1}",
+      "digest": "c8e56f84d1001653ec162c30f7c44e9754417a1c79e0ca7235ca5659f8886b9b"
+    },
+    {
+      "record": {
+        "v": 1,
+        "seq": 3,
+        "prev": "c8e56f84d1001653ec162c30f7c44e9754417a1c79e0ca7235ca5659f8886b9b",
+        "at": 1763301660000,
+        "conv": "conv_vector2",
+        "turn": "eleven:conv_vector2:7",
+        "kind": "exchange",
+        "heardC": "e314fd36d856f076a93fd31f8721b5912739551bc172dd28899acc55042e99ef",
+        "saidC": "47c8af3a192a411a76659161f7c55868c8c1bc65ee3e36dd8ca4a6c4b40c05f5",
+        "ended": "handed",
+        "path": "governed",
+        "calls": [
+          {
+            "id": "eleven:conv_vector2:7.fast",
+            "req": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "res": "",
+            "model": "",
+            "effort": "",
+            "rid": ""
+          },
+          {
+            "id": "eleven:conv_vector2:7.fast2",
+            "req": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "res": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "model": "claude-fable-5-2",
+            "effort": "high",
+            "rid": ""
+          }
+        ]
+      },
+      "words": {
+        "seq": 3,
+        "salt": "33333333333333333333333333333333",
+        "heard": "Hand that to your working self.",
+        "said": "Handing it to my working self now."
+      },
+      "canonicalUtf8Hex": "7b226174223a313736333330313636303030302c2263616c6c73223a5b7b226566666f7274223a22222c226964223a22656c6576656e3a636f6e765f766563746f72323a372e66617374222c226d6f64656c223a22222c22726571223a2263636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363222c22726573223a22222c22726964223a22227d2c7b226566666f7274223a2268696768222c226964223a22656c6576656e3a636f6e765f766563746f72323a372e6661737432222c226d6f64656c223a22636c617564652d6661626c652d352d32222c22726571223a2264646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464222c22726573223a2265656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565222c22726964223a22227d5d2c22636f6e76223a22636f6e765f766563746f7232222c22656e646564223a2268616e646564222c22686561726443223a2265333134666433366438353666303736613933666433316638373231623539313237333935353162633137326464323838393961636335353034326539396566222c226b696e64223a2265786368616e6765222c2270617468223a22676f7665726e6564222c2270726576223a2263386535366638346431303031363533656331363263333066376334346539373534343137613163373965306361373233356361353635396638383836623962222c227361696443223a2234376338616633613139326134313161373636353931363166376335353836386338633162633635656533653336646438636134613663346234306330356635222c22736571223a332c227475726e223a22656c6576656e3a636f6e765f766563746f72323a37222c2276223a317d",
+      "canonicalText": "{\"at\":1763301660000,\"calls\":[{\"effort\":\"\",\"id\":\"eleven:conv_vector2:7.fast\",\"model\":\"\",\"req\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"res\":\"\",\"rid\":\"\"},{\"effort\":\"high\",\"id\":\"eleven:conv_vector2:7.fast2\",\"model\":\"claude-fable-5-2\",\"req\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"res\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"rid\":\"\"}],\"conv\":\"conv_vector2\",\"ended\":\"handed\",\"heardC\":\"e314fd36d856f076a93fd31f8721b5912739551bc172dd28899acc55042e99ef\",\"kind\":\"exchange\",\"path\":\"governed\",\"prev\":\"c8e56f84d1001653ec162c30f7c44e9754417a1c79e0ca7235ca5659f8886b9b\",\"saidC\":\"47c8af3a192a411a76659161f7c55868c8c1bc65ee3e36dd8ca4a6c4b40c05f5\",\"seq\":3,\"turn\":\"eleven:conv_vector2:7\",\"v\":1}",
+      "digest": "efc9364cebd974d13d838b0de5b5b3de52163bc0266d978dce027a7ee338674e"
+    }
+  ],
+  "gap": {
+    "record": {
+      "v": 1,
+      "kind": "gap",
+      "seq": 2,
+      "prev": "c8e56f84d1001653ec162c30f7c44e9754417a1c79e0ca7235ca5659f8886b9b",
+      "at": 1763301700000,
+      "missingFrom": 1,
+      "missingTo": 2
+    },
+    "canonicalText": "{\"at\":1763301700000,\"kind\":\"gap\",\"missingFrom\":1,\"missingTo\":2,\"prev\":\"c8e56f84d1001653ec162c30f7c44e9754417a1c79e0ca7235ca5659f8886b9b\",\"seq\":2,\"v\":1}",
+    "digest": "ba9e5b7451504a4abf58d6d68bf34d1ab2c8549e014b362e0f6d32e0591e5350",
+    "rule": "A gap record stands for the span missingFrom..missingTo that the edge tail no longer holds; seq = missingTo; prev = the edge prev of the first resent record (its next record links to it with prev == gap.prev, not digest(gap)). No words. Built by the edge, sent as the first item { record } of the memory frame; never in the edge chain."
+  }
+}

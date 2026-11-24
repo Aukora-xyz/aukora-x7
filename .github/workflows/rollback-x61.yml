@@ -1,0 +1,83 @@
+name: Roll back your-node (manual)
+
+# The only way CI rolls the edge back, and only when a person starts it: `workflow_dispatch` on main with the Worker
+# version id that deploy-x61.yml wrote into its run summary before publishing ("Rollback command"). Nothing dispatches it
+# automatically. It holds the Cloudflare credential through the same GitHub environment `production` (main only), only
+# in the single Wrangler step. It has its own queue, outside deploy-x61's: nothing in that queue may stop short of the publish
+# guard, and nothing there can delay or displace a rollback. watch-x61 only reports and dispatches nothing: after a
+# rollback it reports LIVE_BEHIND, red once past its allowance, until the change is reverted on main or a person runs
+# deploy-x61 by hand. A NEW release pushed to main after it publishes main's head, the rolled-back change included; to
+# keep a rollback, revert the change on main too.
+on:
+  workflow_dispatch:
+    inputs:
+      version_id:
+        description: "Cloudflare Worker version id to roll back to (from the deploy run summary)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'rollback-x61-main' || format('rollback-x61-not-main-{0}', github.run_id) }}
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Checkout edge worker config
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            deploy/cloudflare
+            deploy/ci
+            server
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Check the version id and read the pinned account (no secret)
+        id: input
+        env:
+          VERSION_ID: ${{ inputs.version_id }}
+        run: |
+          if ! printf '%s' "$VERSION_ID" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
+            echo "::error title=Rollback refused::version_id is not a Cloudflare Worker version id. Nothing was changed."
+            exit 1
+          fi
+          account="$(node deploy/ci/deploy-guard.mjs configured-account)"
+          echo "account_id=$account" >> "$GITHUB_OUTPUT"
+          echo "live_before=$(node deploy/ci/deploy-guard.mjs live-build)" >> "$GITHUB_OUTPUT"
+
+      # Credentialed: Wrangler and shell only.
+      - name: Roll back the Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PINNED_ACCOUNT: ${{ steps.input.outputs.account_id }}
+          VERSION_ID: ${{ inputs.version_id }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          set -euo pipefail
+          if [ -z "$PINNED_ACCOUNT" ] || [ "$CLOUDFLARE_ACCOUNT_ID" != "$PINNED_ACCOUNT" ]; then
+            echo "::error title=Rollback refused::ACCOUNT_MISMATCH: the CLOUDFLARE_ACCOUNT_ID secret does not equal account_id in wrangler.toml. Nothing was changed."
+            exit 1
+          fi
+          if ! printf '%s' "$VERSION_ID" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then exit 1; fi
+          npx --yes wrangler@4.155.0 rollback "$VERSION_ID" --config deploy/cloudflare/wrangler.toml --env-file /dev/null --message "Manual rollback, GitHub Actions run ${GITHUB_RUN_ID}" -y
+
+      - name: Report what /api/build says now (no secret)
+        if: always()
+        env:
+          VERSION_ID: ${{ inputs.version_id }}
+          LIVE_BEFORE: ${{ steps.input.outputs.live_before }}
+        run: |
+          live="$(node deploy/ci/deploy-guard.mjs live-build)"
+          echo "Rollback to Worker version ${VERSION_ID}: /api/build reported ${LIVE_BEFORE:-nothing readable} before and reports ${live:-nothing readable} now." >> "$GITHUB_STEP_SUMMARY"

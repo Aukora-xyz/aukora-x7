@@ -1,0 +1,102 @@
+Lines of local hand-written source. Executable reachability is determined by the Wasm link.
+
+State machine, wire contract, concrete cryptography and dynamic checker
+  506  core/Core.lean
+  356  core/Core2.lean
+   93  core/Sha256.lean
+   66  core/Events4.lean
+  178  core/Wire4.lean
+  123  core/Bound4.lean
+  109  core/Sha512.lean
+  110  core/Ed25519.lean
+  108  core/Wire5.lean
+  201  core/Bound5.lean
+  244  core/Stateful5.lean
+  130  core/Upgrade6.lean
+  244  core/Hybrid7.lean
+   74  core/Shake7.lean
+  233  core/Mldsa8.lean
+  226  core/Risk8.lean
+  172  core/Core8.lean
+   64  core/Checker9.lean
+   43  core/ModelSection9.lean
+   85  core/Upgrade9.lean
+  220  core/Policy9.lean
+   57  core/Core9.lean
+  205  spike/r6/KernelCell.lean
+
+Proof contract and kernel-checked support
+  287  core/Advice7.lean
+  201  core/Kira5.lean
+  469  core/Laws7.lean
+  185  core/Wire4Proofs.lean
+   30  core/Laws9.lean
+   85  core/Tag9.lean
+   37  core/Goal9.lean
+   30  core/Candidate9.lean
+  211  core/Policy9Laws.lean
+  163  core/Policy9Replay.lean
+  179  core/Core9PolicyLaws.lean
+  151  core/OnlyGate9.lean
+  198  core/GrantOrigin9.lean
+
+Historical imported source (its digest list is excluded from the linked gate)
+  114  core/Upgrade7.lean
+
+Wasm ABI, compiled environment and extraction
+  137  spike/r9/core-interface.c
+   26  spike/r9/pinned-context.c
+   10  spike/r9/embed.py
+   14  spike/r9/core-roots.txt
+   15  spike/r9/core-exports.txt
+   59  spike/r9/build-wasm.py
+   24  spike/r6/route1-sources.py
+   73  spike/r6/import-audit.py
+   37  spike/r6/bootstrap-route1.py
+   26  spike/r6/runtime.sh
+   44  spike/r6/kernel-platform.cpp
+   17  spike/r6/kernel-roots.txt
+  162  spike/r6/reachable.py
+    3  spike/r4/shim.c
+    8  spike/runtime-r3/shim.c
+    4  spike/runtime-r2/include/lean/config.h
+   53  spike/r3/private-exports.py
+
+Model export and lab candidate construction
+   61  spike/r9/ExportCandidate.lean
+  168  spike/r6/ExportTerm.lean
+   85  spike/r7/ExportLaws.lean
+   95  spike/r9/candidate.py
+
+Reproduction and independent host observations
+   29  spike/r9/run.sh
+   18  spike/r9/serial.py
+   14  spike/r9/module.sh
+   24  spike/r3/watch.py
+   25  spike/r9/prepare.sh
+   14  spike/r9/certificates.sh
+   51  spike/r9/CheckCandidate.lean
+   92  spike/r9/test-host.mjs
+  137  spike/r9/gate.mjs
+  100  spike/r9/policy.mjs
+   13  spike/r9/regression.py
+  124  spike/r8/risk.mjs
+   77  spike/r8/stamp.mjs
+   16  spike/r9/differential.sh
+  206  spike/r9/Differential.lean
+   63  spike/r9/vector-signatures.mjs
+   62  spike/r9/replay-vectors.mjs
+   47  spike/r9/inventory.py
+Pinned binary inputs and upstream dependencies
+  logs/r7/laws.env is the checker's private basis. logs/r7/laws.env.tsv names each declaration.
+  The gate trusts that pinned environment, including 459 earlier theorem statements and 19 opaque
+  declarations represented by their types. Classical.choice is an axiom. Candidate inputs cannot extend it
+  with axioms. The native proof checker and the in-Wasm Lean4Lean checker have distinct evidence.
+  core/Core6.wasm is the checked-hash base of the example candidate, with its original R6 policy.
+  logs/r8/trusted-lines.txt gives the individual Lean4Lean, Batteries, Lean 4.19.0 runtime source
+  units, transitive headers, and import closure reused with their line counts. logs/r7/trusted-lines.txt
+  gives earlier certification provenance. Archive hashes are verified in spike/r9/prepare.sh.
+  The bundled host Lean 4.19.0 and WASI SDK 25, C/C++ runtime/adapters, compiler, linker, Node/V8,
+  operating system, and implementations of hashes and signature verification remain trusted.
+  OpenSSL signing and public fixtures exercise the ABI. They provide test inputs and do not enter the gate.
+  spike/r9/inputs.sha256 pins source and public test inputs. spike/r9/pins.sha256 pins generated outputs.

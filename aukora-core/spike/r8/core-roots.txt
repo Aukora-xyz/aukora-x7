@@ -1,0 +1,13 @@
+r8_genesis
+r8_head_byte
+r8_core_byte
+r8_record_byte
+r8_threshold
+r8_stamp
+r8_stamp_count
+r8_stamp_byte
+r8_feed
+r8_reset
+r8_step
+r8_hash_head
+r5_verify_packed

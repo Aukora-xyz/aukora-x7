@@ -1,0 +1,30 @@
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --root=v0.1 --run v0.1/tests/Conformance.lean length ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.1/.work/conformance
+Lean length: 86 verdicts and heads; 15 accepted; 71 refused
+exit 0, 9.777 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --root=v0.1 --run v0.1/tests/Conformance.lean history ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.1/.work/conformance
+Lean history: 192 verdicts and heads; 96 accepted; 96 refused
+exit 0, 2.605 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --root=v0.1 --run v0.1/tests/Conformance.lean signed ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.1/.work/conformance
+Lean signed: 66 verdicts and heads; 22 accepted; 44 refused
+exit 0, 6.823 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --root=v0.1 --run v0.1/tests/Conformance.lean gate ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.1/.work/conformance
+Lean gate: 5 verdicts and heads; 2 accepted; 3 refused
+exit 0, 30.720 s
+$ node v0.1/tests/replay.mjs ~/aukora-memory/scratch/lean-core-lab-2026-11-22/v0.1/.work/conformance
+matrix 818/818 agree, 60 accepted, 758 refused
+length 86/86 agree, 15 accepted, 71 refused
+history 192/192 agree, 96 accepted, 96 refused
+signed 66/66 agree, 22 accepted, 44 refused
+gate 5/5 agree, 2 accepted, 3 refused
+DIFFERENTIAL 1167/1167 agree on verdict and 32-byte head, 195 accepted, 972 refused
+exit 0, 1.736 s
+$ node v0.1/tests/replay.mjs v0.1/vectors v0.1/aukora-core-lite.wasm --lite
+matrix 818/818 agree, 60 accepted, 758 refused
+length 86/86 agree, 15 accepted, 71 refused
+history 192/192 agree, 96 accepted, 96 refused
+signed 66/66 agree, 22 accepted, 44 refused
+gate 5/5 agree, 1 accepted, 4 refused
+LITE (tag 27 always refused) 1167/1167 agree on verdict and 32-byte head, 194 accepted, 973 refused
+exit 0, 0.501 s
+PASS v0.1 (525.4 seconds total)
+sh v0.1/build.sh  475.04s user 105.58s system 110% cpu 8:45.61 total

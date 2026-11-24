@@ -1,0 +1,40 @@
+exit 0, 0.242 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --run spike/r9/Differential.lean matrix ~/aukora-memory/scratch/lean-core-lab-2026-11-22/logs/r9/build/differential
+Lean matrix: 814 verdicts and heads; 60 accepted; 754 refused
+exit 0, 2.273 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --run spike/r9/Differential.lean length ~/aukora-memory/scratch/lean-core-lab-2026-11-22/logs/r9/build/differential
+Lean length: 86 verdicts and heads; 15 accepted; 71 refused
+exit 0, 9.254 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --run spike/r9/Differential.lean signed ~/aukora-memory/scratch/lean-core-lab-2026-11-22/logs/r9/build/differential
+Lean signed: 66 verdicts and heads; 22 accepted; 44 refused
+exit 0, 6.662 s
+$ toolchain/lean-4.19.0-darwin_aarch64/bin/lean -j1 --run spike/r9/Differential.lean gate ~/aukora-memory/scratch/lean-core-lab-2026-11-22/logs/r9/build/differential
+Lean gate: 5 verdicts and heads; 2 accepted; 3 refused
+exit 0, 12.376 s
+$ node spike/r9/replay-vectors.mjs ~/aukora-memory/scratch/lean-core-lab-2026-11-22/logs/r9/build/differential
+matrix 814 of 814 agree; 60 accepted, 754 refused
+length 86 of 86 agree; 15 accepted, 71 refused
+signed 66 of 66 agree; 22 accepted, 44 refused
+gate gate-grant model 1 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9 wasm 1 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9
+gate gate-short model 0 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9 wasm 0 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9
+gate gate-long model 0 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9 wasm 0 e05bd444b4fa3546ad3dbce21e62222c045f51f09f6503e43a7a961df6fa57e9
+gate gate-install model 1 a9565ffaa0d40b865698e3d3860569d54e20295b40cfaf53ee055d9dcae0c054 wasm 1 a9565ffaa0d40b865698e3d3860569d54e20295b40cfaf53ee055d9dcae0c054
+gate gate-replay model 0 a9565ffaa0d40b865698e3d3860569d54e20295b40cfaf53ee055d9dcae0c054 wasm 0 a9565ffaa0d40b865698e3d3860569d54e20295b40cfaf53ee055d9dcae0c054
+gate 5 of 5 agree; 2 accepted, 3 refused
+Signed trace accepted signed-say, signed-remember-first, signed-remember-second, signed-correct, signed-advise, signed-retract, signed-mandate, signed-budget, signed-spend, signed-pass, signed-read, signed-revoke-pass, signed-threshold, signed-assessment, signed-act-mandate, signed-grant, signed-act-direct, signed-outcome, signed-outcome-correction, signed-grant-expiry, signed-revoke-intent, signed-rebind
+DIFFERENTIAL: 971 of 971 agree; 99 accepted; 872 refused
+exit 0, 2.014 s
+$ shasum -a 256 -c spike/r9/pins.sha256
+core/Core9.wasm: OK
+core/FixedGenesis9.wasm: OK
+logs/r9/broken.model: OK
+logs/r9/fresh-copy.model: OK
+logs/r9/honest.model: OK
+logs/r9/honest.proof.expr: OK
+logs/r9/pinned.model: OK
+exit 0, 0.078 s
+ 5614804 core/Core9.wasm
+ 1970929 core/FixedGenesis9.wasm
+ 7585733 total
+PASS Round 9
+sh spike/r9/run.sh  393.10s user 103.51s system 110% cpu 7:30.30 total

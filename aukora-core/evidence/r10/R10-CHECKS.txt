@@ -1,0 +1,103 @@
+Round 10 release evidence, local Apple Silicon lab, 2026-11-22
+
+REPRODUCTION
+  From the lab root: sh v0.1/build.sh
+  Transcript: logs/r10/clean-build.txt
+  Observed final line: PASS v0.1 (510.0 seconds total). Process exit 0.
+  The driver starts with an empty v0.1/.work. The vendored Lean 4.19.0
+  compiler checks the imports and all 67 release Lean sources serially.
+  The same command builds the full, fixed-genesis and lite modules, compares
+  the intermediate certificates and all three binaries to v0.1/PINS.sha256,
+  and regenerates the corpus. v0.1/INPUTS.sha256 lists 139 build inputs.
+
+CHECKED BY THE LEAN KERNEL IN THIS ROUND
+  Aukora.Release.Lawful has 23 fields. Theorem-to-file index, quantifiers,
+  preconditions and the historical/current outcome distinction: v0.1/PROVED.md.
+  Aukora.Release.newest_lawful     Lawful newest
+  Aukora.Release.lawful_withGenesis transports all fields through a genesis-input function
+  R9Candidate.successor_lawful     Lawful successor (the fixed-genesis model)
+  R9Candidate.ed_only_unlawful     ¬ Lawful edOnly (the adapted historical model)
+  Aukora.Release.legacyGrantFails  ¬ GrantLaw edOnly
+  Aukora.Release.LiteProof.lawful  Lawful lite
+  Aukora.Release.lite_replay       equivalent state after filtering every tag-27 submission
+  The old Ed25519 signature and successful grant insertion were evaluated by
+  kernel reduction in tests/LegacyGrantProof.lean. That wire violates H1.
+  The complete model proofs report propext, Classical.choice and Quot.sound.
+  Focused transcripts: r10/unified-laws-final.txt, r10/legacy-law-01.txt,
+  r10/lite-all-laws.txt. Successful final checks also appear in the clean log.
+
+TESTED IN THE CHECKER AND IN EXECUTING WASM
+  Native checker transcript: r10/gate-native-final.txt. The archived proof
+  passes its original goal. The proof of the old proposition also passes that
+  proposition in the release environment. Both fail at the release goal.
+  Wasm gate transcript: r10/gate-wasm-final.txt. Each staged digest had a
+  valid hybrid installation grant and a matching model-section commitment.
+  The full core refused the exact round-nine Ed-only file and the same
+  executable carrying the release-interface adapter. The good file was
+  refused with the exact archived round-seven proof, then accepted using
+  the same grant and the new proof. Its installed digest selected the file
+  subsequently instantiated. The fixed-owner grant passed with both
+  signatures and failed with either removed. A grant from the supplied
+  genesis-input pair also failed.
+  Policy, risk and stamp suites: r10/wasm-policy.txt, r10/wasm-risk.txt,
+  r10/wasm-stamp.txt. The clean log also has SHA-512 padding boundaries,
+  three Ed25519 RFC vectors and mutations, plus 108 ML-DSA verification rows
+  (23 acceptances, 85 refusals). Cryptographic correctness remains an assumption.
+
+CORPUS ON THE FULL CORE
+  Group     Frames  Accepted  Refused
+  matrix       818        60      758
+  length        86        15       71
+  history      192        96       96
+  signed        66        22       44
+  gate           5         2        3
+  total       1167       195      972
+  Each comparison uses the verdict and all 32 bytes of the resulting head.
+  The gate group includes a successful installation. Manifests and compressed
+  frames ship in v0.1/vectors. Direct replay: node v0.1/tests/replay.mjs
+  r10/shipped-corpus.txt records a separate replay after the clean build exited.
+  The lite profile refused that installation and kept the previous head.
+  Its own 1,167 expected verdicts and heads matched (194 accepted, 973 refused).
+  Both profiles export the same 15 functions and instantiate with zero imports.
+
+BINARY AND TRUST ACCOUNTING
+  Bytes       File
+  6,310,580   v0.1/aukora-core.wasm
+  6,323,987   v0.1/fixtures/fixed-genesis.wasm
+    552,182   v0.1/aukora-core-lite.wasm
+  r10/artifact-scan.txt records full SHA-256 values and independently checks
+  the embedded environment's hash at byte 1,637,082 of the full module and
+  1,650,435 of the fixed module. The 4,671,639-byte environment occupies
+  74.0287% of the full file. Lite has no copy. There is no separate checker.
+  The model carrier for the admitted candidate is 11,302 bytes, its proof is
+  33,824 bytes, and the historical adapter carrier is 4,128 bytes.
+  The checker starts from 3,630 declarations. It takes 531 prior theorems and
+  21 opaque declarations by type, plus the explicit axiom Classical.choice.
+  v0.1/trust/checker-declarations.tsv inventories every entry. The locally
+  written source inventory covers 100 files in v0.1/trust/source-lines.tsv.
+  The model-to-executable gap and limits of the declaration language are
+  described in v0.1/NOT-PROVED.md. The gate has no call to change its law set.
+
+HISTORY AND FAILED ATTEMPTS
+  r10/history-inputs.txt and r10/history-artifacts.txt verify the preceding
+  round's source and artifact manifests against the historical files. All
+  99 input entries and seven artifact entries matched.
+  Development failures are retained in r10/, including initial-kernel.txt,
+  advice-final.txt, certify-01.txt, unified-laws-01.txt and full-lite-03.txt.
+  The first clean build (r10/clean-build-01.txt) reproduced its initial pins
+  and passed the full-core suite, then failed on eight unexpected WASI imports
+  in lite. Calling the Wasm constructors explicitly during lite startup
+  removed the linker-added finalizer imports. r10/lite-replay-repaired.txt
+  records the first successful replay on the new binary. The empty-import
+  assertion in v0.1/tests/replay.mjs still runs for both release profiles.
+  No failed proof attempt contributes to the CHECKED claims above.
+
+COMPLETION AND FOOTPRINT
+  496 individually timed commands reported exit 0 in the clean build. The
+  longest took 35.087 seconds. No individual check or test reached 6 minutes.
+  The aggregate build took 510.0 seconds. Downloads totaled 0 bytes.
+  The build exited and removed v0.1/.work. A file scan found no object files,
+  static archives, .olean files or Python bytecode in the release. The lab
+  build, test processes and research workers all finished.
+  Disk usage after cleanup (du -sk -I _export -I standalone . v0.1):
+  approximately 779 MiB for the working lab and 14.0 MiB for v0.1.

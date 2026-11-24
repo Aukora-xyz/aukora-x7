@@ -1,0 +1,17 @@
+import core.Laws7
+
+namespace Laws7
+
+/-- Public RFC 8032 test key 1. This fixture uses the same key for every genesis. -/
+def fixtureKey : Aukora.Bytes := [
+  0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+  0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a]
+
+def OtherMachine (ctx : R6.KernelCell.Context) : Machine :=
+  {R6Machine ctx with genesis := fun _ => (R6Machine ctx).genesis fixtureKey}
+
+theorem other_lawful : Lawful OtherMachine :=
+  lawful_precompose r6_lawful (fun _ => fixtureKey)
+#print axioms other_lawful
+
+end Laws7

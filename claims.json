@@ -1,0 +1,182 @@
+{
+  "schema": 1,
+  "claims": [
+    {
+      "id": "verify-lite",
+      "statement": "On commit 80e392d1 an unsigned macOS report recorded 565 passes and 12 failures within the per-file allowances. The current command checks those allowances. Node’s permission model applies to 21 of the 22 default test files. server/asset-cache.test.mjs runs without it because the test calls fsync, which Node 24.22 and newer disable under the permission model. That file still gets the network guard, a rebuilt environment and the run’s fresh temporary folder as HOME.",
+      "label": "SPEC-ONLY",
+      "scope": "public edition",
+      "label_subject": "Written acceptance criterion in the expected field",
+      "evidence_kind": "Reported reference run",
+      "command": "node scripts/verify-lite.mjs",
+      "expected": "exit 0",
+      "where": [
+        "claims.json",
+        "scripts/verify-lite.mjs",
+        "docs/KNOWN-RED-TESTS.md"
+      ]
+    },
+    {
+      "id": "ark-accept",
+      "statement": "Run ARK acceptance from a checkout whose absolute path contains no whitespace. The receiver appends once under an approval for a particular proposal. A valid retry with the same operation ID and proposal digest returns the prior outcome if the receiver still holds it. Restore imports qualifying signed history. After restore, new appends stay locked until the receiver accepts owner-signed authority for this receiver with an epoch above the restored floor.",
+      "label": "SYNTHETIC-PROOF",
+      "scope": "public edition",
+      "label_subject": "ARK demonstration with test identities",
+      "evidence_kind": "Demo acceptance",
+      "command": "(cd ark && ./accept/run.sh)",
+      "expected": "exit 0",
+      "where": [
+        "ark/accept/run.sh",
+        "ark/CONTRACT.md"
+      ]
+    },
+    {
+      "id": "ark-node",
+      "statement": "The reference Node run reported 15 passing self-tests.",
+      "label": "SYNTHETIC-PROOF",
+      "scope": "public edition",
+      "label_subject": "ARK demonstration with test identities",
+      "evidence_kind": "Reported reference run",
+      "command": "(cd ark/a && node --test --test-concurrency=1 test/*.test.mjs)",
+      "expected": "exit 0",
+      "where": [
+        "ark/ABOUT.md",
+        "ark/a/test/core.test.mjs"
+      ]
+    },
+    {
+      "id": "ark-go",
+      "statement": "The reference Go reader reported 26 matching vectors.",
+      "label": "SYNTHETIC-PROOF",
+      "scope": "public edition",
+      "label_subject": "ARK demonstration with test identities",
+      "evidence_kind": "Reported reference run",
+      "command": "(cd ark && ./b/run-vectors.sh)",
+      "expected": "exit 0",
+      "where": [
+        "ark/b/run-vectors.sh",
+        "ark/ABOUT.md"
+      ]
+    },
+    {
+      "id": "ark-swift",
+      "statement": "The reference Swift reader reported 26 matching vectors. Building the verifier requires macOS Swift with CryptoKit. Running its vector script requires Python 3.9 or newer.",
+      "label": "SYNTHETIC-PROOF",
+      "scope": "public edition",
+      "label_subject": "ARK demonstration with test identities",
+      "evidence_kind": "Reported reference run",
+      "command": "(cd ark/c && mkdir -p .build/tmp .build/module-cache && TMPDIR=\"$PWD/.build/tmp\" CLANG_MODULE_CACHE_PATH=\"$PWD/.build/module-cache\" swiftc -Osize -whole-module-optimization -module-cache-path \"$PWD/.build/module-cache\" StrictJSON.swift Schema.swift Verifier.swift Operations.swift main.swift -o ./verifier && ./run-vectors.sh)",
+      "expected": "exit 0",
+      "where": [
+        "ark/c/run-vectors.sh",
+        "ark/ABOUT.md"
+      ]
+    },
+    {
+      "id": "ark-manifest",
+      "statement": "Compare the listed ARK files with the SHA-256 values in the supplied manifest.",
+      "label": "SPEC-ONLY",
+      "scope": "public edition",
+      "label_subject": "Written acceptance criterion in the expected field",
+      "evidence_kind": "Published checksum check",
+      "command": "(cd ark && shasum -a 256 -c MANIFEST.sha256)",
+      "expected": "exit 0",
+      "where": [
+        "ark/MANIFEST.sha256",
+        "scripts/probe.mjs",
+        "scripts/probe.test.mjs"
+      ]
+    },
+    {
+      "id": "document-twins",
+      "statement": "Look for names ending in .zh.md or .i18n.yaml under the repository root.",
+      "label": "SPEC-ONLY",
+      "scope": "public edition",
+      "label_subject": "Written acceptance criterion in the expected field",
+      "evidence_kind": "Distribution check",
+      "command": "hits=$(find . \\( -name '*.zh.md' -o -name '*.i18n.yaml' \\) -print) && test -z \"$hits\"",
+      "expected": "exit 0",
+      "where": [
+        "CONTRIBUTING.md",
+        "docs/AI-START-HERE.md"
+      ]
+    },
+    {
+      "id": "tracker-ids",
+      "statement": "Look for the specified issue-ID pattern in searchable text outside .git. Exit 1 means zero matching lines.",
+      "label": "SPEC-ONLY",
+      "scope": "public edition",
+      "label_subject": "Written acceptance criterion in the expected field",
+      "evidence_kind": "Distribution check",
+      "command": "grep -rIE --exclude-dir=.git '[A]UM-[0-9]+' .",
+      "expected": "exit 1",
+      "where": [
+        "docs/AI-START-HERE.md"
+      ]
+    },
+    {
+      "id": "probe",
+      "statement": "The public-edition probe checks the evidence paths, listed ARK hashes and presence of the known-failure file. Its Node minimum is reported separately.",
+      "label": "SPEC-ONLY",
+      "scope": "public edition",
+      "label_subject": "Written acceptance criterion in the expected field",
+      "evidence_kind": "Public-edition implementation",
+      "command": "node scripts/probe.mjs",
+      "expected": "exit 0",
+      "where": [
+        "scripts/probe.mjs",
+        "scripts/probe.test.mjs"
+      ]
+    }
+  ],
+  "outside_runs": [
+    {
+      "date": "2026-11-21",
+      "commit": "80e392d124f901ca4720ce2780afc0419e4c4358",
+      "platform": "macOS arm64",
+      "node": "24.11.1",
+      "command": "node scripts/verify-lite.mjs",
+      "result": "verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list",
+      "status": "reported",
+      "source": "an outside reader",
+      "signed": false
+    },
+    {
+      "date": "2026-11-21",
+      "commit": "80e392d124f901ca4720ce2780afc0419e4c4358",
+      "platform": "macOS arm64",
+      "node": "24.11.1",
+      "command": "cd ark && ./accept/run.sh",
+      "result": "accept: 20 PASS, 0 FAIL",
+      "status": "reported",
+      "source": "an outside reader",
+      "signed": false
+    },
+    {
+      "variant": "Unmodified public commit",
+      "date": "2026-11-21",
+      "commit": "80e392d124f901ca4720ce2780afc0419e4c4358",
+      "platform": "Linux container",
+      "node": "24.22.x",
+      "command": "node scripts/verify-lite.mjs",
+      "result": "verify-lite: 22 files, 554 pass, 23 fail, 12 of 23 on the known-red list",
+      "status": "reported",
+      "source": "an outside reader",
+      "signed": false
+    },
+    {
+      "date": "2026-11-21",
+      "commit": "80e392d124f901ca4720ce2780afc0419e4c4358",
+      "variant": "Copy of commit 80e392d1 with the Node permission model disabled for server/asset-cache.test.mjs only.",
+      "platform": "Linux container",
+      "node": "24.22.3",
+      "command": "node scripts/verify-lite.mjs",
+      "result": "verify-lite: 22 files, 565 pass, 12 fail, 12 of 12 on the known-red list",
+      "exit": 0,
+      "approximate_seconds": 56,
+      "status": "fixed in this commit",
+      "source": "an outside reader",
+      "signed": false
+    }
+  ]
+}

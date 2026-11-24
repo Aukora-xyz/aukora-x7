@@ -1,0 +1,17 @@
+lean_data_value_beq
+lean_expr_binder_info
+lean_expr_loose_bvar_range
+lean_expr_mk_app
+lean_expr_mk_bvar
+lean_expr_mk_const
+lean_expr_mk_forall
+lean_expr_mk_lambda
+lean_expr_mk_let
+lean_expr_mk_mdata
+lean_expr_mk_proj
+lean_expr_mk_sort
+lean_level_depth
+lean_level_hash
+lean_level_mk_zero
+lean_level_mk_succ
+lean_name_mk_string

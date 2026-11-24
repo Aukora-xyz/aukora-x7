@@ -1,0 +1,152 @@
+name: Observe your-node (no credential)
+
+# Signed-out checks in Chromium, Firefox and WebKit after every publication. Observation here is SIGNED-OUT ONLY: the
+# owner's credential is never a GitHub Actions secret (standing law), so no workflow names it and the six
+# signed-in windows (deploy/ci/observe-fresh-x61.mjs) are never run in CI; the summary says so every time. When /api/build
+# has meanwhile moved to a newer commit on main, the observation is reported SUPERSEDED, never as a failure of the newer
+# release.
+#
+# It is its own workflow, outside deploy-x61's queue: a re-run of an observation used
+# to join deploy-x61's concurrency group and could replace a pending deploy of main's newest commit. Here it has its own
+# group, holds no Cloudflare credential and declares no environment, so nothing it does can touch a deploy.
+# What it observes: after a deploy-x61 run on main whose deploy job published, or on a manual dispatch on main, the live
+# build, provided that build is main's head or an older main commit (deploy/ci/deploy-guard.mjs observe-target).
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   workflow_run:
+# [disabled in aukora-x7]     workflows: ["Deploy your-node to Cloudflare"]
+# [disabled in aukora-x7]     types: [completed]
+# [disabled in aukora-x7]     branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: observe-x61
+  cancel-in-progress: false
+
+jobs:
+  # Reads deploy-x61's job list (actions: read) to learn whether that run published, then the live build and main.
+  target:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Checkout the observer (deploy/ci only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            deploy/ci
+            server
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Resolve the published live build (no secret)
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OBSERVE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node deploy/ci/deploy-guard.mjs observe-target
+
+  observe:
+    needs: target
+    if: needs.target.outputs.sha != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # It checks out only deploy/ci (T2) and server (T2) at the observed commit and installs nothing from the workspace
+    # dependency tree (apps/web/package.json, .npmrc and .pnpmfile.cjs are T1-writable).
+    steps:
+      - name: Checkout observer (deploy/ci only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ needs.target.outputs.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            deploy/ci
+            server
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Install integrity-pinned Playwright outside the checkout (no secret)
+        env:
+          PW_DIR: ${{ runner.temp }}/x61-playwright
+        run: |
+          set -euo pipefail
+          mkdir -p "$PW_DIR/tarballs" "$PW_DIR/node_modules/playwright" "$PW_DIR/node_modules/playwright-core"
+          fetch_pinned() {
+            local file="$PW_DIR/tarballs/$1-$2.tgz"
+            curl -fsSL --proto '=https' --tlsv1.2 -o "$file" "https://registry.npmjs.org/$1/-/$1-$2.tgz"
+            local got="sha512-$(openssl dgst -sha512 -binary "$file" | base64 -w0)"
+            if [ "$got" != "$3" ]; then echo "::error::$1@$2 tarball integrity mismatch"; exit 1; fi
+            tar -xzf "$file" -C "$PW_DIR/node_modules/$1" --strip-components=1 --no-same-owner
+          }
+          fetch_pinned playwright-core 1.61.1 'sha512-h7Qlt6m4REp25qvIdvbDtVmD4LqVXfpRxhORv9L0jzETM05p4fuPJ3dKyuSXQxDSbXnmS79HAgi9589lGSpLkg=='
+          fetch_pinned playwright 1.61.1 'sha512-DWnY5o3YbLWK4GovuAVwpqL+1VwGNdUGrRr++8j8PtQQzvAVZUIMjKQ90fY689sEJZJBbZVw1rXaOKSTitkzPQ=='
+
+      - name: Verify the pin and install browsers (no secret)
+        working-directory: ${{ runner.temp }}
+        env:
+          X61_PLAYWRIGHT_DIR: ${{ runner.temp }}/x61-playwright
+        run: |
+          set -euo pipefail
+          node "$GITHUB_WORKSPACE/deploy/ci/observe-fresh-x61.mjs" --check-playwright
+          node "$X61_PLAYWRIGHT_DIR/node_modules/playwright/cli.js" install --with-deps chromium firefox webkit
+
+      # Needs no session and holds no credential: sign-in page, passkey button and /api/build in all three engines.
+      - name: Signed-out checks in three engines (no secret)
+        id: signedout
+        env:
+          X61_PLAYWRIGHT_DIR: ${{ runner.temp }}/x61-playwright
+          X61_EXPECT_BUILD_SHA: ${{ needs.target.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if node deploy/ci/observe-signed-out-x61.mjs --out "$RUNNER_TEMP/signed-out-report.json"; then exit 0; else code=$?; fi
+          node deploy/ci/deploy-guard.mjs superseded signed-out || exit "$code"
+
+      # Built from what was performed and what was not: partial coverage is labelled PARTIAL, never plain success.
+      - name: Report what was and was not performed
+        if: always()
+        env:
+          SIGNED_OUT: ${{ steps.signedout.outcome }}
+          SIGNED_OUT_VERDICT: ${{ steps.signedout.outputs.verdict }}
+          SIGNED_OUT_UNPERFORMED: ${{ steps.signedout.outputs.unperformed }}
+          SUPERSEDED: ${{ steps.signedout.outputs.superseded }}
+          TARGET_SHA: ${{ needs.target.outputs.sha }}
+        run: |
+          {
+            echo "### Live observation of ${TARGET_SHA}"
+            if [ -n "$SUPERSEDED" ]; then
+              echo "- SUPERSEDED by the newer live release ${SUPERSEDED}: this observation counts neither way."
+            fi
+            echo "- Signed-out checks in Chromium, Firefox and WebKit (sign-in page renders; passkey button enables where the engine has WebAuthn; /api/build equals this commit): ${SIGNED_OUT_VERDICT:-not run} (step ${SIGNED_OUT:-not run})"
+            if [ -n "$SIGNED_OUT_UNPERFORMED" ]; then
+              echo "- PARTIAL coverage. Not performed: ${SIGNED_OUT_UNPERFORMED}"
+            fi
+            echo "- Signed-in six-window observation: UNPERFORMED (CI observes signed out only; the owner credential is never a CI secret). Nothing signed-in was checked."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload observation reports (redacted)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: x61-observe-report
+          path: |
+            ${{ runner.temp }}/signed-out-report.json
+          if-no-files-found: warn
+          retention-days: 3

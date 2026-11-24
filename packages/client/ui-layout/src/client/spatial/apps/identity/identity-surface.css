@@ -1,0 +1,25 @@
+/* The Identity surface (apps/identity): the AUMLOK identity card's colours, plus the few rows it adds. Plain CSS (not a
+   module): every class is prefixed x6-identity. The card itself uses AumlokFace.module.css's identity classes. */
+.x6-identity {
+  --aumlok-root: var(--dsw-static-spatial-mint);
+  --aumlok-unite: var(--dsw-static-spatial-blue);
+  --aumlok-rise: var(--dsw-static-spatial-violet);
+  --aumlok-anchor: var(--dsw-static-spatial-gold);
+  display: grid;
+  gap: 18px;
+  container-type: inline-size;
+}
+.x6-identity__caption { margin: 0; color: var(--ak-text-2, inherit); font-size: 12px; line-height: 1.6; text-align: center; }
+.x6-identity__caption code, .x6-identity__mono {
+  font-family: var(--ak-mono, ui-monospace, monospace);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.x6-identity__status { margin: 6px 0 0; color: var(--ak-text-2, inherit); font-size: 12px; line-height: 1.5; }
+.x6-identity__status[data-tone='mint'] { color: var(--ak-mint); }
+.x6-identity__status[data-tone='red'] { color: var(--ak-red); }
+.x6-identity__actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.x6-identity__actions .ak-action:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+/* "Show my contact code": the folded row centres the QR, its caption and its two copy actions in one column. */
+.x6-identity__code { display: grid; justify-items: center; gap: 12px; min-width: 0; }

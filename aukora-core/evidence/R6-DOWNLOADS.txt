@@ -1,0 +1,25 @@
+R6 GitHub downloads. HTTP response body bytes; no redirects or other requests.
+Discovery responses are API snapshots, not git objects. Full snapshots are retained under logs/r6/downloads/.
+
+https://api.github.com/repos/digama0/lean4lean/tags?per_page=100
+  HTTP 200; 498 bytes; revision: ref discovery; lean4lean-tags.json
+  response SHA-256 39b88d21fb92f182ad36f7db76529462962a5e3407bd9454724ffa5185b2801b
+  tag arena-ecb3b66 ecb3b6661c14f8147be1069b126c629114baf4a8
+
+https://api.github.com/repos/digama0/lean4lean/commits?path=lean-toolchain&until=2025-08-01T00%3A00%3A00Z&per_page=15
+  HTTP 200; 50,840 bytes; revision: commit discovery; lean4lean-toolchain-history.json
+  response SHA-256 776432c2edea7dd6a2826c4e437b31fadd4538fdfd7734b92cc4f559adefbdbd
+  returned commits 7cc5a778fd5d3ea7c11c82c2e4a6de7a22b24c7e f8cd3d35aef16051be87af9a13721ed1863ea1a0 9787817957f50eafb47702f4d23a482f2d6783c2 a86111c30d41b6a9af1981bd7da4f18de7aa43cc bba953139f34fdcecebb45f7287c8eb6b7a8ec60 6077c9db16d2c7b9aacb7f3e4151581bd885c4e6 a0854d50db8d71387f1543f490d7c653ff538a2d 05b1f4a68c5facea96a5ee51c6a56fef21276e0f ba0efb89d82c34055a2b8647bbe6ea4b62569420 41c5add6abb70662f0e5385e74fc0eee0a153d98 0b18adb6ed5f50af6bd1e0c93a10393eb575135f 21c30487f4659ca2728d486e3a3bd77f37bb5942 9052aa3086c559198bbb9f3ddb1cfa0ab6715356
+
+https://codeload.github.com/digama0/lean4lean/tar.gz/f8cd3d35aef16051be87af9a13721ed1863ea1a0
+  HTTP 200; 104,489 bytes; revision: f8cd3d35aef16051be87af9a13721ed1863ea1a0; lean4lean.tar.gz
+  response SHA-256 124c934950061e8312e494b62455407012afa90fdaf8c49396492bbec4c10319
+
+https://codeload.github.com/leanprover-community/batteries/tar.gz/f5d04a9c4973d401c8c92500711518f7c656f034
+  HTTP 200; 279,634 bytes; revision: f5d04a9c4973d401c8c92500711518f7c656f034; batteries.tar.gz
+  response SHA-256 cc864d6e653231cbe8874cbff5459845e293b2d17741b7ee473b970808242732
+
+TOTAL 435,461 / 60,000,000 bytes. All four responses HTTP 200.
+
+Reused offline: Lean 4.19.0, commit 6caaee842e9495688c1567e78c0e68dbb96942aa.
+The existing upstream source archive is 39,043,535 bytes, SHA-256 26afde96ddf0632c68732943f2b6a0d84c1cd0790292fd464c25054b3d877853. Lean and the lab's WASI SDK 25.0 contributed zero R6 download bytes.

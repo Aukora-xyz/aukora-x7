@@ -1,0 +1,12 @@
+signed-retract tag 13 bytes 3417 accepted changes at none
+signed-mandate tag 13 bytes 3433 accepted changes at none
+signed-budget tag 13 bytes 3419 accepted changes at none
+signed-pass tag 13 bytes 3434 accepted changes at none
+signed-revoke-pass tag 13 bytes 3417 accepted changes at none
+signed-threshold tag 16 bytes 3415 accepted changes at none
+signed-grant tag 13 bytes 3432 accepted changes at none
+signed-grant-expiry tag 18 bytes 3439 accepted changes at none
+signed-revoke-intent tag 19 bytes 3446 accepted changes at none
+signed-rebind tag 14 bytes 5399 accepted changes at none
+SIGNED FRAMES: 10; single-bit changes tried 9062; accepted 0 {}
+node logs/breakit10/signed-bits.mjs 4  152.01s user 1.70s system 98% cpu 2:35.45 total

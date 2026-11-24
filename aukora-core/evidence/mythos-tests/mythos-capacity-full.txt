@@ -1,0 +1,5 @@
+with room: owner approval true | cancel true | threshold control true
+v0.3/aukora-core.wasm record stopped accepting speech at 512 accepted lines
+AT THE LIMIT, valid owner frames: {"speech":false,"approval":false,"threshold":false,"keyChange":false} | head unchanged: true
+full record replays to the same head: true
+staging accepted 16 MiB then returned 0 | speech still works after: true

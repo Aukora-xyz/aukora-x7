@@ -1,0 +1,9 @@
+9b4d4010c0af1e94ba7fb5f53ef8bdbc8367a09ae857d50c2637b8b2cd9671e8  v0.1/.work/package/ed-only.model
+bc574c5a8b8f17f8352ee1e86f57509af206db1122819de71011f8feb8be7f2c  v0.1/.work/package/honest.model
+105e5c96cd37b1d15006569820ef95e01c0ced5fad5e1e504dbb6eb029f8a59c  v0.1/.work/package/honest.proof.expr
+25f05cccbc7410dced3b75321d70fc49a1d40dd07de07fc04d030f5ac1966efc  v0.1/.work/package/laws.env
+5c58750ced6c55ac2555e374a8c135305a6e3fc8fd88dac0d7c3336987188975  v0.1/.work/package/laws.env.tsv
+1d3359ab1b763eb3fb9727ca31394068b15c0b02130f67484b5422724a7e63de  v0.1/.work/package/legacy.proof.expr
+3311f461aa3ff63ae0d47e97e3840b3fe918d70b4c1d1ad59b88614acba9c841  v0.1/aukora-core-lite.wasm
+50f291fb7a38e0ea7f310cd8647eb48f6a74665774ae6b12be33a81bd2f9b6d4  v0.1/aukora-core.wasm
+6e0f8964b68f568ebca32f61338441fb31a96f313a807c2e52826b17c1c97980  v0.1/fixtures/fixed-genesis.wasm

@@ -1,0 +1,4 @@
+replay r11-safe 66 of 66 accepted 30
+hostile r11-safe {"rows":66,"agree":66,"mutants":3899,"refused":3750,"accepted":149,"staleReplayAccepted":0,"trueOk":66,"whileHalted":2339}
+TOTAL {"rows":66,"agree":66,"mutants":3899,"refused":3750,"accepted":149,"staleReplayAccepted":0,"trueOk":66,"whileHalted":2339} findings {}
+GROUPS=r11-safe node logs/repro11/mythos-v02-test.mjs 60  82.81s user 3.31s system 112% cpu 1:16.88 total

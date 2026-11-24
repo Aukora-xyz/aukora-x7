@@ -1,0 +1,77 @@
+'Pentora.twenty_vertices' does not depend on any axioms
+'Pentora.five_cubes' does not depend on any axioms
+'Pentora.each_corner_in_two' does not depend on any axioms
+'Pentora.each_pair_shares_two' does not depend on any axioms
+'Pentora.cube_has_27' does not depend on any axioms
+'Pentora.figure_110' does not depend on any axioms
+'Pentora.homes' depends on axioms: [propext]
+'Pentora.slots' depends on axioms: [propext]
+'Pentora.two_witnesses' depends on axioms: [propext]
+'Pentora.views_compatible' depends on axioms: [propext]
+'Pentora.view_glue' depends on axioms: [propext, Quot.sound]
+'Pentora.glue_unique' depends on axioms: [propext, Quot.sound]
+'Pentora.gluing' depends on axioms: [propext, Quot.sound]
+'Pentora.corner_lie_caught' depends on axioms: [propext]
+'Pentora.corner_lie_caught'' depends on axioms: [propext]
+'Pentora.seam_names_liar' depends on axioms: [propext]
+'Pentora.private_cells_unwitnessed' depends on axioms: [propext]
+'Pentora.seams_nil_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.liar_among_suspects' depends on axioms: [propext, Quot.sound]
+'Pentora.suspect_owns' depends on axioms: [propext, Quot.sound]
+'Pentora.convicted' depends on axioms: [propext, Quot.sound]
+'Pentora.triangle' depends on axioms: [propext, Quot.sound]
+'Pentora.organ_triangle' depends on axioms: [propext, Quot.sound]
+'Pentora.health_zero_iff' depends on axioms: [propext, Quot.sound]
+'Pentora.health_two_iff' depends on axioms: [propext, Quot.sound]
+'Pentora.fits_22_bytes' does not depend on any axioms
+'Pentora.address_lt' depends on axioms: [propext, Quot.sound]
+'Pentora.address_injective' depends on axioms: [propext, Quot.sound]
+'Pentora.no_seam_one_body' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.view_cell_in_body' depends on axioms: [propext, Quot.sound]
+'Pentora.centre_zero_iff' depends on axioms: [propext, Quot.sound]
+'Pentora.local_fail_reaches_centre' depends on axioms: [propext, Quot.sound]
+'Pentora.centre_of_address' depends on axioms: [propext, Quot.sound]
+'Pentora.blind_corner' depends on axioms: [propext]
+'Pentora.four_see_all' depends on axioms: [propext, Quot.sound]
+'Pentora.heal_true' depends on axioms: [propext, Quot.sound]
+'Pentora.cnt_fins' depends on axioms: [propext]
+'Pentora.seal_known_to_four' depends on axioms: [propext, Quot.sound]
+'Pentora.seal_hidden_from_three' depends on axioms: [propext, Quot.sound]
+'Pentora.flip_fixes_cube0' does not depend on any axioms
+'Pentora.twin_is_a_pentora' does not depend on any axioms
+'Pentora.two_figures_share_one_cube' does not depend on any axioms
+'Pentora.rational_cells_are_cube0' does not depend on any axioms
+'Pentora.shared_corner_three_owners' does not depend on any axioms
+'Pentora.majority_true' depends on axioms: [propext]
+'Pentora.twelve_faces' does not depend on any axioms
+'Pentora.face_meets_every_cube_once' does not depend on any axioms
+'Pentora.face_has_five_pairs' does not depend on any axioms
+'Pentora.corner_in_three_faces' does not depend on any axioms
+'Pentora.face_fits_a_byte' does not depend on any axioms
+'Pentora.convicted_alone' depends on axioms: [propext, Quot.sound]
+'Pentora.shift_unseen' depends on axioms: [propext, Quot.sound]
+'Pentora.shift_seal' depends on axioms: [propext, Quot.sound]
+'Pentora.shift_cycle' depends on axioms: [propext, Quot.sound]
+'Pentora.address_bits' does not depend on any axioms
+'Pentora.judge_agrees' depends on axioms: [propext]
+'Pentora.corner_order' depends on axioms: [propext]
+'Pentora.corner_owners' depends on axioms: [propext]
+'Pentora.corner_symm' depends on axioms: [propext]
+'Pentora.corner_kind_iff' depends on axioms: [propext]
+'Pentora.go_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.report_pass_iff' depends on axioms: [propext, Quot.sound]
+'Pentora.one_part_cannot_force_go' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.honest_go' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.any_part_can_stop' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.two_owners_can_force' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.private_fault_can_be_hidden' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.judge_zero_means_go' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.go_means_judge_zero' depends on axioms: [propext, Quot.sound]
+'Pentora.judge_zero_iff' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.go4_iff' depends on axioms: [propext, Quot.sound]
+'Pentora.go_gives_go4' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.honest_go4' depends on axioms: [propext, Quot.sound]
+'Pentora.one_part_cannot_force_go4' depends on axioms: [propext, Quot.sound]
+'Pentora.offline_neighbour_can_force' depends on axioms: [propext, Classical.choice, Quot.sound]
+'Pentora.two_unwitnessed_corners' depends on axioms: [propext]
+exit 0

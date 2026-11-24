@@ -1,0 +1,9 @@
+'Aukora.Ark.checksProducts_spec' depends on axioms: [propext, Quot.sound]
+'Aukora.Ark.cauchy_entries' depends on axioms: [propext, Quot.sound]
+'Pentora.pairRow_symm' does not depend on any axioms
+'Pentora.pairRow_bijection' depends on axioms: [propext, Quot.sound]
+'Pentora.organRows_four' depends on axioms: [propext]
+'Pentora.organRows_common' depends on axioms: [propext]
+'Pentora.coverage_counts' depends on axioms: [propext]
+'Pentora.one_organ_rebuilds' depends on axioms: [propext, Quot.sound]
+exit 0

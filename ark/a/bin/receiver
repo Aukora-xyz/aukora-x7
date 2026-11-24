@@ -1,0 +1,3 @@
+#!/bin/sh
+# ARK proof v0.1 launcher (reader 1 (Node)). Run as a black box.
+exec node "$(dirname "$0")/../receiver.mjs" "$@"

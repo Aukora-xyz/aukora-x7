@@ -1,0 +1,2 @@
+checkpoint at line 9: the record extends it
+COLD REPLAY: PASS — 17 lines, head 2118cfb2eee34436; governed decisions reproduced 6 of 6; score-only 6 of 6; core-admitted promotions matched 2 of 2 (acts in record: 2); final governed incumbent 2d8c7a66a001, score-only 4828e6d72e50

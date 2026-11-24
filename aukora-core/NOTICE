@@ -1,0 +1,39 @@
+Aukora Core
+Copyright (C) 2026 The Aukora authors
+Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version. See LICENSE.
+That licence applies to the files in this tree written by the Aukora authors. The third-party inputs listed below
+keep their own licences.
+
+THIRD-PARTY INPUTS. This tree redistributes, unmodified, three upstream source archives used as build inputs.
+
+1. Lean 4
+   Version: 4.19.0 (source release).
+   File in this tree: toolchain/downloads/lean4-v4.19.0-source.tar.gz
+   Licence: Apache License 2.0.
+   Licence text: inside the archive at lean4-4.19.0/LICENSE (further notices in lean4-4.19.0/LICENSES/); a copy of
+   the Apache License 2.0 text is at LICENSES/Apache-2.0.txt.
+   Upstream: https://github.com/leanprover/lean4
+
+2. Batteries
+   Commit: f5d04a9c4973d401c8c92500711518f7c656f034
+   File in this tree: logs/r6/downloads/batteries.tar.gz
+   Licence: Apache License 2.0.
+   Licence text: inside the archive at batteries-f5d04a9c4973d401c8c92500711518f7c656f034/LICENSE; copy at
+   LICENSES/Apache-2.0.txt.
+   Upstream: https://github.com/leanprover-community/batteries
+
+3. Lean4Lean
+   Commit: f8cd3d35aef16051be87af9a13721ed1863ea1a0
+   File in this tree: logs/r6/downloads/lean4lean.tar.gz
+   Licence: Lean4Lean is Apache-2.0 upstream; the pinned commit predates the upstream's licence file.
+   Licence text: none inside the archive (see the sentence above; the upstream's licence file was added on
+   2 December 2025); the Apache License 2.0 text is at LICENSES/Apache-2.0.txt.
+   Upstream: https://github.com/digama0/lean4lean
+
+COMPILED CODE. The two compiled files v0.8/aukora-core.wasm and v0.8/aukora-core-lite.wasm (and the copy
+standalone/aukora-core-lite.wasm) contain code compiled from the Lean 4 runtime and core library together with this
+project's own code. The full file, v0.8/aukora-core.wasm, also contains code compiled from Lean4Lean and from parts of
+Batteries.
+
+NOT IN THIS TREE. The toolchains fetched by release-tools/fetch-toolchain.sh (Lean 4.19.0 binaries for macOS ARM64,
+WASI SDK 25) are downloaded by the reader and carry their own licences.

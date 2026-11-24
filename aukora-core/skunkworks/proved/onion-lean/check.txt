@@ -1,0 +1,5 @@
+'Onion.total_is_sum' depends on axioms: [propext]
+'Onion.root_binds' depends on axioms: [propext]
+'Onion.climb_sound' depends on axioms: [propext]
+'Onion.included' depends on axioms: [propext]
+exit 0

@@ -1,0 +1,107 @@
+ROUND 9 — Offline research lab on the owner's Mac, 22 November 2026
+
+Reproduce with sh spike/r9/run.sh from the lab. The driver locks the lab's round-nine log directory,
+builds under logs/r9/build and deletes that disposable tree on exit. Every compiler and substantial
+check/test runs as an individual command under spike/r3/watch.py (285-second process timer, 290-second
+parent fallback). Native Lean uses -j1 and the Wasm linker itself uses one thread. No priority wrappers,
+windows or network downloads. Download inventory is empty, 0 bytes. Only lab processes were exercised.
+
+GATE AND CANDIDATE
+  CHECKED in Lean 4.19.0 this round:
+    R9Candidate.honest_lawful and R9Candidate.broken_unlawful. The latter proves the negation, using
+    a model that claims confirmation before any report. Both the honest and broken packages use the
+    same exported machine name in the wire fixtures.
+    Checker9.checked_goal identifies the checked proposition as Laws7.Lawful applied to the final
+    carried definition. A carried constant's name is insufficient to prove its law.
+    Upgrade9.admission and install_clocks relate admission to the stored section, checker verdict,
+    complete staged-file hash, held/spent grant and sequence advance.
+    Core9.package_admission, OnlyGate9.policy_preserves_core and core_change_requires_package cover
+    the actual public dispatcher. GrantOrigin9.reachable_upgrade_spends_signed_grant proves both
+    current-key verifiers accepted the grant message in reachable states across all four public input kinds.
+    See core/{Goal9,Upgrade9,Core9,OnlyGate9,GrantOrigin9,Candidate9}.lean and the clean transcript.
+  Native checker tests exercise fresh or shadowing names, direct self-reference, unknown constants,
+  malformed declarations/terms, sort and body type checks, and the same well-typed unlawful model
+  paired with the honest proof. See logs/r9/certificates-2.txt. New declarations are ordered safe
+  monomorphic definitions in the R9Candidate namespace. The pinned environment is 3,098 earlier
+  declarations (logs/r7/laws.env.tsv). The private Wasm adapter embeds no R9 model or proof.
+  The decisive Wasm refusals each had their own valid hybrid grant for the exact staged variant.
+  Distinct controls cover a missing, wrong, truncated, duplicated or nested commitment, a malformed
+  section length, old listed bytes/proof, grant replay and a matching proof with the wrong staged bytes.
+  The core checks the header, section boundaries, exact name, uniqueness and 32-byte payload.
+  The host Wasm engine validates and runs code. The section parser does not validate instructions.
+  The fixed artifact changed the R6 genesis key to RFC 8032 fixture 2. The lab host loaded bytes
+  with exactly the digest read back from the ledger, started a fresh instance, and compared its
+  resulting head to Node SHA-256. The post-link file adds a harmless random custom section and
+  commits to a model carrying an extra checked definition. The gate admits both without recompilation.
+  The host's load is a lab demonstration, with no AUKORA activation or state transfer. The pinned
+  Lawful contract describes R6 wire semantics and permits an Ed25519-only successor; it does not
+  require each successor to implement the hybrid or risk policies of its admitting core.
+
+GRANTS AND OUTCOMES
+  CHECKED in Policy9Laws, Policy9Replay and Core9PolicyLaws:
+    Both current signatures authorize a single exact-intent cancellation at the addressed head and
+    sequence. Revocation accepts a digest only when it resolves to exactly one eligible grant.
+    Successful revoke removes just that intent, changes no other grant or restriction, and preserves
+    generation, without a collision-freedom premise. Expiry is an inclusive per-grant sequence test.
+    It requires no sweep or mutation. At a fixed sequence other grants follow their own restrictions.
+    A refused use makes no state change. An independently expiring grant still observes its own deadline.
+    Revoked or expired intents cannot pass either delivery route or install. Once closed they
+    remain ineligible across arbitrary commands until a newly signed exact-intent grant. Expiring
+    grant and renewal messages cover the cutoff, both owner keys, generation, parent, seq and intent.
+    Legacy grants omit the expiry. Rebind clears grants and restrictions and advances generation.
+    Correction requires an earlier report for the same full intent. The history proof preserves each
+    outcome across arbitrary command suffixes. The exported query yields raw 0/1/2 for original
+    confirmed/failed/unknown, adds 4 for a correction, and returns 256 for missing.
+    logs/r9/policy-wasm-2.txt checks the concrete core. Gate tests cover expiration and revocation of
+    genuine install grants as well as an accepted install at the renewed cutoff. The round-eight risk
+    and stamp suites also ran through Core9's ABI. Their own print labels date from round eight.
+
+WIRE AND DIFFERENTIAL
+  CHECKED in Tag9: encode_tag, gate_reads_tag and ordinary_not_caught for each 32-byte-parent Wire5
+  encoder output. The ordinary tag cannot be 7 (retired upgrade), 17 or 18. With a raw 33-byte parent
+  and sequence 7*256^7 the inner encoder places 7 at offset 40 for an intended say frame. This
+  checked counterexample explains the required width premise. The old upgrade test applies to the
+  inner wire; offsets in the enclosing hybrid envelope depend on the envelope tag.
+  Laws9 exposes the pinned interface and refines the comments on projections L1, L2, L4 and L8.
+  The model driver is spike/r9/Differential.lean run by the native Lean executable (--run). It uses
+  Core9.genesis, the real Checker9 environment, the public model step, and its full resulting head.
+  900 cases come from the Lean matrix/boundary generators. The remaining 71 include frozen public
+  signatures, a complete valid installation, and Lean-generated short/long/replay variations.
+  The 971 submissions include 903 distinct wire strings. Node replays each through Wasm input/step
+  from the matching genesis and reads all 32 head bytes after each verdict. All 256 discriminator
+  values appear on both outer and inner paths. Length cases cover u16 text/blob boundaries, fixed
+  signature and control fields, the combined 1 MiB certificate limit, and ABI capacity -1/0/+1.
+  logs/r9/vectors/*.tsv contains label, byte length, model verdict and full head for every case.
+  The corresponding *.bin.gz files are concatenated exact inputs in that order. Public keys,
+  signatures and candidate material are pinned. No private keys are in the fixtures.
+  Matrix 814/814 (60 accepted), boundary 86/86 (15), signed trace 66/66 (22), gate 5/5 (2).
+  Totals 971/971 agree, 99 accepted, 872 refused, 0 disagreements.
+  The build compares the regenerated index and binary streams byte-for-byte to this archive.
+  Verdict/head agreement tests the implementation at those inputs. It is not a compiler proof.
+
+PINNING AND RETAINED FAILURES
+  The artifact and certificate hashes are in spike/r9/pins.sha256. Source hashes and frozen public
+  verification inputs are in spike/r9/inputs.sha256. See logs/r9/trusted-files.txt for the trust
+  inventory and the earlier upstream line counts it references. Cryptography remains tested.
+  Prior-round manifests reverified in logs/r9/prior-r{7,8}.txt and prior-r8-{inputs,wasm}.txt,
+  covering 123, 105, 83 and 2 historical entries respectively (sets overlap).
+  Failed compiler attempts remain under logs/r9. certificates-1, goal-1/-2 and section-1 record
+  private parser/projection visibility, proof simplification and missing ByteArray equality.
+  upgrade-1/-2, only-gate-1/-2/-3, tag-laws-1/-2, policy-2, policy-laws-1/-3, policy-replay-1 and
+  policy-wire-1 record initial pattern, guard, type inference and projection/simplification errors.
+  The first two modules in policy-laws-3 succeeded before the wire proof failed. Recovery output
+  may print sorryAx; those failed declarations do not count as CHECKED. Only the successful
+  kernel runs for the final sources count. The clean transcript records the final theorem inventory.
+
+FINAL OFFLINE REPRODUCTION AND CLEANUP
+  sh spike/r9/run.sh exited 0 and printed PASS Round 9. logs/r9/clean-reproduction.txt contains
+  the commands, final proof inventories, Wasm tests, replay results, sizes, and successful pin checks.
+  Its 451 individually timed commands succeeded. The longest took 36.158 seconds. No check or test
+  reached the six-minute limit. The only final Lean diagnostic was a proof-style simplification hint.
+  The clean build regenerated both Wasm files and all carried model/proof fixtures with matching
+  hashes. The four generated vector streams and four verdict/head indexes matched the retained
+  public corpus byte-for-byte. Independently rechecked input pins are in logs/r9/final-inputs.txt.
+    Core9.wasm         5,614,804 bytes   2b5334497f16f1cc299236c15d7498c00f93a3f9e049b92373cd2c60ab76a7eb
+    FixedGenesis9.wasm 1,970,929 bytes   497d493c8cf6c6f1fcb2517b721cb1c12f25446f8f85a91d6434447b95f0b649
+  logs/r9/build was removed. Every round-nine build/test job exited and all delegated workers finished.
+  Final whole-folder disk use from du -sh . was 791M. Round-nine downloads: none (0 bytes).

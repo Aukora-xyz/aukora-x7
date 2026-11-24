@@ -1,0 +1,12 @@
+== lite
+ordinary limit reached at 512 lines
+40 key changes signed by a STRANGER at the limit: admitted 0
+valid key changes admitted AFTER those 40 refusals: 16 (the reserve is 16; refused frames used none of it if this is 16)
+one more valid key change after the reserve is spent: refused | speech: refused
+the whole record ( 528 lines ) replays to the same head: true
+== full
+ordinary limit reached at 512 lines
+40 key changes signed by a STRANGER at the limit: admitted 0
+valid key changes admitted AFTER those 40 refusals: 16 (the reserve is 16; refused frames used none of it if this is 16)
+one more valid key change after the reserve is spent: refused | speech: refused
+the whole record ( 528 lines ) replays to the same head: true

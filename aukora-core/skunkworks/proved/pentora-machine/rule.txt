@@ -1,0 +1,3 @@
+by the rule: 110 | shells 4/8/12: 30 60 20
+the figure : 110 | shells 4/8/12: 30 60 20
+same set: True | rule only: 0 | figure only: 0

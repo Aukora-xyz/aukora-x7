@@ -1,0 +1,8 @@
+kind	count	bytes
+axiom	1	96
+constructor	548	176425
+definition	2730	4935841
+inductive	298	44363
+recursor	85	244359
+trusted-opaque	22	4040
+trusted-theorem	568	348579

@@ -1,0 +1,14 @@
+spike/r3/watch.py
+spike/r3/private-exports.py
+spike/r4/shim.c
+spike/runtime-r3/shim.c
+spike/runtime-r2/include/lean/config.h
+spike/r6/route1-sources.py
+spike/r6/import-audit.py
+spike/r6/bootstrap-route1.py
+spike/r6/runtime.sh
+spike/r6/reachable.py
+spike/r6/kernel-platform.cpp
+spike/r6/kernel-roots.txt
+spike/r9/core-roots.txt
+spike/r9/core-exports.txt

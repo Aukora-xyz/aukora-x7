@@ -1,0 +1,16 @@
+replay matrix 818 of 818 accepted 60
+hostile matrix {"rows":818,"agree":818,"mutants":2451,"refused":2429,"accepted":22,"staleReplayAccepted":0,"trueOk":818}
+replay length 86 of 86 accepted 15
+hostile length {"rows":904,"agree":904,"mutants":2629,"refused":2600,"accepted":29,"staleReplayAccepted":0,"trueOk":904}
+replay history 192 of 192 accepted 96
+hostile history {"rows":1096,"agree":1096,"mutants":3204,"refused":3144,"accepted":60,"staleReplayAccepted":0,"trueOk":1096}
+replay signed 66 of 66 accepted 22
+hostile signed {"rows":1162,"agree":1162,"mutants":3402,"refused":3339,"accepted":63,"staleReplayAccepted":0,"trueOk":1162}
+replay r11-evidence 90 of 90 accepted 52
+hostile r11-evidence {"rows":1252,"agree":1252,"mutants":3672,"refused":3571,"accepted":101,"staleReplayAccepted":0,"trueOk":1252}
+replay r11-fields 520 of 520 accepted 1
+hostile r11-fields {"rows":1772,"agree":1772,"mutants":5232,"refused":5125,"accepted":107,"staleReplayAccepted":0,"trueOk":1772}
+replay r11-safe 66 of 66 accepted 30
+hostile r11-safe {"rows":1838,"agree":1838,"mutants":5427,"refused":5314,"accepted":113,"staleReplayAccepted":0,"trueOk":1838,"whileHalted":117}
+TOTAL {"rows":1838,"agree":1838,"mutants":5427,"refused":5314,"accepted":113,"staleReplayAccepted":0,"trueOk":1838,"whileHalted":117} findings {}
+node logs/repro11/mythos-v02-test.mjs 3  47.94s user 2.65s system 118% cpu 42.547 total

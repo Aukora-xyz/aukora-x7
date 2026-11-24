@@ -1,0 +1,18 @@
+$ node v0.1/tests/gate.mjs
+ACCEPT historical file accepts a grant signed only by RFC Ed25519 key 2
+ACCEPT current owner hybrid grant: unmodified historical successor
+REFUSE historical Ed25519-only successor, original model and proof
+ACCEPT current owner hybrid grant: historical executable with release-interface model
+REFUSE Ed25519-only successor, new model and proof of lawful fixed genesis
+REFUSE Ed25519-only successor, new model and round-seven Lawful theorem
+ACCEPT current owner hybrid grant: newest fixed-genesis successor
+REFUSE newest candidate, exact archived round-seven proof bytes
+REFUSE newest candidate, same valid install grant, old Lawful theorem
+ACCEPT newest candidate, new pinned law and matching proof
+REFUSE newly instantiated successor refuses the old Ed-only frame
+REFUSE supplied owner signs with both supplied keys
+REFUSE published fixed-owner grant with only its original Ed25519 signature
+REFUSE published fixed-owner grant with only its original ML-DSA signature
+ACCEPT unaltered archival grant signed by both compiled-in owners
+PASS ledger-selected file loaded; new fixed genesis and both verifiers observed; SHA-256 6e0f8964b68f568ebca32f61338441fb31a96f313a807c2e52826b17c1c97980
+exit 0, 1.145 s

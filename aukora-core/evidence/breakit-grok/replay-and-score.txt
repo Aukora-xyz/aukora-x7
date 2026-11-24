@@ -1,0 +1,14 @@
+== v0.1/aukora-core-lite.wasm
+Q1 approve true | act true | act again false
+Q1 SAME signature re-wrapped under the new head, submitted by anyone: refused | then act a second time: refused
+Q1b approval CANCELLED by the owner, then the old signature re-wrapped: refused | act: refused
+Q2 threshold 0 | unsigned assessment score 0: true | act with NO approval: refused
+Q2b owner sets threshold 50: true | unsigned assessment score 10: true | act with NO approval: refused
+Q2c unsigned assessment score 51: true | act with NO approval: refused
+== v0.3/aukora-core.wasm
+Q1 approve true | act true | act again false
+Q1 SAME signature re-wrapped under the new head, submitted by anyone: refused | then act a second time: refused
+Q1b approval CANCELLED by the owner, then the old signature re-wrapped: refused | act: refused
+Q2 threshold 0 | unsigned assessment score 0: true | act with NO approval: refused
+Q2b owner sets threshold 50: true | unsigned assessment score 10: true | act with NO approval: refused
+Q2c unsigned assessment score 51: true | act with NO approval: refused

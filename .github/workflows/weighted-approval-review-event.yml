@@ -1,0 +1,21 @@
+name: weighted-approval-review-event
+run-name: weighted-approval-review-event:${{ github.event.pull_request.number }}
+
+# DISABLED IN aukora-x7: the automatic triggers of this workflow are commented out below, unchanged, until this
+# repository has its own runners, secrets and Cloudflare account. Only manual dispatch remains (GitHub needs one trigger).
+on:
+  workflow_dispatch:
+# [disabled in aukora-x7]   pull_request_review:
+# [disabled in aukora-x7]     types: [submitted, edited, dismissed]
+
+permissions: {}
+
+jobs:
+  record-review-event:
+    if: github.event.pull_request.state == 'open'
+    name: record weighted approval review event
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record review event
+        run: echo 'Recorded a weighted approval review event.'

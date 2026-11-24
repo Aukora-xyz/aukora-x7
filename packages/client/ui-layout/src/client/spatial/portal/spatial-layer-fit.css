@@ -1,0 +1,11 @@
+/*
+ * X6.1 fit for the predecessor's x5 header in a narrow centre lane.
+ * The predecessor's `.x5-app-header--nostr` is an 84px header band aligned with the left `THREADS` and right `AUKORA APPS`
+ * headers, with `.x5-app-header__center` ('‹ Back to Messages') centered and `.x5-app-header__actions` on the
+ * top-right. Those must never be collapsed to static flow.
+ * The header and the Nostr title's `cqi` size are measured against the header's own width. A header's badges need no
+ * rule here any more: the primitive (`primitives/primitives.css`, `.ak-header`) keeps them in the header's flow and wraps
+ * them below the title and its line before they would cover either.
+ */
+.x5-app-header,
+[data-slot='shell.surface'] .ak-canvas > .ak-header { container-type: inline-size; }

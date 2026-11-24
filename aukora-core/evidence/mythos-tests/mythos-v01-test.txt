@@ -1,0 +1,7 @@
+aukora-core.wasm 50f291fb7a38e0ea agree 1167 of 1167 ; accepted 195
+aukora-core-lite.wasm 3311f461aa3ff63a agree 1165 of 1167 ; install rows refused by lite: gate:gate-install
+install frame: row 3 gate-install 45250 bytes
+one-bit changes to the install frame: refused 62 of 64; state unchanged 62 of 64; the true frame still accepted afterwards 6 of 6
+one-bit changes to the staged candidate file: refused 4 of 4
+round-9 downgrade file staged under the v0.1 grant: refused
+node logs/repro10/mythos-v01-test.mjs  24.56s user 1.65s system 123% cpu 21.265 total

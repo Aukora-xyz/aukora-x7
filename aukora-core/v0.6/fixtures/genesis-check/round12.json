@@ -1,0 +1,16 @@
+{
+  "what": "Round-12 configuration (v0.3): the full core pinned Root12.Contract (36 laws) while the only statement proved of its machine was Root12.Supplement (13 laws, full_supplement). A description, not a core: it holds two 32-byte identities and can never be instantiated.",
+  "embedded": "1e207550423242f0c1a8b10ecd8898ce73eadc4c19e2a1ce5a849f0cd1de2fe1",
+  "proved": "c76c196e60f6f213bf47d3497291c52d702596ff50f8994457587b05d2e4f584",
+  "provedDerivation": {
+    "manifest": "R12/1\ne1\ne1b\ne2\ne3\ne4\ne5\ne6\nh1\nh2\nh3\nh4\nh5\nsuccession\n",
+    "basis": "f7816315c3e1ad41f2ae644056f6ea604d2a1ea9f6541e9152f53e0a1d9143fe",
+    "spec": "02010101000641756b6f726106526f6f7431320a537570706c656d656e7400",
+    "note": "identity = SHA-256(manifest of the proved head, environment hash, serialized head), the formula of RatchetChecker.identity with the proved head in place of the pinned one"
+  },
+  "source": {
+    "core": "v0.3/aukora-core.wasm lawByte after genesis",
+    "environment": "v0.3/fixtures/packages/environment.json",
+    "statement": "v0.3/tools/Export12.lean: same package carried full_supplement"
+  }
+}

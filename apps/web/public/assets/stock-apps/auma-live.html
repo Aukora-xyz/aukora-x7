@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Auma Live</title>
+    <link rel="stylesheet" href="/app/style.css">
+    <link rel="stylesheet" href="/app/aura-trace.css">
+    <style>
+      :root {
+        --hue-l: 129, 212, 180;
+        --hue-c: 150, 180, 255;
+        --hue-r: 196, 170, 255;
+        --ak-mint: rgb(129, 212, 180);
+        --ak-blue: rgb(150, 180, 255);
+        --ak-violet: rgb(196, 170, 255);
+        --ak-gold: rgb(224, 183, 106);
+        --ak-red: rgb(242, 85, 90);
+        --ak-muted: rgb(139, 144, 153);
+        --ak-text: rgb(232, 234, 237);
+        --ak-text-2: rgb(184, 188, 196);
+        --mint: #6ee7b7;
+        --blue: #6aa8ff;
+        --violet: #b89cff;
+        --gold: #e8b94a;
+        --text: rgba(242, 245, 255, 0.94);
+        --dim: rgba(216, 222, 240, 0.66);
+        --faint: rgba(198, 205, 228, 0.42);
+        --ease: cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      html, body, #auma-live-root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+      body { background: #111520; }
+      #auma-live-root { position: relative; }
+    </style>
+  </head>
+  <body>
+    <main id="auma-live-root" aria-label="Auma Live"></main>
+    <script type="module">
+      import { mountAumaLive } from '/app/aumalive.js'
+      const requestedMode = new URLSearchParams(location.search).get('mode')
+      const mode = requestedMode === 'canvas' ? 'canvas' : 'live'
+      const title = mode === 'canvas' ? 'Auma Canvas' : 'Auma Live'
+      document.title = title
+      const root = document.querySelector('#auma-live-root')
+      root.setAttribute('aria-label', title)
+      mountAumaLive(root, { mode })
+    </script>
+  </body>
+</html>
